@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Calendar – Family Hub</title>
+<link rel="stylesheet" href="/css/style.css?v=5">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-icon">🏠</span>
+      <span class="logo-text">Family Hub</span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="/" class="nav-link" data-page="dashboard"><span class="nav-icon">📊</span><span>Dashboard</span></a></li>
+      <li><a href="/calendar.html" class="nav-link active" data-page="calendar"><span class="nav-icon">📅</span><span>Calendar</span></a></li>
+      <li><a href="/chores.html" class="nav-link" data-page="chores"><span class="nav-icon">✅</span><span>Chores</span></a></li>
+      <li><a href="/settings.html" class="nav-link" data-page="settings"><span class="nav-icon">⚙️</span><span>Settings</span></a></li>
+    </ul>
+    <div class="sidebar-members" id="sidebarMembers"></div>
+  </nav>
+
+  <main class="main-content">
+    <header class="page-header">
+      <div>
+        <h1 class="page-title">📅 Calendar</h1>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-secondary" id="syncBtn">🔄 Sync Google</button>
+        <button class="btn btn-primary" id="addEventBtn">+ Add Event</button>
+      </div>
+    </header>
+
+    <!-- Calendar Nav -->
+    <div class="calendar-nav">
+      <button class="btn btn-icon" id="prevMonth">‹</button>
+      <h2 class="calendar-month-title" id="calendarTitle"></h2>
+      <button class="btn btn-icon" id="nextMonth">›</button>
+      <button class="btn btn-ghost" id="todayBtn">Today</button>
+    </div>
+
+    <!-- Calendar Grid -->
+    <div class="calendar-wrapper">
+      <div class="calendar-grid" id="calendarGrid"></div>
+    </div>
+
+    <!-- Events for selected day -->
+    <div class="day-events-panel" id="dayEventsPanel" style="display:none">
+      <div class="section-header">
+        <h3 class="section-title" id="dayEventTitle"></h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary" style="padding:6px 14px;font-size:13px" id="addEventDayBtn" onclick="openEventModal(selectedDay)">+ Add</button>
+          <button class="btn-close" id="closeDayPanel">✕</button>
+        </div>
+      </div>
+      <div id="dayEventsList"></div>
+    </div>
+  </main>
+</div>
+
+<!-- Add Event Modal -->
+<div class="modal-overlay" id="eventModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="eventModalTitle">Add Event</h3>
+      <button class="btn-close" id="closeEventModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Title *</label>
+        <input type="text" id="eventTitle" class="form-input" placeholder="Event title">
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea id="eventDesc" class="form-input" rows="2" placeholder="Optional details"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Start</label>
+          <input type="datetime-local" id="eventStart" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>End</label>
+          <input type="datetime-local" id="eventEnd" class="form-input">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="eventAllDay"> All day event
+        </label>
+      </div>
+      <div class="form-group">
+        <label>Who</label>
+        <select id="eventMember" class="form-input">
+          <option value="">Whole family</option>
+        </select>
+      </div>
+      <div class="form-group" id="calendarPickerGroup" style="display:none">
+        <label>Google Calendar</label>
+        <select id="eventCalendarId" class="form-input">
+          <option value="none">Don't sync to Google</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="cancelEventModal">Cancel</button>
+      <button class="btn btn-primary" id="saveEvent">Save Event</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/api.js?v=5"></script>
+<script src="/js/calendar.js?v=5"></script>
+  <script src="/js/slideshow.js?v=5"></script>
+  <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
+</body>
+</html>

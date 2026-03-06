@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  familyhub:
+    build: .
+    container_name: family-hub
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+      - ./data/photos:/app/backend/data/photos
+    env_file:
+      - .env
+    environment:
+      # ── Database ──
+      DB_PATH: /data/familyhub.db
+
+      # ── Timezone ──
+      TZ: America/New_York
+

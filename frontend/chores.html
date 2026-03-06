@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Chores – Family Hub</title>
+<link rel="stylesheet" href="/css/style.css?v=5">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-icon">🏠</span>
+      <span class="logo-text">Family Hub</span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="/" class="nav-link"><span class="nav-icon">📊</span><span>Dashboard</span></a></li>
+      <li><a href="/calendar.html" class="nav-link"><span class="nav-icon">📅</span><span>Calendar</span></a></li>
+      <li><a href="/chores.html" class="nav-link active"><span class="nav-icon">✅</span><span>Chores</span></a></li>
+      <li><a href="/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span>Settings</span></a></li>
+    </ul>
+    <div class="sidebar-members" id="sidebarMembers"></div>
+  </nav>
+
+  <main class="main-content">
+    <header class="page-header">
+      <div>
+        <h1 class="page-title">✅ Chores for the Day</h1>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-secondary" id="toggleAllChores">📋 All Chores</button>
+        <button class="btn btn-primary" id="addChoreBtn">+ Add Chore</button>
+      </div>
+    </header>
+
+    <!-- Chores List -->
+    <div class="chores-list" id="choresList">
+      <div class="empty-state">Loading chores...</div>
+    </div>
+
+    <!-- Leaderboard -->
+    <section class="dashboard-section" style="margin-top:24px">
+      <div class="section-header">
+        <h2 class="section-title">🏆 Chore Champions</h2>
+      </div>
+      <div class="leaderboard" id="leaderboard">
+        <div class="empty-state">Loading leaderboard...</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Add Chore Modal -->
+<div class="modal-overlay" id="choreModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="choreModalTitle">Add Chore</h3>
+      <button class="btn-close" id="closeChoreModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Quick-add templates -->
+      <div id="choreTemplateSection" class="form-group">
+        <label>Quick Add</label>
+        <div class="chore-template-grid" id="choreTemplateGrid"></div>
+      </div>
+      <div class="form-group">
+        <label>Chore *</label>
+        <input type="text" id="choreTitle" class="form-input" placeholder="e.g. Take out trash">
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea id="choreDesc" class="form-input" rows="2" placeholder="Optional details"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Assign To</label>
+        <select id="choreAssigned" class="form-input">
+          <option value="">Unassigned</option>
+        </select>
+        <div id="multiAssignSection" style="margin-top:8px;display:none">
+          <label style="font-size:13px;color:var(--text2);margin-bottom:6px;display:block">Or assign to multiple people:</label>
+          <div id="multiAssignCheckboxes" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Due Date</label>
+        <input type="date" id="choreDue" class="form-input">
+      </div>
+      <div class="form-group">
+        <label>Time of Day</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap" id="timeOfDayPicker">
+          <label class="tod-btn" id="tod_none">
+            <input type="radio" name="timeOfDay" value=""> Any time
+          </label>
+          <label class="tod-btn" id="tod_morning">
+            <input type="radio" name="timeOfDay" value="morning"> 🌅 Morning
+          </label>
+          <label class="tod-btn" id="tod_afternoon">
+            <input type="radio" name="timeOfDay" value="afternoon"> ☀️ Afternoon
+          </label>
+          <label class="tod-btn" id="tod_evening">
+            <input type="radio" name="timeOfDay" value="evening"> 🌙 Evening
+          </label>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Repeats</label>
+          <select id="choreRecurrence" class="form-input" onchange="onRecurrenceChange()">
+            <option value="">Does not repeat</option>
+            <option value="daily">Daily</option>
+            <option value="weekdays">Weekdays only (Mon–Fri)</option>
+            <option value="custom_days">Choose days...</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Points 🌟</label>
+          <input type="number" id="chorePoints" class="form-input" value="1" min="1" max="10">
+        </div>
+      </div>
+      <div id="customDaysSection" style="display:none">
+        <label style="font-size:13px;font-weight:600;margin-bottom:6px;display:block">Repeat on:</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label class="day-toggle"><input type="checkbox" value="Mon"> Mon</label>
+          <label class="day-toggle"><input type="checkbox" value="Tue"> Tue</label>
+          <label class="day-toggle"><input type="checkbox" value="Wed"> Wed</label>
+          <label class="day-toggle"><input type="checkbox" value="Thu"> Thu</label>
+          <label class="day-toggle"><input type="checkbox" value="Fri"> Fri</label>
+          <label class="day-toggle"><input type="checkbox" value="Sat"> Sat</label>
+          <label class="day-toggle"><input type="checkbox" value="Sun"> Sun</label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="cancelChoreModal">Cancel</button>
+      <button class="btn btn-primary" id="saveChore">Save Chore</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/api.js?v=5"></script>
+<script src="/js/chores.js?v=5"></script>
+  <script src="/js/slideshow.js?v=5"></script>
+  <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
+</body>
+</html>

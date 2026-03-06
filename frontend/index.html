@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Family Hub</title>
+<link rel="stylesheet" href="/css/style.css?v=5">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar Nav -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-icon">🏠</span>
+      <span class="logo-text">Family Hub</span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="/" class="nav-link active" data-page="dashboard">
+        <span class="nav-icon">📊</span><span>Dashboard</span>
+      </a></li>
+      <li><a href="/calendar.html" class="nav-link" data-page="calendar">
+        <span class="nav-icon">📅</span><span>Calendar</span>
+      </a></li>
+      <li><a href="/chores.html" class="nav-link" data-page="chores">
+        <span class="nav-icon">✅</span><span>Chores</span>
+      </a></li>
+      <li><a href="/settings.html" class="nav-link" data-page="settings">
+        <span class="nav-icon">⚙️</span><span>Settings</span>
+      </a></li>
+    </ul>
+    <div class="sidebar-members" id="sidebarMembers"></div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <header class="page-header">
+      <div>
+        <h1 class="page-title">Good <span id="timeGreeting">morning</span>! 👋</h1>
+        <p class="page-subtitle" id="todayDate"></p>
+        <p id="dailyQuote" style="font-size:13px;color:var(--text2);font-style:italic;margin-top:6px;max-width:500px;line-height:1.5"></p>
+      </div>
+      <div class="header-right">
+        <div id="haStatusBadge" class="ha-status-badge"></div>
+        <div id="weatherWidget" class="weather-widget"></div>
+      </div>
+    </header>
+
+    <!-- Today's Events -->
+    <section class="dashboard-section">
+      <div class="section-header">
+        <h2 class="section-title">📅 Up Next</h2>
+        <a href="/calendar.html" class="section-link">View all →</a>
+      </div>
+      <div class="card-grid" id="todayEvents">
+        <div class="empty-state">Loading today's events...</div>
+      </div>
+    </section>
+
+    <!-- Upcoming Chores -->
+    <section class="dashboard-section">
+      <div class="section-header">
+        <h2 class="section-title">✅ Chores Due Today</h2>
+        <a href="/chores.html" class="section-link">View all →</a>
+      </div>
+      <div class="card-grid" id="upcomingChores">
+        <div class="empty-state">Loading chores...</div>
+      </div>
+    </section>
+
+    <!-- School Lunch Menu -->
+    <section class="dashboard-section">
+      <div class="section-header">
+        <h2 class="section-title" id="lunchMenuTitle">🍽️ Today's School Menu</h2>
+        <a href="https://bcps.nutrislice.com/menu/bcps-weekly-menus/weekly-menus" target="_blank" class="section-link">Full menu →</a>
+      </div>
+      <div id="lunchMenu">
+        <div class="empty-state">Loading menu...</div>
+      </div>
+    </section>
+
+
+  </main>
+</div>
+
+<script src="/js/api.js?v=5"></script>
+<script src="/js/dashboard.js?v=5"></script>
+  <script src="/js/slideshow.js?v=5"></script>
+  <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
+</body>
+</html>
