@@ -32,5 +32,6 @@ app.include_router(lunch.router, prefix="/api/lunch", tags=["lunch"])
 app.include_router(weather.router, prefix="/api/weather", tags=["weather"])
 app.include_router(homeassistant.router, prefix="/api/homeassistant", tags=["homeassistant"])
 
-# Serve frontend static files
-app.mount("/", StaticFiles(directory="/app/frontend", html=True), name="frontend")
+# Serve frontend static files (configurable for LXC/native installs)
+FRONTEND_DIR = os.environ.get("FRONTEND_DIR", "/app/frontend")
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

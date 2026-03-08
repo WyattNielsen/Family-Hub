@@ -1,7 +1,12 @@
 import sqlite3
 import os
 
-DB_PATH = os.environ.get("DB_PATH", "/data/familyhub.db")
+_data_dir = os.environ.get("DATA_DIR")
+DB_PATH = (
+    os.environ.get("DB_PATH")
+    or (os.path.join(_data_dir, "familyhub.db") if _data_dir else None)
+    or "/data/familyhub.db"
+)
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)

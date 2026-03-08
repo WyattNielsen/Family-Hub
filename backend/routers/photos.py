@@ -7,7 +7,12 @@ import uuid
 
 router = APIRouter()
 
-PHOTOS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "photos")
+# Prefer DATA_DIR/photos for LXC/native (single data dir); else backend/data/photos
+_data_dir = os.environ.get("DATA_DIR")
+if _data_dir:
+    PHOTOS_DIR = os.path.join(_data_dir, "photos")
+else:
+    PHOTOS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "photos")
 os.makedirs(PHOTOS_DIR, exist_ok=True)
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
