@@ -917,6 +917,16 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 .dashboard-chore-title { font-size: 14px; font-weight: 600; flex: 1; }
 .dashboard-chore-title.done { text-decoration: line-through; }
 .dashboard-chore-pts { font-size: 12px; color: var(--text2); }
+.chore-tod-group-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text2);
+  margin: 10px 0 4px 0;
+  padding-left: 4px;
+}
+.chore-tod-group-header:first-child { margin-top: 4px; }
 
 .quote-author {
   font-style: normal;

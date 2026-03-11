@@ -182,11 +182,20 @@ def _create_next_recurrence(conn, chore: dict):
             next_due = due + timedelta(days=days_ahead)
         else:
             return
+        next_due_str = next_due.date().isoformat()
+        # Dedup: don't create if a matching incomplete occurrence already exists
+        existing = conn.execute("""
+            SELECT id FROM chores
+            WHERE title=? AND assigned_to IS ? AND due_date=? AND completed=0
+        """, (chore["title"], chore["assigned_to"], next_due_str)).fetchone()
+        if existing:
+            return
         conn.execute("""
-            INSERT INTO chores (title, description, assigned_to, due_date, recurrence, recurrence_days, recurrence_interval, points)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chores (title, description, assigned_to, due_date, recurrence, recurrence_days, recurrence_interval, points, time_of_day)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (chore["title"], chore["description"], chore["assigned_to"],
-              next_due.date().isoformat(), chore["recurrence"],
-              chore.get("recurrence_days"), interval, chore["points"]))
+              next_due_str, chore["recurrence"],
+              chore.get("recurrence_days"), interval, chore["points"],
+              chore.get("time_of_day")))
     except Exception as e:
         print(f"Error creating recurrence: {e}")

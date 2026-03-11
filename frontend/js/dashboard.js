@@ -99,11 +99,29 @@ async function loadTodayEvents() {
   }
 }
 
+const TOD_ORDER = ['morning', 'afternoon', 'evening'];
+const TOD_LABEL = { morning: '🌅 Morning', afternoon: '☀️ Afternoon', evening: '🌙 Evening' };
+
+function renderChoresByTOD(chores, color) {
+  const grouped = { morning: [], afternoon: [], evening: [], none: [] };
+  for (const c of chores) {
+    (grouped[c.time_of_day] || grouped.none).push(c);
+  }
+  let html = '';
+  for (const tod of TOD_ORDER) {
+    if (!grouped[tod].length) continue;
+    html += `<div class="chore-tod-group-header">${TOD_LABEL[tod]}</div>`;
+    html += grouped[tod].map(c => renderDashboardChore(c, color)).join('');
+  }
+  html += grouped.none.map(c => renderDashboardChore(c, color)).join('');
+  return html;
+}
+
 async function loadUpcomingChores() {
   const el = document.getElementById('upcomingChores');
   try {
     const [chores, members] = await Promise.all([
-      API.get('/api/chores/?hide_future=true'),
+      API.get('/api/chores/?hide_future=true&completed=false'),
       API.get('/api/members/')
     ]);
 
@@ -126,20 +144,20 @@ async function loadUpcomingChores() {
 
     let html = '';
     for (const m of members) {
-      const mChores = (byMember[m.id] || []).slice(0, 5);
+      const mChores = (byMember[m.id] || []).slice(0, 10);
       if (!mChores.length) continue;
       html += `<div class="person-chores-section">
         <div class="person-chores-header">
           <span style="font-size:20px">${m.avatar || '👤'}</span>
           <span style="color:${m.color}">${m.name}</span>
         </div>
-        ${mChores.map(c => renderDashboardChore(c, m.color)).join('')}
+        ${renderChoresByTOD(mChores, m.color)}
       </div>`;
     }
     if (unassigned.length) {
       html += `<div class="person-chores-section">
         <div class="person-chores-header">📋 Unassigned</div>
-        ${unassigned.slice(0,3).map(c => renderDashboardChore(c, '#9AA0B8')).join('')}
+        ${renderChoresByTOD(unassigned.slice(0, 5), '#9AA0B8')}
       </div>`;
     }
     el.innerHTML = html || '<div class="empty-state">🙌 All chores done!</div>';
@@ -157,10 +175,7 @@ function renderDashboardChore(c, color) {
         ${c.completed ? '✓' : ''}
       </div>
       <div class="dashboard-chore-title ${c.completed ? 'done' : ''}">${c.title}</div>
-      <div style="display:flex;align-items:center;gap:6px">
-        ${c.time_of_day ? `<span class="chore-tod chore-tod-${c.time_of_day}">${c.time_of_day==="morning"?"🌅":c.time_of_day==="afternoon"?"☀️":"🌙"} ${c.time_of_day}</span>` : ""}
-        <div class="dashboard-chore-pts">🌟${c.points}</div>
-      </div>
+      <div class="dashboard-chore-pts">🌟${c.points}</div>
     </div>`;
 }
 
