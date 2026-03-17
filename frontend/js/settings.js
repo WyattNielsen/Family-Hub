@@ -555,18 +555,25 @@ async function loadCameraSettings() {
     const cameras = data.cameras || [];
     const list = document.getElementById('cameraList');
     list.innerHTML = '';
-    cameras.forEach(c => addCameraRow(c.name, c.rtsp_url));
+    cameras.forEach(c => addCameraRow(c.name, c.rtsp_url || '', c.ha_entity_id || ''));
   } catch(e) {}
 }
 
-function addCameraRow(name = '', rtspUrl = '') {
+function addCameraRow(name = '', rtspUrl = '', haEntityId = '') {
   const list = document.getElementById('cameraList');
   const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+  row.style.cssText = 'display:flex;flex-direction:column;gap:6px;padding:12px;background:var(--bg2);border-radius:10px';
   row.innerHTML = `
-    <input type="text" class="form-input cam-name" placeholder="FrontDoor" value="${name}" style="flex:1;min-width:120px;max-width:180px">
-    <input type="text" class="form-input cam-url" placeholder="rtsps://192.168.1.1:7441/token" value="${rtspUrl}" style="flex:3;min-width:200px">
-    <button class="btn btn-danger-ghost" onclick="this.parentElement.remove()" style="padding:8px 10px">✕</button>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="text" class="form-input cam-name" placeholder="Camera name (e.g. Driveway)" value="${name}" style="flex:1;min-width:160px">
+      <button class="btn btn-danger-ghost" onclick="this.closest('div[style]').remove()" style="padding:8px 10px">✕</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="text" class="form-input cam-ha-entity" placeholder="HA Entity ID: camera.driveway (preferred)" value="${haEntityId}" style="flex:1;min-width:200px">
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="text" class="form-input cam-url" placeholder="RTSP URL (only if no HA entity)" value="${rtspUrl}" style="flex:1;min-width:200px">
+    </div>
   `;
   list.appendChild(row);
 }
@@ -576,8 +583,9 @@ async function saveCameraSettings() {
   const cameras = [];
   rows.forEach(row => {
     const name = row.querySelector('.cam-name')?.value.trim();
+    const haEntity = row.querySelector('.cam-ha-entity')?.value.trim();
     const url = row.querySelector('.cam-url')?.value.trim();
-    if (name && url) cameras.push({ name, rtsp_url: url });
+    if (name && (haEntity || url)) cameras.push({ name, ha_entity_id: haEntity || '', rtsp_url: url || '' });
   });
   const status = document.getElementById('cameraSaveStatus');
   try {

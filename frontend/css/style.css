@@ -1220,6 +1220,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 .camera-feed-card { background: var(--surface); border-radius: 16px; overflow: hidden; border: 1px solid var(--border); }
 .camera-feed-label { padding: 10px 14px; font-weight: 700; font-size: 14px; border-bottom: 1px solid var(--border); }
 .camera-feed-iframe { width: 100%; aspect-ratio: 16/9; border: none; display: block; background: #000; }
+.camera-feed-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #000; }
 
 /* ── School Menu Widget ───────────────────────────────────── */
 .menu-compact {

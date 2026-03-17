@@ -10,6 +10,8 @@ services:
     volumes:
       - ./data:/data
       - ./data/photos:/app/backend/data/photos
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:
@@ -20,14 +22,13 @@ services:
       TZ: America/New_York
 
       # ── go2rtc (camera proxy) ──
-      GO2RTC_URL: http://go2rtc:1984
+      GO2RTC_URL: http://host.docker.internal:1984
 
   go2rtc:
     image: alexxit/go2rtc
     container_name: go2rtc
     restart: unless-stopped
-    ports:
-      - "1984:1984"
+    network_mode: host
     volumes:
       - ./go2rtc.yaml:/config/go2rtc.yaml
 
