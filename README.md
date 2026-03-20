@@ -71,6 +71,58 @@ Required for Google Calendar sync. Skip if you don't need calendar sync.
 
 ---
 
+### Google OAuth without a public domain (localhost helper flow)
+
+If Family Hub runs in Docker/LXC on your LAN and you do not have a public HTTPS domain, use the local helper flow.
+
+1. In Google Cloud OAuth client settings, add this redirect URI:
+   ```
+   http://127.0.0.1:8765/callback
+   ```
+2. Start Family Hub normally on your LAN (with valid `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env`).
+3. On the admin machine (the one with the browser), run:
+   ```bash
+   python tools/google_oauth_helper.py
+   ```
+4. Open `http://127.0.0.1:8765`
+5. Enter your Family Hub URL (example: `http://192.168.1.100:3000`)
+6. Choose **Family Calendar** or **Member Calendar** (member needs the numeric member ID)
+7. Complete Google sign-in; helper posts the OAuth code back to Family Hub.
+
+Family Hub endpoints used by this flow:
+- `POST /api/auth/google/pkce/start`
+- `POST /api/auth/google/pkce/exchange`
+- `GET /api/auth/google/pkce/options`
+
+Notes:
+- The helper must run on the same machine/browser completing Google sign-in.
+- Pending OAuth states expire after 10 minutes.
+
+#### API-only flow (no app UI changes required)
+
+You can drive this entirely via API/scripts:
+
+1. Read flow metadata and member IDs:
+   ```bash
+   curl http://<family-hub-host>:3000/api/auth/google/pkce/options
+   ```
+2. Start flow:
+   ```bash
+   curl -X POST http://<family-hub-host>:3000/api/auth/google/pkce/start \
+     -H "Content-Type: application/json" \
+     -d '{"target":"family","redirect_uri":"http://127.0.0.1:8765/callback"}'
+   ```
+   For member flow, include `"target":"member","member_id":<id>`.
+3. Open returned `auth_url` in browser and sign in.
+4. On callback, submit `code` + `state`:
+   ```bash
+   curl -X POST http://<family-hub-host>:3000/api/auth/google/pkce/exchange \
+     -H "Content-Type: application/json" \
+     -d '{"code":"<google_code>","state":"<state_from_start>"}'
+   ```
+
+---
+
 ### 3. Build and run
 
 **Option A — Docker (any host):**

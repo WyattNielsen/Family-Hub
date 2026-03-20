@@ -27,7 +27,6 @@ def update_settings(payload: dict):
     conn = get_db()
     for key, value in payload.items():
         if key in SENSITIVE_KEYS and str(value).strip() == MASK_PLACEHOLDER:
-            # Client sent the mask: keep existing value, do not overwrite.
             continue
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
