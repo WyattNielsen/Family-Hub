@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadWeatherZip();
   loadHASettings();
   loadTimezone();
+  loadLunchSettings();
+  loadStockSettings();
+  loadCameraSettings();
 
   document.getElementById('addMemberBtn').onclick = () => openMemberModal();
   document.getElementById('closeMemberModal').onclick = closeMemberModal;
@@ -492,6 +495,93 @@ async function saveHASettings() {
       ha_entities: JSON.stringify(entities),
       ha_alarm_code: alarmCode,
     });
+    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+  } catch(e) {
+    if (status) status.textContent = '❌ Failed to save';
+  }
+}
+
+async function loadLunchSettings() {
+  try {
+    const s = await API.get('/api/settings/');
+    const district = document.getElementById('lunchDistrict');
+    const slug = document.getElementById('lunchSchoolSlug');
+    const menuType = document.getElementById('lunchMenuType');
+    if (district) district.value = s.lunch_district || 'bcps';
+    if (slug) slug.value = s.lunch_school_slug || 'bcps-weekly-menus';
+    if (menuType) menuType.value = s.lunch_menu_type || 'weekly-menus';
+  } catch(e) {}
+}
+
+async function saveLunchSettings() {
+  const district = (document.getElementById('lunchDistrict')?.value || '').trim();
+  const slug = (document.getElementById('lunchSchoolSlug')?.value || '').trim();
+  const menuType = (document.getElementById('lunchMenuType')?.value || '').trim();
+  const status = document.getElementById('lunchSaveStatus');
+  try {
+    await API.post('/api/settings/', {
+      lunch_district: district,
+      lunch_school_slug: slug,
+      lunch_menu_type: menuType,
+    });
+    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+  } catch(e) {
+    if (status) status.textContent = '❌ Failed to save';
+  }
+}
+
+async function loadStockSettings() {
+  try {
+    const data = await API.get('/api/stocks/settings');
+    const el = document.getElementById('stockSymbols');
+    if (el && data.symbols) el.value = data.symbols;
+  } catch(e) {}
+}
+
+async function saveStockSettings() {
+  const symbols = (document.getElementById('stockSymbols')?.value || '').trim();
+  const status = document.getElementById('stockSaveStatus');
+  try {
+    await API.post('/api/settings/', { stock_symbols: symbols });
+    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+  } catch(e) {
+    if (status) status.textContent = '❌ Failed to save';
+  }
+}
+
+async function loadCameraSettings() {
+  try {
+    const data = await API.get('/api/security/cameras');
+    const cameras = data.cameras || [];
+    const list = document.getElementById('cameraList');
+    list.innerHTML = '';
+    cameras.forEach(c => addCameraRow(c.name, c.ha_entity_id || ''));
+  } catch(e) {}
+}
+
+function addCameraRow(name = '', haEntityId = '') {
+  const list = document.getElementById('cameraList');
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--bg2);border-radius:10px';
+  row.innerHTML = `
+    <input type="text" class="form-input cam-name" placeholder="Camera name (e.g. Driveway)" value="${name}" style="flex:1;min-width:160px">
+    <input type="text" class="form-input cam-ha-entity" placeholder="HA Entity ID (e.g. camera.driveway)" value="${haEntityId}" style="flex:1;min-width:200px">
+    <button class="btn btn-danger-ghost" onclick="this.closest('div[style]').remove()" style="padding:8px 10px">✕</button>
+  `;
+  list.appendChild(row);
+}
+
+async function saveCameraSettings() {
+  const rows = document.querySelectorAll('#cameraList > div');
+  const cameras = [];
+  rows.forEach(row => {
+    const name = row.querySelector('.cam-name')?.value.trim();
+    const haEntity = row.querySelector('.cam-ha-entity')?.value.trim();
+    if (name && haEntity) cameras.push({ name, ha_entity_id: haEntity });
+  });
+  const status = document.getElementById('cameraSaveStatus');
+  try {
+    await API.post('/api/security/cameras', { cameras });
     if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
   } catch(e) {
     if (status) status.textContent = '❌ Failed to save';
