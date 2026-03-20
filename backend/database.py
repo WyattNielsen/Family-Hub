@@ -83,6 +83,18 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now'))
         );
 
+        -- One-time PKCE authorization state for localhost helper flow.
+        -- Stored in DB so it survives restarts and works with multiple instances.
+        CREATE TABLE IF NOT EXISTS pkce_pending (
+            state TEXT PRIMARY KEY,
+            target TEXT NOT NULL,
+            member_id INTEGER DEFAULT NULL,
+            redirect_uri TEXT NOT NULL,
+            code_verifier TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS chores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,

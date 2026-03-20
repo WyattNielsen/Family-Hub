@@ -19,7 +19,6 @@ APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")
 
 SCOPES = "https://www.googleapis.com/auth/calendar openid email profile"
 PHOTOS_SCOPES = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly openid email profile"
-_PENDING_PKCE = {}
 
 
 class PkceStartRequest(BaseModel):
@@ -33,11 +32,15 @@ class PkceExchangeRequest(BaseModel):
     code: str
 
 
-def _cleanup_pending_pkce():
-    now = datetime.now(timezone.utc)
-    stale = [k for k, v in _PENDING_PKCE.items() if v["expires_at"] <= now]
-    for k in stale:
-        _PENDING_PKCE.pop(k, None)
+def _cleanup_pending_pkce_db():
+    conn = get_db()
+    try:
+        conn.execute(
+            "DELETE FROM pkce_pending WHERE expires_at <= datetime('now')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _is_allowed_loopback_redirect(redirect_uri: str) -> bool:
@@ -275,7 +278,7 @@ def google_pkce_start(payload: PkceStartRequest):
     """
     Start a localhost PKCE OAuth flow from an admin helper app.
     """
-    _cleanup_pending_pkce()
+    _cleanup_pending_pkce_db()
     target = (payload.target or "").strip().lower()
     if target not in ("family", "member"):
         raise HTTPException(status_code=400, detail="target must be 'family' or 'member'")
@@ -294,13 +297,22 @@ def google_pkce_start(payload: PkceStartRequest):
 
     state = secrets.token_urlsafe(24)
     code_verifier, code_challenge = _make_pkce_pair()
-    _PENDING_PKCE[state] = {
-        "target": target,
-        "member_id": payload.member_id,
-        "redirect_uri": redirect_uri,
-        "code_verifier": code_verifier,
-        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
-    }
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT INTO pkce_pending
+               (state, target, member_id, redirect_uri, code_verifier, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (state, target, payload.member_id, redirect_uri, code_verifier, expires_at),
+        )
+        conn.commit()
+    except Exception:
+        # If state collision occurs (extremely unlikely), surface a clean error.
+        raise HTTPException(status_code=500, detail="Failed to create PKCE state")
+    finally:
+        conn.close()
 
     auth_url = _build_oauth_url_pkce(
         redirect_uri=redirect_uri,
@@ -334,12 +346,29 @@ async def google_pkce_exchange(payload: PkceExchangeRequest):
     """
     Complete localhost PKCE OAuth flow and persist tokens for family or member account.
     """
-    _cleanup_pending_pkce()
-    pending = _PENDING_PKCE.pop(payload.state, None)
-    if not pending:
-        raise HTTPException(status_code=400, detail="Invalid or expired state")
+    _cleanup_pending_pkce_db()
+    conn = get_db()
+    try:
+        pending = conn.execute(
+            """SELECT state, target, member_id, redirect_uri, code_verifier, expires_at
+               FROM pkce_pending
+               WHERE state=? AND expires_at > datetime('now')
+               LIMIT 1""",
+            (payload.state,),
+        ).fetchone()
 
-    tokens = await _exchange_code_pkce(payload.code, pending["redirect_uri"], pending["code_verifier"])
+        if not pending:
+            raise HTTPException(status_code=400, detail="Invalid or expired state")
+
+        # One-time use: delete the state record before exchanging so replay attempts fail fast.
+        conn.execute("DELETE FROM pkce_pending WHERE state=?", (payload.state,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    tokens = await _exchange_code_pkce(
+        payload.code, pending["redirect_uri"], pending["code_verifier"]
+    )
     email = await _get_google_email(tokens["access_token"])
     expiry = (datetime.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in", 3600))).isoformat()
     target = pending["target"]
