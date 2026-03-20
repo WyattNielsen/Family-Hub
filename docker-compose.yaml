@@ -18,4 +18,3 @@ services:
 
       # ── Timezone ──
       TZ: America/New_York
-

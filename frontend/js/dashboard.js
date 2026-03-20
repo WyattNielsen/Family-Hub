@@ -40,7 +40,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadLunchMenu();
   loadWeather();
   loadHAStatus();
+  loadStocks();
   setInterval(loadHAStatus, 30000);
+  setInterval(loadStocks, 5 * 60 * 1000);
 });
 
 async function loadTodayEvents() {
@@ -388,6 +390,28 @@ async function loadWeather() {
   }
 }
 
+async function loadStocks() {
+  const el = document.getElementById('stockTicker');
+  if (!el) return;
+  try {
+    const settingsRes = await API.get('/api/stocks/settings');
+    const symbols = settingsRes.symbols || 'BTC,TSLA,SPY';
+    const stocks = await API.get(`/api/stocks/?symbols=${encodeURIComponent(symbols)}`);
+    if (!stocks.length) { el.style.display = 'none'; return; }
+    el.style.display = 'flex';
+    el.innerHTML = stocks.map(s => {
+      const up = s.change_pct >= 0;
+      return `<div class="ticker-item">
+        <span class="ticker-symbol">${s.symbol}</span>
+        <span class="ticker-price">$${s.price_fmt}</span>
+        <span class="ticker-change ${up ? 'ticker-up' : 'ticker-down'}">${up ? '▲' : '▼'} ${Math.abs(s.change_pct).toFixed(2)}%</span>
+      </div>`;
+    }).join('<div class="ticker-sep">·</div>');
+  } catch(e) {
+    if (el) el.style.display = 'none';
+  }
+}
+
 async function loadLunchMenu() {
   const el = document.getElementById('lunchMenu');
   if (!el) return;
@@ -407,6 +431,21 @@ async function loadLunchMenu() {
 
   try {
     const data = await API.get(`/api/lunch/today?date=${dateKey}`);
+
+    // Hide section entirely if lunch menu is not configured in Settings
+    if (data.not_configured) {
+      const section = document.getElementById('lunchSection');
+      if (section) section.style.display = 'none';
+      return;
+    }
+
+    // Update the "Full menu →" link using values returned from backend
+    const link = document.getElementById('lunchFullMenuLink');
+    if (link && data.district && data.school_slug && data.menu_type) {
+      link.href = `https://${data.district}.nutrislice.com/menu/${data.school_slug}/${data.menu_type}`;
+      link.style.display = '';
+    }
+
     const { breakfast, lunch } = data;
 
     if (!breakfast.length && !lunch.length) {
