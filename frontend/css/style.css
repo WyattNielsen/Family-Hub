@@ -119,6 +119,11 @@ input, select, textarea { font-family: var(--font); }
   flex: 1;
   padding: 20px 24px 16px;
   min-width: 0;
+  overflow-y: auto;
+}
+
+/* Dashboard only — fills viewport, columns scroll internally */
+.main-content.dashboard-layout {
   overflow: hidden;
   display: flex;
   flex-direction: column;
