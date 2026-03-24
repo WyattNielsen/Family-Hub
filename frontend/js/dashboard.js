@@ -128,7 +128,28 @@ async function loadUpcomingChores() {
     ]);
 
     if (!chores.length) {
-      el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>';
+      // Show mini leaderboard instead of blank state
+      try {
+        const lb = await API.get('/api/chores/leaderboard');
+        if (lb && lb.length) {
+          const medals = ['🥇','🥈','🥉'];
+          el.innerHTML = `
+            <div class="dash-chores-done">
+              <div class="dash-chores-done-title">🙌 All done today!</div>
+              <div class="dash-mini-lb">
+                ${lb.slice(0, 3).map((p, i) => `
+                  <div class="dash-mini-lb-row">
+                    <span class="dash-mini-lb-medal">${medals[i] || ''}</span>
+                    <span class="dash-mini-lb-avatar">${p.avatar || '👤'}</span>
+                    <span class="dash-mini-lb-name" style="color:${p.color}">${p.name}</span>
+                    <span class="dash-mini-lb-pts" style="color:${p.color}">${p.total_points}<small> pts</small></span>
+                  </div>`).join('')}
+              </div>
+            </div>`;
+        } else {
+          el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>';
+        }
+      } catch { el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>'; }
       return;
     }
 
@@ -424,10 +445,10 @@ async function loadLunchMenu() {
   const dateKey = target.getFullYear() + '-' +
     String(target.getMonth() + 1).padStart(2, '0') + '-' +
     String(target.getDate()).padStart(2, '0');
-  const displayDate = target.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const displayDate = target.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
   const titleEl = document.getElementById('lunchMenuTitle');
-  if (titleEl) titleEl.textContent = '🍽️ ' + (isAfter5pm ? 'Tomorrow — ' : '') + displayDate;
+  if (titleEl) titleEl.textContent = '🍽️ ' + (isAfter5pm ? 'Tomorrow · ' : 'Today · ') + displayDate;
 
   try {
     const data = await API.get(`/api/lunch/today?date=${dateKey}`);
