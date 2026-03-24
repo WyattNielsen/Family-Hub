@@ -41,9 +41,32 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadWeather();
   loadHAStatus();
   loadStocks();
+  loadMessagePreview();
   setInterval(loadHAStatus, 30000);
   setInterval(loadStocks, 5 * 60 * 1000);
 });
+
+async function loadMessagePreview() {
+  const pill = document.getElementById('msgPreviewPill');
+  if (!pill) return;
+  try {
+    const msgs = await API.get('/api/messages/');
+    if (!msgs.length) { pill.style.display = 'none'; return; }
+    const m = msgs[0];
+    const color  = m.color  || 'var(--text2)';
+    const avatar = m.avatar || '💬';
+    const name   = m.name   || 'Someone';
+    const extra  = msgs.length > 1 ? `+${msgs.length - 1} more` : '';
+    pill.style.display = 'flex';
+    pill.innerHTML = `
+      <span class="msg-preview-icon">💬</span>
+      <span class="msg-preview-from" style="color:${color}">${avatar} ${name}</span>
+      <span class="msg-preview-divider">·</span>
+      <span class="msg-preview-text">"${m.body}"</span>
+      ${extra ? `<span class="msg-preview-more">${extra} →</span>` : '<span class="msg-preview-more">→</span>'}
+    `;
+  } catch(e) { /* silently fail */ }
+}
 
 async function loadTodayEvents() {
   const el = document.getElementById('todayEvents');
@@ -142,7 +165,7 @@ async function loadUpcomingChores() {
                     <span class="dash-mini-lb-medal">${medals[i] || ''}</span>
                     <span class="dash-mini-lb-avatar">${p.avatar || '👤'}</span>
                     <span class="dash-mini-lb-name" style="color:${p.color}">${p.name}</span>
-                    <span class="dash-mini-lb-pts" style="color:${p.color}">${p.total_points}<small> pts</small></span>
+                    <span class="dash-mini-lb-pts" style="color:${p.color}">${p.streak > 0 ? `🔥 ${p.streak}` : '—'}<small> day streak</small></span>
                   </div>`).join('')}
               </div>
             </div>`;
@@ -191,7 +214,7 @@ async function loadUpcomingChores() {
 
 function renderDashboardChore(c, color) {
   return `
-    <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}" style="border-left:3px solid ${color}">
+    <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}" style="border-left:3px solid ${color};background:${color}18">
       <div class="dashboard-chore-check ${c.completed ? 'checked' : ''}"
            style="${c.completed ? `background:${color}` : `border-color:${color}`}"
            onclick="toggleDashboardChore(${c.id}, ${c.completed})">

@@ -94,6 +94,14 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (assigned_to) REFERENCES members(id) ON DELETE SET NULL
         );
+
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            author_id INTEGER DEFAULT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (author_id) REFERENCES members(id) ON DELETE SET NULL
+        );
     """)
 
     conn.commit()

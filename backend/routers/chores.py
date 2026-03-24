@@ -4,6 +4,7 @@ from typing import Optional
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
 from datetime import datetime, timedelta
+import pytz
 
 router = APIRouter()
 
@@ -138,16 +139,37 @@ def get_leaderboard():
     conn = get_db()
     rows = conn.execute("""
         SELECT m.id, m.name, m.color, m.avatar,
-               COUNT(c.id) as total_chores,
-               SUM(c.completed) as completed_chores,
                SUM(CASE WHEN c.completed=1 THEN c.points ELSE 0 END) as points
         FROM members m
         LEFT JOIN chores c ON c.assigned_to = m.id
         GROUP BY m.id
         ORDER BY points DESC
     """).fetchall()
+
+    # Compute streak per member: consecutive days (back from today) with >= 1 completed chore
+    result = []
+    tz_name = conn.execute("SELECT value FROM settings WHERE key='timezone'").fetchone()
+    tz = pytz.timezone(tz_name["value"] if tz_name and tz_name["value"] else "America/New_York")
+    today = datetime.now(tz).date()
+    for r in rows:
+        d = dict(r)
+        streak = 0
+        check = today
+        while True:
+            done = conn.execute(
+                "SELECT COUNT(*) FROM chores WHERE assigned_to=? AND completed=1 AND date(due_date)=?",
+                (d["id"], check.isoformat())
+            ).fetchone()[0]
+            if done:
+                streak += 1
+                check -= timedelta(days=1)
+            else:
+                break
+        d["streak"] = streak
+        result.append(d)
+
     conn.close()
-    return [dict(r) for r in rows]
+    return result
 
 def _create_next_recurrence(conn, chore: dict):
     """When a recurring chore is completed, create the next one."""

@@ -68,20 +68,22 @@ function renderAlarmCards(alarms) {
     const busy    = s === 'arming' || s === 'pending';
     const isArmed = s.startsWith('armed');
     const badge   = isArmed ? 'armed' : 'disarmed';
-    const rowCls  = isArmed ? 'sec-armed' : 'sec-disarmed';
+    const label   = e.state_label || e.state;
     return `
-      <div class="sec-row ${rowCls}">
-        <div class="sec-row-icon">${e.icon || (isArmed ? '🔒' : '🔓')}</div>
-        <div class="sec-row-info">
-          <div class="sec-row-name">${e.name}</div>
-          <span class="sec-row-badge ${badge}">${e.state_label || e.state}</span>
+      <div class="alarm-card ${isArmed ? 'sec-armed' : ''}">
+        <div class="alarm-card-header">
+          <span class="alarm-card-icon">${isArmed ? '🔒' : '🔓'}</span>
+          <div>
+            <div class="alarm-card-name">${e.name}</div>
+            <span class="sec-row-badge ${badge}">${label}</span>
+          </div>
         </div>
-        <div class="sec-row-btns">
-          <button class="btn btn-secondary sec-btn" ${s === 'disarmed' || busy ? 'disabled' : ''}
+        <div class="alarm-card-btns">
+          <button class="btn btn-secondary" ${s === 'disarmed' || busy ? 'disabled' : ''}
             onclick="alarmAction('alarm_disarm','${e.entity_id}')">🔓 Disarm</button>
-          <button class="btn sec-btn ${s === 'armed_home' ? 'btn-primary' : 'btn-ghost'}" ${s === 'armed_home' || busy ? 'disabled' : ''}
+          <button class="btn ${s === 'armed_home' ? 'btn-primary' : 'btn-ghost'}" ${s === 'armed_home' || busy ? 'disabled' : ''}
             onclick="alarmAction('alarm_arm_home','${e.entity_id}')">🏠 Arm Home</button>
-          <button class="btn sec-btn ${s === 'armed_away' ? 'btn-primary' : 'btn-ghost'}" ${s === 'armed_away' || busy ? 'disabled' : ''}
+          <button class="btn ${s === 'armed_away' ? 'btn-primary' : 'btn-ghost'}" ${s === 'armed_away' || busy ? 'disabled' : ''}
             onclick="alarmAction('alarm_arm_away','${e.entity_id}')">🏃 Arm Away</button>
         </div>
       </div>`;

@@ -103,5 +103,73 @@ function toLocalISO(date) {
   return `${yr}-${m}-${day}T${timePart.replace('24:', '00:')}`;
 }
 
-// Init sidebar on all pages
-document.addEventListener('DOMContentLoaded', loadSidebarMembers);
+// ── Night Mode + Auto-dim ──────────────────────────────────────
+let _darkStart = 21;
+let _darkEnd   = 7;
+let _dimDelay  = 5 * 60 * 1000;
+let _dimTimer  = null;
+
+function _applyTheme() {
+  const h = new Date().getHours();
+  const isNight = _darkStart > _darkEnd
+    ? (h >= _darkStart || h < _darkEnd)
+    : (h >= _darkStart && h < _darkEnd);
+  document.documentElement.setAttribute('data-theme', isNight ? 'dark' : 'light');
+}
+
+function _resetDim() {
+  document.documentElement.classList.remove('dimmed');
+  clearTimeout(_dimTimer);
+  if (_dimDelay > 0) {
+    _dimTimer = setTimeout(() => document.documentElement.classList.add('dimmed'), _dimDelay);
+  }
+}
+
+async function initTheme() {
+  try {
+    const [s, e, d] = await Promise.all([
+      API.get('/api/settings/dark_mode_start').catch(() => ({value: '21'})),
+      API.get('/api/settings/dark_mode_end').catch(() => ({value: '7'})),
+      API.get('/api/settings/dim_minutes').catch(() => ({value: '5'}))
+    ]);
+    _darkStart = parseInt(s.value || '21');
+    _darkEnd   = parseInt(e.value || '7');
+    _dimDelay  = parseInt(d.value || '5') * 60000;
+  } catch(e) {}
+  _applyTheme();
+  setInterval(_applyTheme, 60000);
+  ['touchstart', 'mousemove', 'keydown', 'click'].forEach(ev =>
+    document.addEventListener(ev, _resetDim, { passive: true })
+  );
+  _resetDim();
+}
+
+// ── Message Badge (all pages) ─────────────────────────────────
+async function loadMessageBadge() {
+  const badge = document.getElementById('msgNavBadge');
+  if (!badge) return;
+  // If on messages page, mark as seen and hide badge
+  if (window.location.pathname === '/messages.html') {
+    localStorage.setItem('msg_last_seen', new Date().toISOString());
+    badge.style.display = 'none';
+    return;
+  }
+  try {
+    const msgs = await API.get('/api/messages/');
+    const lastSeen = localStorage.getItem('msg_last_seen') || '1970-01-01T00:00:00Z';
+    const unread = msgs.filter(m => new Date(m.created_at + 'Z') > new Date(lastSeen));
+    if (unread.length > 0) {
+      badge.textContent = unread.length > 9 ? '9+' : unread.length;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch(e) {}
+}
+
+// Init sidebar + theme on all pages
+document.addEventListener('DOMContentLoaded', () => {
+  loadSidebarMembers();
+  initTheme();
+  loadMessageBadge();
+});

@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadWeatherZip();
   loadHASettings();
   loadTimezone();
+  loadNightMode();
   loadLunchSettings();
   loadStockSettings();
   loadCameraSettings();
@@ -603,5 +604,35 @@ async function saveSlideShowSettings() {
     showToast('✅ Slideshow settings saved!', 'success');
   } catch(e) {
     showToast('Failed to save settings', 'error');
+  }
+}
+
+async function loadNightMode() {
+  try {
+    const [s, e, d] = await Promise.all([
+      API.get('/api/settings/dark_mode_start').catch(() => ({value: '21'})),
+      API.get('/api/settings/dark_mode_end').catch(() => ({value: '7'})),
+      API.get('/api/settings/dim_minutes').catch(() => ({value: '5'}))
+    ]);
+    const sel = v => parseInt(v?.value || '0');
+    document.getElementById('darkStart').value  = sel(s) || 21;
+    document.getElementById('darkEnd').value    = sel(e) || 7;
+    document.getElementById('dimMinutes').value = sel(d) || 5;
+  } catch(e) {}
+}
+
+async function saveNightMode() {
+  const start = document.getElementById('darkStart').value;
+  const end   = document.getElementById('darkEnd').value;
+  const dim   = document.getElementById('dimMinutes').value;
+  try {
+    await API.post('/api/settings/', {
+      dark_mode_start: start,
+      dark_mode_end:   end,
+      dim_minutes:     dim
+    });
+    showToast('🌙 Night mode saved!', 'success');
+  } catch(e) {
+    showToast('Failed to save night mode', 'error');
   }
 }
