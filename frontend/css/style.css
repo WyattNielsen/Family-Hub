@@ -426,7 +426,8 @@ input, select, textarea { font-family: var(--font); }
   gap: 14px;
   background: var(--surface);
   border-radius: var(--radius);
-  padding: 14px 18px;
+  padding: 14px 18px 14px 15px;
+  border-left: 3px solid var(--border);
   box-shadow: var(--shadow);
   border: 1.5px solid var(--border);
   transition: all 0.15s;
@@ -1184,10 +1185,11 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 12px;
+  padding: 12px 12px 12px 10px;
   border-radius: 12px;
   margin-bottom: 8px;
   border: 1.5px solid var(--border);
+  border-left: 3px solid var(--border);
   background: var(--bg);
   transition: all 0.2s;
 }

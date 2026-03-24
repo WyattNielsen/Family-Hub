@@ -224,7 +224,7 @@ function renderChoreCard(c, color) {
   const tod = c.time_of_day || 'anytime';
   const todColor = TOD_CONFIG[tod]?.color || color;
   return `
-    <div class="chore-card ${isDone ? 'done' : ''}" id="chore-${c.id}">
+    <div class="chore-card ${isDone ? 'done' : ''}" id="chore-${c.id}" style="border-left:3px solid ${color}">
       <div class="chore-card-check ${isDone ? 'checked' : ''}"
            style="${isDone ? `background:${color};border-color:${color}` : `border-color:${color}`}"
            onclick="toggleChore(${c.id}, ${isDone})">
@@ -277,7 +277,7 @@ function renderChoreItemFull(c) {
   const rec = c.recurrence ? `🔁 ${c.recurrence === 'custom_days' ? c.recurrence_days : c.recurrence}` : '';
   const tod = c.time_of_day ? `<span class="chore-tod chore-tod-${c.time_of_day}">${TOD_CONFIG[c.time_of_day]?.emoji} ${c.time_of_day}</span>` : '';
   return `
-    <div class="chore-item ${isDone ? 'completed' : ''}" id="chore-${c.id}">
+    <div class="chore-item ${isDone ? 'completed' : ''}" id="chore-${c.id}" style="border-left:3px solid ${color}">
       <div class="chore-check ${isDone ? 'checked' : ''}"
            style="${isDone ? `background:${color};border-color:${color}` : `border-color:${color}`}"
            onclick="toggleChore(${c.id}, ${isDone})">${isDone ? '✓' : ''}</div>
