@@ -1,36 +1,71 @@
 # Family Hub
 
-A self-hosted family dashboard with calendar, chores, weather, Home Assistant integration, and photo slideshow.
+A self-hosted family dashboard built for a wall-mounted touchscreen. Combines calendar, chores, messages, security cameras, weather, Home Assistant integration, and more — all in one polished interface your whole family can use.
 
 ## Screenshots
 
-| Dashboard | Calendar |
-|-----------|----------|
-| ![Dashboard](screenshots/screenshot-dashboard.png) | ![Calendar](screenshots/screenshot-calendar.png) |
+| Dashboard | Chores |
+|-----------|--------|
+| ![Dashboard](screenshots/screenshot-dashboard.png) | ![Chores](screenshots/screenshot-chores.png) |
 
-| Chores | Settings |
-|--------|----------|
-| ![Chores](screenshots/screenshot-chores.png) | ![Settings](screenshots/screenshot-settings-top.png) |
+| Messages | Security |
+|----------|----------|
+| ![Messages](screenshots/screenshot-messages.png) | ![Security](screenshots/screenshot-security.png) |
 
 ---
 
 ## Features
 
-- Dashboard with today's events, chores due, weather, and home device status
-- Family calendar with month view and Google Calendar sync
-- Chore tracker with assignments, due dates, recurrence, points, and leaderboard
-- Home Assistant integration — display garage doors, locks, sensors, and more
-- School lunch menu (BCPS / Nutrislice)
-- Photo slideshow screensaver
-- Touch-friendly — works great on iPad, Chromebook, or any browser
+### Dashboard
+- Greeting with time of day, date, and rotating family quote
+- **Up Next** — upcoming calendar events
+- **Chores Today** — today's chore assignments; shows streak leaderboard when all done
+- **Lunch Menu** — school lunch pulled from Nutrislice (BCPS and others)
+- **Message preview pill** — latest family note displayed above the grid when messages exist
+- Live Home Assistant status badges (garage, alarm) in the header
+- Weather widget (current conditions + high/low)
+- Stock ticker (configurable symbols)
+
+### Family Messages Board
+- Leave quick notes for the family (e.g. "I'm at practice, home by 6")
+- Color-coded per person with avatar
+- Unread badge on the nav link — clears when you visit the page
+- Messages auto-expire after 7 days
+
+### Calendar
+- Month view with event details
+- Google Calendar sync (shared family calendar + per-member calendars)
+- Color-coded events by family member
+
+### Chores
+- Daily chore assignments per family member with morning/afternoon/evening grouping
+- Points system with Chore Champions leaderboard
+- **Day streaks** — consecutive days of completed chores, shown on dashboard
+- Recurring chores (daily, weekly, custom days)
+- Color-coded cards with each person's color
+
+### Security
+- **Camera feeds** — live MJPEG streams via Home Assistant proxy (no go2rtc required)
+- **Garage doors** — open/close control with live state
+- **Alarm panel** — arm home, arm away, disarm with optional PIN
+
+### Night Mode & Auto-Dim (wall-mount friendly)
+- **Dark mode** — automatically switches after sunset (default 9 PM–7 AM)
+- **Auto-dim** — screen goes nearly black after inactivity (default 5 min); any touch restores it
+- Both configurable in Settings → General → Night Mode
+
+### Settings
+Organized into 4 tabs:
+- **Family** — members (name, color, avatar) + Google Calendar connection
+- **Home** — Home Assistant URL/token/entities + camera feeds
+- **Integrations** — Weather zip, lunch school, stock symbols, slideshow
+- **General** — Timezone + Night Mode (dark hours + auto-dim timeout)
 
 ---
 
 ## Quick Start
 
 ### 1. Create your `.env` file
-
-Copy the example and fill in your values:
 
 ```bash
 cp .env.example .env
@@ -41,7 +76,6 @@ nano .env
 
 ```env
 # The public URL where Family Hub is accessible (used for Google OAuth redirects)
-# Use your local IP for local-only access, or your Nabu Casa / ngrok URL for remote access
 APP_BASE_URL=http://192.168.1.100:3000
 
 # Google OAuth credentials (see "Set up Google OAuth" below)
@@ -49,25 +83,23 @@ GOOGLE_CLIENT_ID=your_client_id_here
 GOOGLE_CLIENT_SECRET=your_client_secret_here
 ```
 
-> **Important:** The `.env` file is gitignored and will never be committed. Keep it safe — it contains your Google OAuth secret.
+> **Important:** The `.env` file is gitignored and will never be committed.
 
 ---
 
-### 2. Set up Google OAuth (one-time)
+### 2. Set up Google OAuth (one-time, optional)
 
-Required for Google Calendar sync. Skip if you don't need calendar sync.
+Required only for Google Calendar sync.
 
 1. Go to [https://console.cloud.google.com](https://console.cloud.google.com)
-2. Create a new project (or select an existing one)
-3. Go to **APIs & Services → Library** → search for **Google Calendar API** → Enable it
-4. Go to **APIs & Services → Credentials** → **Create Credentials → OAuth 2.0 Client ID**
-5. Application type: **Web application**
-6. Add these **Authorized redirect URIs** (replace with your `APP_BASE_URL`):
+2. Create a project → enable the **Google Calendar API**
+3. Create **OAuth 2.0 Client ID** credentials (Web application type)
+4. Add these **Authorized redirect URIs** (replace with your `APP_BASE_URL`):
    ```
    http://192.168.1.100:3000/api/auth/google/callback/family
    http://192.168.1.100:3000/api/auth/google/callback/member
    ```
-7. Copy the **Client ID** and **Client Secret** into your `.env` file
+5. Copy the Client ID and Secret into your `.env`
 
 ---
 
@@ -79,45 +111,46 @@ docker compose up -d --build
 
 ### 4. Open the app
 
-Navigate to `http://your-ubuntu-ip:3000` (local) or your `APP_BASE_URL` (remote).
+Navigate to `http://your-server-ip:3000`
 
 ---
 
 ## First-Time Setup (In-App Settings)
 
-After the app is running, go to **Settings** and configure each section:
-
 ### Family Members
-Add each person in your household. Each member gets a name, color, and avatar emoji. Members appear in the sidebar and can be assigned to chores and calendars.
+Add each person — name, color, avatar emoji. They appear in the sidebar and can be assigned to chores and calendars.
 
 ### Home Assistant
-Connect to your local Home Assistant server to display device states on the dashboard (garage doors, locks, sensors, etc.).
-
-1. **Home Assistant URL** — the local address of your HA server, e.g. `http://192.168.1.100:8123`
-2. **Long-Lived Access Token** — in Home Assistant: *Profile → Security → Long-Lived Access Tokens → Create Token*
-3. **Entities to Monitor** — add entity IDs you want displayed, e.g.:
-   - `cover.garage_door` — garage door (open/closed)
-   - `binary_sensor.front_door` — door/window sensor
+1. **HA URL** — e.g. `http://192.168.1.100:8123`
+2. **Long-Lived Access Token** — Home Assistant → Profile → Security → Long-Lived Access Tokens
+3. **Entities** — add entity IDs to monitor:
+   - `cover.garage_door` — garage door
    - `alarm_control_panel.home` — alarm panel
-4. **Alarm Code** — optional PIN used to arm/disarm alarm panel entities
-5. Click **Save** — devices appear on the dashboard and refresh every 30 seconds
+4. **Cameras** — add HA camera entity IDs (e.g. `camera.driveway`) for live feeds on the Security page
+
+### Night Mode
+In **Settings → General → Night Mode**:
+- Set dark mode start/end hours (default 9 PM – 7 AM)
+- Set auto-dim timeout (default 5 minutes of inactivity)
 
 ### Timezone
-Select your local timezone. This affects all date/time displays throughout the app and the school lunch menu.
+Select your local timezone — affects all date/time displays and the lunch menu.
 
 ### Weather
-Enter your US zip code to show current weather conditions on the dashboard.
+Enter your US zip code for current conditions on the dashboard.
 
 ### Google Calendar
-- **Shared Family Calendar** — connect one Google account as the main family calendar. All events from this account appear on the dashboard and calendar page.
-- **Write new events to** — choose which Google Calendar new events created in Family Hub get added to.
-- After connecting, use the calendar picker to select which of your Google Calendars to sync.
+- Connect a shared family Google account for the main calendar
+- Choose which Google Calendars to sync
+- New events created in Family Hub are added to your selected calendar
+
+### School Lunch Menu
+Enter your Nutrislice school domain (e.g. `bcps`) in Settings → Integrations → Lunch.
 
 ### Photo Slideshow
-- Upload photos (JPG, PNG, GIF, WebP) to display as a screensaver
-- **Inactivity timeout** — how long before the slideshow starts (default: 2 minutes)
-- **Photo interval** — how long each photo is displayed (default: 5 seconds)
-- Click the camera button (bottom-right corner of any page) to start the slideshow manually
+- Upload photos (JPG, PNG, GIF, WebP)
+- Set inactivity timeout and photo interval
+- Click the 📷 button (bottom-right) to start manually
 
 ---
 
@@ -132,7 +165,7 @@ docker compose up -d --build
 
 ## Data & Backups
 
-All data is stored in `./data/familyhub.db` (SQLite). Back up this file regularly to preserve your family members, chores, events, and settings.
+All data is stored in `./data/familyhub.db` (SQLite). Back this file up regularly.
 
 Uploaded slideshow photos are stored in `./data/photos/`.
 
@@ -140,4 +173,4 @@ Uploaded slideshow photos are stored in `./data/photos/`.
 
 ## Ports
 
-The app runs on port `3000`. To change it, edit the left side of `"3000:3000"` in `docker-compose.yaml`.
+Runs on port `3000` by default. Change the left side of `"3000:3000"` in `docker-compose.yaml` to use a different port.
