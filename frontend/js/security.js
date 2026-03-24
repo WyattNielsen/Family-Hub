@@ -39,13 +39,16 @@ function renderGarageCards(covers) {
   section.style.display = 'block';
   el.innerHTML = covers.map(e => {
     const isOpen = e.state === 'open' || e.state === 'opening';
-    const busy = e.state === 'opening' || e.state === 'closing';
+    const busy   = e.state === 'opening' || e.state === 'closing';
+    const badge  = isOpen ? 'open' : 'closed';
     return `
-      <div class="security-device-card ${isOpen ? 'sec-open' : 'sec-closed'}">
-        <div class="sec-card-icon">${e.icon || (isOpen ? '🚗' : '🏠')}</div>
-        <div class="sec-card-name">${e.name}</div>
-        <div class="sec-card-state ${isOpen ? 'state-open' : 'state-closed'}">${e.state_label || e.state}</div>
-        <div class="sec-card-actions">
+      <div class="sec-row ${isOpen ? 'sec-open' : 'sec-closed'}">
+        <div class="sec-row-icon">${e.icon || (isOpen ? '🚗' : '🏠')}</div>
+        <div class="sec-row-info">
+          <div class="sec-row-name">${e.name}</div>
+          <span class="sec-row-badge ${badge}">${e.state_label || e.state}</span>
+        </div>
+        <div class="sec-row-btns">
           <button class="btn btn-secondary sec-btn" ${e.state === 'open' || busy ? 'disabled' : ''}
             onclick="coverAction('open_cover','${e.entity_id}')">🔼 Open</button>
           <button class="btn btn-primary sec-btn" ${e.state === 'closed' || busy ? 'disabled' : ''}
@@ -62,14 +65,18 @@ function renderAlarmCards(alarms) {
   section.style.display = 'block';
   el.innerHTML = alarms.map(e => {
     const s = e.state;
-    const busy = s === 'arming' || s === 'pending';
+    const busy    = s === 'arming' || s === 'pending';
     const isArmed = s.startsWith('armed');
+    const badge   = isArmed ? 'armed' : 'disarmed';
+    const rowCls  = isArmed ? 'sec-armed' : 'sec-disarmed';
     return `
-      <div class="security-device-card ${isArmed ? 'sec-open' : 'sec-closed'}">
-        <div class="sec-card-icon">${e.icon || '🔐'}</div>
-        <div class="sec-card-name">${e.name}</div>
-        <div class="sec-card-state ${isArmed ? 'state-open' : 'state-closed'}">${e.state_label || e.state}</div>
-        <div class="sec-card-actions" style="flex-wrap:wrap">
+      <div class="sec-row ${rowCls}">
+        <div class="sec-row-icon">${e.icon || (isArmed ? '🔒' : '🔓')}</div>
+        <div class="sec-row-info">
+          <div class="sec-row-name">${e.name}</div>
+          <span class="sec-row-badge ${badge}">${e.state_label || e.state}</span>
+        </div>
+        <div class="sec-row-btns">
           <button class="btn btn-secondary sec-btn" ${s === 'disarmed' || busy ? 'disabled' : ''}
             onclick="alarmAction('alarm_disarm','${e.entity_id}')">🔓 Disarm</button>
           <button class="btn sec-btn ${s === 'armed_home' ? 'btn-primary' : 'btn-ghost'}" ${s === 'armed_home' || busy ? 'disabled' : ''}
@@ -87,10 +94,12 @@ function renderOtherCards(others) {
   if (!others.length) { section.style.display = 'none'; return; }
   section.style.display = 'block';
   el.innerHTML = others.map(e => `
-    <div class="security-device-card">
-      <div class="sec-card-icon">${e.icon || '📡'}</div>
-      <div class="sec-card-name">${e.name}</div>
-      <div class="sec-card-state">${e.state_label || e.state}</div>
+    <div class="sec-row">
+      <div class="sec-row-icon">${e.icon || '📡'}</div>
+      <div class="sec-row-info">
+        <div class="sec-row-name">${e.name}</div>
+        <span class="sec-row-badge">${e.state_label || e.state}</span>
+      </div>
     </div>`).join('');
 }
 
@@ -135,7 +144,13 @@ async function loadCameraFeeds() {
       return `
         <div class="camera-feed-card">
           <div class="camera-feed-label">${cam.name}</div>
-          <img src="${streamUrl}" class="camera-feed-img" alt="${cam.name}">
+          <div class="camera-placeholder" id="ph-${cam.ha_entity_id}">
+            <div class="camera-placeholder-icon">📷</div>
+            <div>Connecting to ${cam.name}…</div>
+          </div>
+          <img src="${streamUrl}" class="camera-feed-img" alt="${cam.name}"
+               onload="this.classList.add('loaded');document.getElementById('ph-${cam.ha_entity_id}')?.remove()"
+               onerror="document.getElementById('ph-${cam.ha_entity_id}').innerHTML='<div class=camera-placeholder-icon>⚠️</div><div>Feed unavailable</div>'">
         </div>`;
     }).join('');
   } catch(e) {

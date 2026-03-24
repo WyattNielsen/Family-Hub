@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Settings – Family Hub</title>
-<link rel="stylesheet" href="/css/style.css?v=10">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/style.css?v=11">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
 </head>
@@ -12,15 +13,32 @@
 <div class="app">
   <nav class="sidebar">
     <div class="sidebar-logo">
-      <span class="logo-icon">🏠</span>
+      <span class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </span>
       <span class="logo-text">Family Hub</span>
     </div>
     <ul class="nav-links">
-      <li><a href="/" class="nav-link"><span class="nav-icon">📊</span><span>Dashboard</span></a></li>
-      <li><a href="/calendar.html" class="nav-link"><span class="nav-icon">📅</span><span>Calendar</span></a></li>
-      <li><a href="/chores.html" class="nav-link"><span class="nav-icon">✅</span><span>Chores</span></a></li>
-      <li><a href="/security.html" class="nav-link"><span class="nav-icon">🔐</span><span>Security</span></a></li>
-      <li><a href="/settings.html" class="nav-link active"><span class="nav-icon">⚙️</span><span>Settings</span></a></li>
+      <li><a href="/" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+        <span>Dashboard</span>
+      </a></li>
+      <li><a href="/calendar.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+        <span>Calendar</span>
+      </a></li>
+      <li><a href="/chores.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
+        <span>Chores</span>
+      </a></li>
+      <li><a href="/security.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        <span>Security</span>
+      </a></li>
+      <li><a href="/settings.html" class="nav-link active">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></span>
+        <span>Settings</span>
+      </a></li>
     </ul>
     <div class="sidebar-members" id="sidebarMembers"></div>
   </nav>
@@ -30,295 +48,309 @@
       <h1 class="page-title">⚙️ Settings</h1>
     </header>
 
-    <!-- Family Members -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">👨‍👩‍👧‍👦 Family Members</h2>
-        <button class="btn btn-primary" id="addMemberBtn">+ Add Member</button>
-      </div>
-      <div class="members-list" id="membersList"></div>
-    </section>
+    <!-- Tab Bar -->
+    <div class="settings-tab-bar">
+      <button class="settings-tab active" data-tab="family">👨‍👩‍👧‍👦 Family</button>
+      <button class="settings-tab" data-tab="home">🏠 Home</button>
+      <button class="settings-tab" data-tab="integrations">🔌 Integrations</button>
+      <button class="settings-tab" data-tab="general">⚙️ General</button>
+    </div>
 
-    <!-- Home Assistant -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">🏠 Home Assistant</h2>
-      </div>
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
-        <div>
-          <h3 style="margin:0 0 4px">🔗 Connection</h3>
-          <p class="settings-desc">Connect to your local Home Assistant server to display device states on the dashboard.</p>
+    <!-- ── Tab: Family ─────────────────────────────────────────── -->
+    <div class="settings-tab-panel active" id="tab-family">
+
+      <!-- Family Members -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">👨‍👩‍👧‍👦 Family Members</h2>
+          <button class="btn btn-primary" id="addMemberBtn">+ Add Member</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:12px">
-          <div>
-            <label class="form-label">Home Assistant URL</label>
-            <input type="text" id="haUrl" class="form-input" placeholder="http://192.168.1.100:8123">
-          </div>
-          <div>
-            <label class="form-label">Long-Lived Access Token</label>
-            <div style="display:flex;gap:8px">
-              <input type="password" id="haToken" class="form-input" placeholder="Paste your HA token here">
-              <button class="btn btn-ghost btn-icon" onclick="toggleHATokenVisibility()" title="Show/hide token">👁</button>
+        <div class="members-list" id="membersList"></div>
+      </section>
+
+      <!-- Google Calendar -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">📅 Google Calendar</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+            <div class="settings-card-info">
+              <h3>🏠 Shared Family Calendar</h3>
+              <p class="settings-desc">Connect one Google account as the shared family calendar.</p>
+              <div class="google-status" id="familyCalStatus">
+                <span class="status-dot disconnected"></span>
+                <span class="status-text">Not connected</span>
+              </div>
             </div>
-            <p class="settings-desc" style="margin-top:4px">In Home Assistant: Profile → Security → Long-Lived Access Tokens → Create Token</p>
-          </div>
-        </div>
-        <hr style="border:none;border-top:1px solid var(--border);margin:0">
-        <div>
-          <h3 style="margin:0 0 4px">🔑 Alarm Code</h3>
-          <p class="settings-desc" style="margin-bottom:8px">PIN used to arm/disarm alarm control panel entities. Leave blank if no code is required.</p>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input type="password" id="haAlarmCode" class="form-input" placeholder="e.g. 1234" maxlength="10" style="max-width:160px">
-            <button class="btn btn-ghost btn-icon" onclick="toggleAlarmCodeVisibility()" title="Show/hide code">👁</button>
-          </div>
-        </div>
-        <hr style="border:none;border-top:1px solid var(--border);margin:0">
-        <div>
-          <h3 style="margin:0 0 8px">📡 Entities to Monitor</h3>
-          <p class="settings-desc" style="margin-bottom:10px">Add the entity IDs you want to display (e.g. <code>cover.garage_door</code>).</p>
-          <div id="haEntityList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
-          <button class="btn btn-secondary" onclick="addHAEntityRow()">+ Add Entity</button>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-primary" onclick="saveHASettings()">💾 Save</button>
-          <span id="haSaveStatus" style="font-size:13px;color:var(--text2)"></span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Timezone -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">🕐 Timezone</h2>
-      </div>
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:12px">
-        <div>
-          <label class="form-label">Your Timezone</label>
-          <select id="timezoneSelect" class="form-input" style="max-width:320px">
-            <optgroup label="United States">
-              <option value="America/New_York">Eastern Time (ET)</option>
-              <option value="America/Chicago">Central Time (CT)</option>
-              <option value="America/Denver">Mountain Time (MT)</option>
-              <option value="America/Phoenix">Mountain Time – Arizona (no DST)</option>
-              <option value="America/Los_Angeles">Pacific Time (PT)</option>
-              <option value="America/Anchorage">Alaska Time</option>
-              <option value="Pacific/Honolulu">Hawaii Time</option>
-            </optgroup>
-            <optgroup label="Europe">
-              <option value="Europe/London">London (GMT/BST)</option>
-              <option value="Europe/Paris">Paris / Berlin (CET)</option>
-            </optgroup>
-            <optgroup label="Asia / Pacific">
-              <option value="Asia/Tokyo">Tokyo (JST)</option>
-              <option value="Asia/Shanghai">Shanghai (CST)</option>
-              <option value="Australia/Sydney">Sydney (AEST)</option>
-            </optgroup>
-          </select>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary" onclick="saveTimezone()">💾 Save</button>
-          <span id="timezoneSaveStatus" style="font-size:13px;color:var(--text2)"></span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Weather -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">🌤️ Weather</h2>
-      </div>
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:12px">
-        <div>
-          <h3 style="margin:0 0 4px">📍 Location</h3>
-          <p class="settings-desc">Enter your US zip code to show current weather on the dashboard.</p>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <input type="text" id="weatherZip" class="form-input" maxlength="5" placeholder="e.g. 10001" style="max-width:140px">
-          <button class="btn btn-primary" onclick="saveWeatherZip()">💾 Save</button>
-          <span id="weatherSaveStatus" style="font-size:13px;color:var(--text2)"></span>
-        </div>
-      </div>
-    </section>
-
-    <!-- School Lunch Menu -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">🍽️ School Lunch Menu</h2>
-      </div>
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
-        <div>
-          <p class="settings-desc">Powered by Nutrislice. Find these values in your school district's menu URL, e.g. <code>https://<strong>bcps</strong>.nutrislice.com/menu/<strong>bcps-weekly-menus</strong>/<strong>weekly-menus</strong></code>. Leave District blank to hide the menu widget.</p>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:12px">
-          <div>
-            <label class="form-label">District</label>
-            <input type="text" id="lunchDistrict" class="form-input" placeholder="bcps" style="max-width:200px">
-            <div style="font-size:12px;color:var(--text2);margin-top:4px">The subdomain before <code>.nutrislice.com</code></div>
-          </div>
-          <div>
-            <label class="form-label">School Slug</label>
-            <input type="text" id="lunchSchoolSlug" class="form-input" placeholder="bcps-weekly-menus" style="max-width:320px">
-            <div style="font-size:12px;color:var(--text2);margin-top:4px">First path segment after <code>/menu/</code></div>
-          </div>
-          <div>
-            <label class="form-label">Menu Type</label>
-            <input type="text" id="lunchMenuType" class="form-input" placeholder="weekly-menus" style="max-width:200px">
-            <div style="font-size:12px;color:var(--text2);margin-top:4px">Second path segment after <code>/menu/</code></div>
-          </div>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary" onclick="saveLunchSettings()">💾 Save</button>
-          <span id="lunchSaveStatus" style="font-size:13px;color:var(--text2)"></span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Stock Tickers -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">📈 Stock Tickers</h2>
-      </div>
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:12px">
-        <p class="settings-desc">Enter the symbols you want to track on the dashboard, separated by commas. Supports stocks (TSLA, SPY, AAPL), S&amp;P 500 (SPX), and crypto (BTC, ETH, SOL).</p>
-        <div>
-          <label class="form-label">Symbols</label>
-          <input type="text" id="stockSymbols" class="form-input" placeholder="BTC,TSLA,SPY" style="max-width:400px">
-          <div style="font-size:12px;color:var(--text2);margin-top:4px">e.g. BTC, ETH, TSLA, AAPL, SPX, SPY</div>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary" onclick="saveStockSettings()">💾 Save</button>
-          <span id="stockSaveStatus" style="font-size:13px;color:var(--text2)"></span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Cameras -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">📷 Cameras</h2>
-      </div>
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
-        <div>
-          <p class="settings-desc">Add your Home Assistant cameras. Enter the camera name and HA Entity ID (e.g. <code>camera.driveway</code>). Streams are proxied through the backend so your HA token stays server-side.</p>
-        </div>
-        <div id="cameraList" style="display:flex;flex-direction:column;gap:8px"></div>
-        <button class="btn btn-secondary" onclick="addCameraRow()" style="align-self:flex-start">+ Add Camera</button>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary" onclick="saveCameraSettings()">💾 Save</button>
-          <span id="cameraSaveStatus" style="font-size:13px;color:var(--text2)"></span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Google Calendar -->
-    <section class="dashboard-section">
-      <div class="section-header">
-        <h2 class="section-title">📅 Google Calendar</h2>
-      </div>
-
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-          <div class="settings-card-info">
-            <h3>🏠 Shared Family Calendar</h3>
-            <p class="settings-desc">Connect one Google account as the shared family calendar.</p>
-            <div class="google-status" id="familyCalStatus">
-              <span class="status-dot disconnected"></span>
-              <span class="status-text">Not connected</span>
+            <div class="settings-card-actions">
+              <a href="/api/auth/google/connect/family" class="btn btn-google" id="connectFamilyBtn">
+                <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
+                Connect Google
+              </a>
+              <button class="btn btn-danger-ghost" id="disconnectFamilyBtn" style="display:none">Disconnect</button>
             </div>
           </div>
-          <div class="settings-card-actions">
-            <a href="/api/auth/google/connect/family" class="btn btn-google" id="connectFamilyBtn">
-              <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
-              Connect Google
-            </a>
-            <button class="btn btn-danger-ghost" id="disconnectFamilyBtn" style="display:none">Disconnect</button>
+          <div id="familyCalPicker"></div>
+          <div id="writeCalendarSection" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+            <label class="form-label" style="font-weight:800;margin-bottom:6px;display:block">📝 Write new events to:</label>
+            <p class="settings-desc" style="margin-bottom:8px">Events you create in Family Hub will be added to this Google Calendar.</p>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <select id="writeCalendarPicker" class="form-input" style="max-width:320px">
+                <option value="primary">primary ⭐</option>
+              </select>
+              <button class="btn btn-primary" onclick="saveWriteCalendar()">💾 Save</button>
+            </div>
           </div>
         </div>
-        <div id="familyCalPicker"></div>
-        <div id="writeCalendarSection" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-          <label class="form-label" style="font-weight:800;margin-bottom:6px;display:block">📝 Write new events to:</label>
-          <p class="settings-desc" style="margin-bottom:8px">Events you create in Family Hub will be added to this Google Calendar.</p>
+        <div id="memberCalendars"></div>
+      </section>
+
+    </div>
+
+    <!-- ── Tab: Home ───────────────────────────────────────────── -->
+    <div class="settings-tab-panel" id="tab-home">
+
+      <!-- Home Assistant -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">🏠 Home Assistant</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
+          <div>
+            <h3 style="margin:0 0 4px">🔗 Connection</h3>
+            <p class="settings-desc">Connect to your local Home Assistant server to display device states.</p>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div>
+              <label class="form-label">Home Assistant URL</label>
+              <input type="text" id="haUrl" class="form-input" placeholder="http://192.168.1.100:8123">
+            </div>
+            <div>
+              <label class="form-label">Long-Lived Access Token</label>
+              <div style="display:flex;gap:8px">
+                <input type="password" id="haToken" class="form-input" placeholder="Paste your HA token here">
+                <button class="btn btn-ghost btn-icon" onclick="toggleHATokenVisibility()" title="Show/hide token">👁</button>
+              </div>
+              <p class="settings-desc" style="margin-top:4px">In Home Assistant: Profile → Security → Long-Lived Access Tokens → Create Token</p>
+            </div>
+          </div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:0">
+          <div>
+            <h3 style="margin:0 0 4px">🔑 Alarm Code</h3>
+            <p class="settings-desc" style="margin-bottom:8px">PIN used to arm/disarm alarm control panel entities. Leave blank if no code is required.</p>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="password" id="haAlarmCode" class="form-input" placeholder="e.g. 1234" maxlength="10" style="max-width:160px">
+              <button class="btn btn-ghost btn-icon" onclick="toggleAlarmCodeVisibility()" title="Show/hide code">👁</button>
+            </div>
+          </div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:0">
+          <div>
+            <h3 style="margin:0 0 8px">📡 Entities to Monitor</h3>
+            <p class="settings-desc" style="margin-bottom:10px">Add the entity IDs you want to display on the Security page (e.g. <code>cover.garage_door</code>).</p>
+            <div id="haEntityList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+            <button class="btn btn-secondary" onclick="addHAEntityRow()">+ Add Entity</button>
+          </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <select id="writeCalendarPicker" class="form-input" style="max-width:320px">
-              <option value="primary">primary ⭐</option>
+            <button class="btn btn-primary" onclick="saveHASettings()">💾 Save</button>
+            <span id="haSaveStatus" style="font-size:13px;color:var(--text2)"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Cameras -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">📷 Cameras</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
+          <p class="settings-desc">Add your Home Assistant cameras. Enter the camera name and HA Entity ID (e.g. <code>camera.driveway</code>). Streams are proxied through the backend so your HA token stays server-side.</p>
+          <div id="cameraList" style="display:flex;flex-direction:column;gap:8px"></div>
+          <button class="btn btn-secondary" onclick="addCameraRow()" style="align-self:flex-start">+ Add Camera</button>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn btn-primary" onclick="saveCameraSettings()">💾 Save</button>
+            <span id="cameraSaveStatus" style="font-size:13px;color:var(--text2)"></span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ── Tab: Integrations ───────────────────────────────────── -->
+    <div class="settings-tab-panel" id="tab-integrations">
+
+      <!-- Weather -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">🌤️ Weather</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:12px">
+          <div>
+            <h3 style="margin:0 0 4px">📍 Location</h3>
+            <p class="settings-desc">Enter your US zip code to show current weather on the dashboard.</p>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input type="text" id="weatherZip" class="form-input" maxlength="5" placeholder="e.g. 10001" style="max-width:140px">
+            <button class="btn btn-primary" onclick="saveWeatherZip()">💾 Save</button>
+            <span id="weatherSaveStatus" style="font-size:13px;color:var(--text2)"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- School Lunch Menu -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">🍽️ School Lunch Menu</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
+          <p class="settings-desc">Powered by Nutrislice. Find these values in your school district's menu URL, e.g. <code>https://<strong>bcps</strong>.nutrislice.com/menu/<strong>bcps-weekly-menus</strong>/<strong>weekly-menus</strong></code>. Leave District blank to hide the menu widget.</p>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div>
+              <label class="form-label">District</label>
+              <input type="text" id="lunchDistrict" class="form-input" placeholder="bcps" style="max-width:200px">
+              <div style="font-size:12px;color:var(--text2);margin-top:4px">The subdomain before <code>.nutrislice.com</code></div>
+            </div>
+            <div>
+              <label class="form-label">School Slug</label>
+              <input type="text" id="lunchSchoolSlug" class="form-input" placeholder="bcps-weekly-menus" style="max-width:320px">
+              <div style="font-size:12px;color:var(--text2);margin-top:4px">First path segment after <code>/menu/</code></div>
+            </div>
+            <div>
+              <label class="form-label">Menu Type</label>
+              <input type="text" id="lunchMenuType" class="form-input" placeholder="weekly-menus" style="max-width:200px">
+              <div style="font-size:12px;color:var(--text2);margin-top:4px">Second path segment after <code>/menu/</code></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn btn-primary" onclick="saveLunchSettings()">💾 Save</button>
+            <span id="lunchSaveStatus" style="font-size:13px;color:var(--text2)"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Stock Tickers -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">📈 Stock Tickers</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:12px">
+          <p class="settings-desc">Enter the symbols you want to track on the dashboard, separated by commas. Supports stocks (TSLA, SPY, AAPL), S&amp;P 500 (SPX), and crypto (BTC, ETH, SOL).</p>
+          <div>
+            <label class="form-label">Symbols</label>
+            <input type="text" id="stockSymbols" class="form-input" placeholder="BTC,TSLA,SPY" style="max-width:400px">
+            <div style="font-size:12px;color:var(--text2);margin-top:4px">e.g. BTC, ETH, TSLA, AAPL, SPX, SPY</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn btn-primary" onclick="saveStockSettings()">💾 Save</button>
+            <span id="stockSaveStatus" style="font-size:13px;color:var(--text2)"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Photo Slideshow -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">📷 Photo Slideshow</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
+          <div>
+            <h3 style="margin:0 0 8px">🖼️ Photos</h3>
+            <p class="settings-desc">Upload photos to display in the slideshow. Supports JPG, PNG, GIF, and WebP.</p>
+            <div id="photoDropZone"
+                 style="border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;transition:border-color 0.2s,background 0.2s;margin:12px 0"
+                 onclick="document.getElementById('photoFileInput').click()"
+                 ondragover="handleDragOver(event)"
+                 ondragleave="handleDragLeave(event)"
+                 ondrop="handleDrop(event)">
+              <div style="font-size:36px;margin-bottom:8px">📁</div>
+              <div style="font-weight:700;margin-bottom:4px">Click to upload or drag &amp; drop</div>
+              <div style="font-size:13px;color:var(--text2)">JPG, PNG, GIF, WebP — select multiple at once</div>
+            </div>
+            <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none" onchange="handleFileSelect(event)">
+            <div id="uploadStatus" style="display:none;font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+          </div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:4px 0">
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <h3 style="margin:0" id="photosCountLabel">Uploaded Photos</h3>
+              <button class="btn btn-danger-ghost" id="clearAllPhotosBtn" onclick="clearAllPhotos()" style="display:none;font-size:13px">🗑 Remove All</button>
+            </div>
+            <div id="photosGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px"></div>
+            <div id="photosEmpty" style="font-size:13px;color:var(--text2);display:none">No photos uploaded yet.</div>
+          </div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:4px 0">
+          <div style="display:flex;gap:16px;flex-wrap:wrap">
+            <div style="flex:1;min-width:180px">
+              <label class="form-label">Inactivity timeout</label>
+              <select id="slideshowTimeout" class="form-input">
+                <option value="60">1 minute</option>
+                <option value="120" selected>2 minutes</option>
+                <option value="300">5 minutes</option>
+                <option value="600">10 minutes</option>
+                <option value="1800">30 minutes</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:180px">
+              <label class="form-label">Photo interval</label>
+              <select id="slideshowInterval" class="form-input">
+                <option value="3">3 seconds</option>
+                <option value="5" selected>5 seconds</option>
+                <option value="10">10 seconds</option>
+                <option value="20">20 seconds</option>
+                <option value="30">30 seconds</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="saveSlideShowSettings()">💾 Save Settings</button>
+            <button class="btn btn-secondary" onclick="Slideshow.start()">▶ Test Slideshow</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ── Tab: General ────────────────────────────────────────── -->
+    <div class="settings-tab-panel" id="tab-general">
+
+      <!-- Timezone -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">🕐 Timezone</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:12px">
+          <div>
+            <label class="form-label">Your Timezone</label>
+            <select id="timezoneSelect" class="form-input" style="max-width:320px">
+              <optgroup label="United States">
+                <option value="America/New_York">Eastern Time (ET)</option>
+                <option value="America/Chicago">Central Time (CT)</option>
+                <option value="America/Denver">Mountain Time (MT)</option>
+                <option value="America/Phoenix">Mountain Time – Arizona (no DST)</option>
+                <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                <option value="America/Anchorage">Alaska Time</option>
+                <option value="Pacific/Honolulu">Hawaii Time</option>
+              </optgroup>
+              <optgroup label="Europe">
+                <option value="Europe/London">London (GMT/BST)</option>
+                <option value="Europe/Paris">Paris / Berlin (CET)</option>
+              </optgroup>
+              <optgroup label="Asia / Pacific">
+                <option value="Asia/Tokyo">Tokyo (JST)</option>
+                <option value="Asia/Shanghai">Shanghai (CST)</option>
+                <option value="Australia/Sydney">Sydney (AEST)</option>
+              </optgroup>
             </select>
-            <button class="btn btn-primary" onclick="saveWriteCalendar()">💾 Save</button>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn btn-primary" onclick="saveTimezone()">💾 Save</button>
+            <span id="timezoneSaveStatus" style="font-size:13px;color:var(--text2)"></span>
           </div>
         </div>
-      </div>
+      </section>
 
+    </div>
 
-      <!-- Slideshow Settings -->
-      <div class="section-header" style="margin-top:32px">
-        <h2 class="section-title">📷 Photo Slideshow</h2>
-      </div>
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
-
-        <!-- Upload Section -->
-        <div>
-          <h3 style="margin:0 0 8px">🖼️ Slideshow Photos</h3>
-          <p class="settings-desc">Upload photos to display in the slideshow. Supports JPG, PNG, GIF, and WebP.</p>
-
-          <div id="photoDropZone"
-               style="border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer;transition:border-color 0.2s,background 0.2s;margin-bottom:12px"
-               onclick="document.getElementById('photoFileInput').click()"
-               ondragover="handleDragOver(event)"
-               ondragleave="handleDragLeave(event)"
-               ondrop="handleDrop(event)">
-            <div style="font-size:36px;margin-bottom:8px">📁</div>
-            <div style="font-weight:700;margin-bottom:4px">Click to upload or drag & drop</div>
-            <div style="font-size:13px;color:var(--text2)">JPG, PNG, GIF, WebP — select multiple at once</div>
-          </div>
-          <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none" onchange="handleFileSelect(event)">
-          <div id="uploadStatus" style="display:none;font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-        </div>
-
-        <hr style="border:none;border-top:1px solid var(--border);margin:4px 0">
-
-        <!-- Photos Grid -->
-        <div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <h3 style="margin:0" id="photosCountLabel">Uploaded Photos</h3>
-            <button class="btn btn-danger-ghost" id="clearAllPhotosBtn" onclick="clearAllPhotos()" style="display:none;font-size:13px">🗑 Remove All</button>
-          </div>
-          <div id="photosGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px"></div>
-          <div id="photosEmpty" style="font-size:13px;color:var(--text2);display:none">No photos uploaded yet.</div>
-        </div>
-
-        <hr style="border:none;border-top:1px solid var(--border);margin:4px 0">
-
-        <!-- Timing -->
-        <div style="display:flex;gap:16px;flex-wrap:wrap">
-          <div style="flex:1;min-width:180px">
-            <label class="form-label">Inactivity timeout</label>
-            <select id="slideshowTimeout" class="form-input">
-              <option value="60">1 minute</option>
-              <option value="120" selected>2 minutes</option>
-              <option value="300">5 minutes</option>
-              <option value="600">10 minutes</option>
-              <option value="1800">30 minutes</option>
-            </select>
-          </div>
-          <div style="flex:1;min-width:180px">
-            <label class="form-label">Photo interval</label>
-            <select id="slideshowInterval" class="form-input">
-              <option value="3">3 seconds</option>
-              <option value="5" selected>5 seconds</option>
-              <option value="10">10 seconds</option>
-              <option value="20">20 seconds</option>
-              <option value="30">30 seconds</option>
-            </select>
-          </div>
-        </div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap">
-          <button class="btn btn-primary" onclick="saveSlideShowSettings()">💾 Save Settings</button>
-          <button class="btn btn-secondary" onclick="Slideshow.start()">▶ Test Slideshow</button>
-        </div>
-
-      </div>
-
-      <div id="memberCalendars"></div>
-    </section>
   </main>
 </div>
 
@@ -354,9 +386,9 @@
   </div>
 </div>
 
-<script src="/js/api.js?v=10"></script>
-<script src="/js/settings.js?v=10"></script>
-<script src="/js/slideshow.js?v=10"></script>
+<script src="/js/api.js?v=11"></script>
+<script src="/js/settings.js?v=11"></script>
+<script src="/js/slideshow.js?v=11"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 </body>
 </html>

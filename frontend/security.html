@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Security – Family Hub</title>
-<link rel="stylesheet" href="/css/style.css?v=10">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/style.css?v=11">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
 </head>
@@ -12,15 +13,32 @@
 <div class="app">
   <nav class="sidebar">
     <div class="sidebar-logo">
-      <span class="logo-icon">🏠</span>
+      <span class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </span>
       <span class="logo-text">Family Hub</span>
     </div>
     <ul class="nav-links">
-      <li><a href="/" class="nav-link"><span class="nav-icon">📊</span><span>Dashboard</span></a></li>
-      <li><a href="/calendar.html" class="nav-link"><span class="nav-icon">📅</span><span>Calendar</span></a></li>
-      <li><a href="/chores.html" class="nav-link"><span class="nav-icon">✅</span><span>Chores</span></a></li>
-      <li><a href="/security.html" class="nav-link active"><span class="nav-icon">🔐</span><span>Security</span></a></li>
-      <li><a href="/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span>Settings</span></a></li>
+      <li><a href="/" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+        <span>Dashboard</span>
+      </a></li>
+      <li><a href="/calendar.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+        <span>Calendar</span>
+      </a></li>
+      <li><a href="/chores.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
+        <span>Chores</span>
+      </a></li>
+      <li><a href="/security.html" class="nav-link active">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        <span>Security</span>
+      </a></li>
+      <li><a href="/settings.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></span>
+        <span>Settings</span>
+      </a></li>
     </ul>
     <div class="sidebar-members" id="sidebarMembers"></div>
   </nav>
@@ -28,37 +46,40 @@
   <main class="main-content">
     <header class="page-header">
       <h1 class="page-title">🔐 Security</h1>
+      <button class="btn btn-ghost" style="font-size:13px" onclick="loadSecurityDevices()">↻ Refresh</button>
     </header>
 
-    <!-- Garage Doors -->
-    <section class="dashboard-section" id="garageSection" style="display:none">
-      <div class="section-header">
-        <h2 class="section-title">🚗 Garage Doors</h2>
-        <button class="btn btn-ghost" style="font-size:13px" onclick="loadSecurityDevices()">↻ Refresh</button>
-      </div>
-      <div class="card-grid" id="garageCards"></div>
-    </section>
+    <!-- Devices grid: garage + alarm side-by-side -->
+    <div class="sec-section-grid">
+      <!-- Garage Doors -->
+      <section class="dashboard-section" id="garageSection" style="display:none">
+        <div class="section-header">
+          <h2 class="section-title">🚗 Garage Doors</h2>
+        </div>
+        <div class="sec-section" id="garageCards"></div>
+      </section>
 
-    <!-- Alarm -->
-    <section class="dashboard-section" id="alarmSection" style="display:none">
-      <div class="section-header">
-        <h2 class="section-title">🔒 Alarm System</h2>
-      </div>
-      <div class="card-grid" id="alarmCards"></div>
-    </section>
+      <!-- Alarm -->
+      <section class="dashboard-section" id="alarmSection" style="display:none">
+        <div class="section-header">
+          <h2 class="section-title">🔒 Alarm System</h2>
+        </div>
+        <div class="sec-section" id="alarmCards"></div>
+      </section>
+    </div>
 
     <!-- Other HA Devices -->
     <section class="dashboard-section" id="otherSection" style="display:none">
       <div class="section-header">
         <h2 class="section-title">📡 Other Devices</h2>
       </div>
-      <div class="card-grid" id="otherCards"></div>
+      <div class="sec-section" id="otherCards"></div>
     </section>
 
     <!-- Not configured -->
     <section class="dashboard-section" id="haNotConfigured" style="display:none">
       <div class="empty-state" style="padding:32px">
-        Home Assistant is not configured. Go to <a href="/settings.html">Settings → Home Assistant</a> to set it up.
+        Home Assistant is not configured. Go to <a href="/settings.html">Settings → Home</a> to set it up.
       </div>
     </section>
 
@@ -72,16 +93,15 @@
 
     <section class="dashboard-section" id="cameraNotConfigured" style="display:none">
       <div class="empty-state" style="padding:32px">
-        No cameras configured. Go to <a href="/settings.html">Settings → Cameras</a> to add your camera streams.
+        No cameras configured. Go to <a href="/settings.html">Settings → Home</a> to add your cameras.
       </div>
     </section>
-
   </main>
 </div>
 
-<script src="/js/api.js?v=10"></script>
-<script src="/js/security.js?v=10"></script>
-<script src="/js/slideshow.js?v=10"></script>
+<script src="/js/api.js?v=11"></script>
+<script src="/js/security.js?v=11"></script>
+<script src="/js/slideshow.js?v=11"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 </body>
 </html>
