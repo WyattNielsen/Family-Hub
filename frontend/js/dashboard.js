@@ -469,14 +469,15 @@ async function loadStocks() {
     const stocks = await API.get(`/api/stocks/?symbols=${encodeURIComponent(symbols)}`);
     if (!stocks.length) { el.style.display = 'none'; return; }
     el.style.display = 'flex';
-    el.innerHTML = stocks.map(s => {
+    const items = stocks.map(s => {
       const up = s.change_pct >= 0;
       return `<div class="ticker-item">
         <span class="ticker-symbol">${s.symbol}</span>
         <span class="ticker-price">$${s.price_fmt}</span>
         <span class="ticker-change ${up ? 'ticker-up' : 'ticker-down'}">${up ? '▲' : '▼'} ${Math.abs(s.change_pct).toFixed(2)}%</span>
       </div>`;
-    }).join('<div class="ticker-sep">·</div>');
+    }).join('<div class="ticker-sep">|</div>');
+    el.innerHTML = `<div class="ticker-scroll">${items}</div>`;
   } catch(e) {
     if (el) el.style.display = 'none';
   }

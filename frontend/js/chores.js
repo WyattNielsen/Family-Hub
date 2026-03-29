@@ -105,20 +105,17 @@ function isTodayChore(c) {
   const _d = new Date();
   const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
   const todayDow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][_d.getDay()];
-  if (c.completed) {
-    const completedAt = c.completed_at ? c.completed_at.split('T')[0] : null;
-    return completedAt === today;
+
+  // If there's a specific due_date, that's the source of truth
+  if (c.due_date) return c.due_date === today;
+
+  // No due_date — fall back to recurrence type to decide if due today
+  if (!c.recurrence) return true;
+  if (c.recurrence === 'weekdays') return new Date().getDay() >= 1 && new Date().getDay() <= 5;
+  if (c.recurrence === 'custom_days') {
+    return (c.recurrence_days||'').split(',').map(d=>d.trim()).includes(todayDow);
   }
-  if (!c.due_date && !c.recurrence) return true;
-  if (c.recurrence) {
-    if (c.recurrence === 'daily') return !c.due_date || c.due_date <= today;
-    if (c.recurrence === 'weekdays') { const dow = new Date().getDay(); return dow >= 1 && dow <= 5; }
-    if (c.recurrence === 'custom_days') {
-      return (c.recurrence_days||'').split(',').map(d=>d.trim()).includes(todayDow);
-    }
-    return c.due_date && c.due_date <= today;
-  }
-  return c.due_date && c.due_date <= today;
+  return true;
 }
 
 function renderChores() {
