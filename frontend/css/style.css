@@ -1500,6 +1500,16 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 .weather-condition { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; }
 .weather-hilo { font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 2px; }
 .weather-city { font-size: 11px; color: var(--text2); font-weight: 600; opacity: 0.7; margin-top: 1px; }
+.weather-tomorrow {
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--border);
+  width: 100%; text-align: center;
+}
+.weather-tmr-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); margin-bottom: 3px; }
+.weather-tmr-row { display: flex; align-items: center; justify-content: center; gap: 5px; }
+.weather-tmr-icon { font-size: 16px; }
+.weather-tmr-hilo { font-size: 12px; font-weight: 700; color: var(--text2); }
+.weather-tmr-precip { font-size: 11px; color: var(--primary); font-weight: 600; }
 @media (max-width: 600px) { .weather-widget { display: none; } }
 
 /* ── Header Right (weather + HA badge group) ────────────────── */

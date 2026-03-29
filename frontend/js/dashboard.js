@@ -44,6 +44,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadMessagePreview();
   setInterval(loadHAStatus, 30000);
   setInterval(loadStocks, 5 * 60 * 1000);
+
+  // Auto-refresh all dashboard data every 5 minutes
+  setInterval(() => {
+    const h = new Date().getHours();
+    document.getElementById('timeGreeting').textContent = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+    document.getElementById('todayDate').textContent = new Date().toLocaleDateString('en-US', { timeZone: TZ,
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
+    loadTodayEvents();
+    loadUpcomingChores();
+    loadLunchMenu();
+    loadWeather();
+    loadMessagePreview();
+    loadMessageBadge();
+  }, 5 * 60 * 1000);
 });
 
 async function loadMessagePreview() {
@@ -422,12 +437,23 @@ async function loadWeather() {
     const data = await API.get('/api/weather/');
     if (data.error === 'no_location') { el.innerHTML = ''; return; }
     if (data.error) { el.innerHTML = ''; return; }
+    const t = data.tomorrow;
+    const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
     el.innerHTML = `
       <div class="weather-icon">${data.icon}</div>
       <div class="weather-temp">${Math.round(data.temp)}°F</div>
       <div class="weather-condition">${data.condition}</div>
       <div class="weather-hilo">↑${Math.round(data.high)}° ↓${Math.round(data.low)}°</div>
       ${data.city ? `<div class="weather-city">${data.city}</div>` : ''}
+      ${t && t.high != null ? `
+        <div class="weather-tomorrow">
+          <div class="weather-tmr-label">Tomorrow</div>
+          <div class="weather-tmr-row">
+            <span class="weather-tmr-icon">${t.icon}</span>
+            <span class="weather-tmr-hilo">↑${Math.round(t.high)}° ↓${Math.round(t.low)}°</span>
+            ${precipStr}
+          </div>
+        </div>` : ''}
     `;
   } catch(e) {
     el.innerHTML = '';
