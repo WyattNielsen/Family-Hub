@@ -132,6 +132,12 @@ def init_db():
         pass
 
     try:
+        conn.execute("ALTER TABLE events ADD COLUMN location TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
         conn.execute("""CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL

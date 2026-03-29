@@ -10,7 +10,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Family Hub">
-<link rel="stylesheet" href="/css/style.css?v=26">
+<link rel="stylesheet" href="/css/style.css?v=27">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
 </head>
@@ -88,6 +88,26 @@
   </main>
 </div>
 
+<!-- Event Detail Popover -->
+<div class="modal-overlay" id="eventDetailModal" style="display:none" onclick="closeEventDetail()">
+  <div class="modal event-detail-modal" onclick="event.stopPropagation()">
+    <div class="event-detail-color-bar" id="eventDetailBar"></div>
+    <div class="modal-body" style="padding:20px 22px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <h3 class="event-detail-title" id="eventDetailTitle"></h3>
+        <button class="btn-close" onclick="closeEventDetail()" style="flex-shrink:0">✕</button>
+      </div>
+      <div class="event-detail-time" id="eventDetailTime"></div>
+      <div class="event-detail-location" id="eventDetailLocation" style="display:none;font-size:13px;margin-top:6px"></div>
+      <div class="event-detail-desc" id="eventDetailDesc" style="display:none"></div>
+      <div class="event-detail-tags" id="eventDetailTags"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-ghost" style="color:var(--red);font-size:13px" id="eventDetailDelete">🗑 Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Add Event Modal -->
 <div class="modal-overlay" id="eventModal" style="display:none">
   <div class="modal">
@@ -99,6 +119,10 @@
       <div class="form-group">
         <label>Title *</label>
         <input type="text" id="eventTitle" class="form-input" placeholder="Event title">
+      </div>
+      <div class="form-group">
+        <label>Location</label>
+        <input type="text" id="eventLocation" class="form-input" placeholder="Optional location">
       </div>
       <div class="form-group">
         <label>Description</label>
@@ -137,9 +161,9 @@
   </div>
 </div>
 
-<script src="/js/api.js?v=26"></script>
-<script src="/js/calendar.js?v=26"></script>
-<script src="/js/slideshow.js?v=26"></script>
+<script src="/js/api.js?v=27"></script>
+<script src="/js/calendar.js?v=27"></script>
+<script src="/js/slideshow.js?v=27"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 </body>
 </html>

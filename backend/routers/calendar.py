@@ -29,6 +29,7 @@ APP_BASE_URL = _os.environ.get("APP_BASE_URL", "http://localhost:3000")
 class EventCreate(BaseModel):
     title: str
     description: str = ""
+    location: str = ""
     start_datetime: str
     end_datetime: str
     all_day: bool = False
@@ -86,6 +87,7 @@ def _build_google_body(event_row: dict, tz: str = "America/New_York") -> dict:
     body = {
         "summary": event_row["title"],
         "description": event_row.get("description") or "",
+        "location": event_row.get("location") or "",
     }
     if event_row.get("all_day"):
         body["start"] = {"date": str(event_row["start_datetime"])[:10]}
@@ -191,9 +193,9 @@ async def _delete_from_google(event_row: dict, conn):
 async def create_event(event: EventCreate):
     conn = get_db()
     cur = conn.execute("""
-        INSERT INTO events (title, description, start_datetime, end_datetime, all_day, member_id, is_family, color, recurrence)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (event.title, event.description, event.start_datetime, event.end_datetime,
+        INSERT INTO events (title, description, location, start_datetime, end_datetime, all_day, member_id, is_family, color, recurrence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (event.title, event.description, event.location, event.start_datetime, event.end_datetime,
           1 if event.all_day else 0, event.member_id, 1 if event.is_family else 0,
           event.color, event.recurrence))
     conn.commit()
@@ -417,6 +419,7 @@ async def _sync_calendars(access_token: str, calendar_ids: list, conn, is_family
             gid = ge["id"]
             title = ge.get("summary", "(No title)")
             desc = ge.get("description", "")
+            location = ge.get("location", "")
             start = ge["start"].get("dateTime") or ge["start"].get("date")
             end = ge["end"].get("dateTime") or ge["end"].get("date")
             all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
@@ -426,19 +429,19 @@ async def _sync_calendars(access_token: str, calendar_ids: list, conn, is_family
             if is_family:
                 existing = conn.execute("SELECT id FROM events WHERE google_event_id=? AND is_family=1", (gid,)).fetchone()
                 if existing:
-                    conn.execute("UPDATE events SET title=?, description=?, start_datetime=?, end_datetime=?, all_day=?, color=? WHERE google_event_id=? AND is_family=1",
-                                 (title, desc, start, end, all_day, event_color, gid))
+                    conn.execute("UPDATE events SET title=?, description=?, location=?, start_datetime=?, end_datetime=?, all_day=?, color=? WHERE google_event_id=? AND is_family=1",
+                                 (title, desc, location, start, end, all_day, event_color, gid))
                 else:
-                    conn.execute("INSERT INTO events (title, description, start_datetime, end_datetime, all_day, is_family, google_event_id, color) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
-                                 (title, desc, start, end, all_day, gid, event_color))
+                    conn.execute("INSERT INTO events (title, description, location, start_datetime, end_datetime, all_day, is_family, google_event_id, color) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                                 (title, desc, location, start, end, all_day, gid, event_color))
             else:
                 existing = conn.execute("SELECT id FROM events WHERE google_event_id=? AND member_id=?", (gid, member_id)).fetchone()
                 if existing:
-                    conn.execute("UPDATE events SET title=?, description=?, start_datetime=?, end_datetime=?, all_day=?, color=? WHERE google_event_id=? AND member_id=?",
-                                 (title, desc, start, end, all_day, event_color, gid, member_id))
+                    conn.execute("UPDATE events SET title=?, description=?, location=?, start_datetime=?, end_datetime=?, all_day=?, color=? WHERE google_event_id=? AND member_id=?",
+                                 (title, desc, location, start, end, all_day, event_color, gid, member_id))
                 else:
-                    conn.execute("INSERT INTO events (title, description, start_datetime, end_datetime, all_day, member_id, is_family, google_event_id, color) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
-                                 (title, desc, start, end, all_day, member_id, gid, event_color))
+                    conn.execute("INSERT INTO events (title, description, location, start_datetime, end_datetime, all_day, member_id, is_family, google_event_id, color) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                                 (title, desc, location, start, end, all_day, member_id, gid, event_color))
             synced += 1
     return synced
 

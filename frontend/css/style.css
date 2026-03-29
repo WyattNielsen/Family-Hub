@@ -1845,3 +1845,12 @@ html.dimmed { filter: brightness(0.04); cursor: none; }
 .msg-preview-divider { color: var(--text3); flex-shrink: 0; }
 .msg-preview-text { font-size: 13px; color: var(--text2); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .msg-preview-more { font-size: 12px; color: var(--primary); font-weight: 700; white-space: nowrap; flex-shrink: 0; margin-left: auto; }
+
+/* Event Detail Modal */
+.event-detail-modal { max-width: 420px; width: 90%; padding: 0; overflow: hidden; }
+.event-detail-color-bar { height: 6px; width: 100%; border-radius: 0; }
+.event-detail-title { font-size: 17px; font-weight: 800; color: var(--text1); line-height: 1.3; margin: 0; }
+.event-detail-time { font-size: 13px; color: var(--text2); margin-top: 6px; font-weight: 600; }
+.event-detail-desc { font-size: 13px; color: var(--text2); margin-top: 8px; line-height: 1.5; }
+.event-detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.event-detail-tag { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 20px; }
