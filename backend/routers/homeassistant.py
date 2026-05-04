@@ -200,3 +200,58 @@ async def alarm_action(action: str, body: HAActionRequest):
         raise HTTPException(status_code=502, detail="Could not reach Home Assistant")
 
     return {"ok": True}
+
+
+# ── TTS Announcement ──────────────────────────────────────────
+
+class TTSRequest(BaseModel):
+    message: str
+    entity_id: str
+
+@router.post("/tts")
+async def speak_tts(body: TTSRequest):
+    conn = get_db()
+    s = {r["key"]: r["value"] for r in conn.execute(
+        "SELECT key, value FROM settings WHERE key IN ('ha_url', 'ha_token')"
+    ).fetchall()}
+    conn.close()
+    ha_url = s.get("ha_url", "").strip()
+    ha_token = s.get("ha_token", "").strip()
+    if not ha_url or not ha_token:
+        raise HTTPException(status_code=400, detail="Home Assistant not configured")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{ha_url.rstrip('/')}/api/services/tts/google_translate_say",
+                headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
+                json={"entity_id": body.entity_id, "message": body.message, "language": "en"},
+            )
+            if resp.status_code not in (200, 201):
+                raise HTTPException(status_code=502, detail=f"HA returned {resp.status_code}: {resp.text}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Home Assistant: {e}")
+    return {"ok": True}
+
+
+async def fire_tts(message: str, entity_id: str):
+    """Called by the reminder background loop — no HTTP context."""
+    conn = get_db()
+    s = {r["key"]: r["value"] for r in conn.execute(
+        "SELECT key, value FROM settings WHERE key IN ('ha_url', 'ha_token')"
+    ).fetchall()}
+    conn.close()
+    ha_url = s.get("ha_url", "").strip()
+    ha_token = s.get("ha_token", "").strip()
+    if not ha_url or not ha_token:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{ha_url.rstrip('/')}/api/services/tts/google_translate_say",
+                headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
+                json={"entity_id": entity_id, "message": message, "language": "en"},
+            )
+    except Exception as e:
+        print(f"TTS reminder error: {e}")

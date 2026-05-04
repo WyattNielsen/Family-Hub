@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadLunchSettings();
   loadStockSettings();
   loadCameraSettings();
+  loadReminders();
 
   document.getElementById('addMemberBtn').onclick = () => openMemberModal();
   document.getElementById('closeMemberModal').onclick = closeMemberModal;
@@ -618,6 +619,70 @@ async function saveCameraSettings() {
     showToast('✅ Cameras saved!', 'success');
   } catch(e) {
     showToast('Failed to save', 'error');
+  }
+}
+
+// ── Chore Reminders ───────────────────────────────────────────
+async function loadReminders() {
+  try {
+    const data = await API.get('/api/settings/chore_reminders').catch(() => ({ value: null }));
+    const reminders = data.value ? JSON.parse(data.value) : [
+      { enabled: true, time: '07:40', message: 'Please make sure you have done your morning chores', entity_id: 'media_player.kitchen_hub' }
+    ];
+    const el = document.getElementById('reminderRows');
+    el.innerHTML = '';
+    reminders.forEach(r => addReminderRow(r));
+  } catch(e) {}
+}
+
+function addReminderRow(r = {}) {
+  const el = document.getElementById('reminderRows');
+  const div = document.createElement('div');
+  div.style = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--surface);border-radius:10px;border:1px solid var(--border)';
+  div.innerHTML = `
+    <input type="checkbox" class="rem-enabled" ${r.enabled !== false ? 'checked' : ''} title="Enabled" style="width:18px;height:18px;flex-shrink:0">
+    <input type="time" class="form-input rem-time" value="${r.time || '07:40'}" style="width:120px">
+    <input type="text" class="form-input rem-message" value="${r.message || ''}" placeholder="Reminder message" style="flex:1;min-width:200px">
+    <input type="text" class="form-input rem-entity" value="${r.entity_id || ''}" placeholder="media_player.kitchen_hub" style="width:220px">
+    <button class="btn btn-ghost" onclick="this.closest('div').remove()" style="color:var(--red);flex-shrink:0">✕</button>`;
+  el.appendChild(div);
+}
+
+async function saveReminders() {
+  const rows = document.querySelectorAll('#reminderRows > div');
+  const reminders = [];
+  rows.forEach(row => {
+    const message = row.querySelector('.rem-message')?.value.trim();
+    const entity_id = row.querySelector('.rem-entity')?.value.trim();
+    if (message && entity_id) {
+      reminders.push({
+        enabled: row.querySelector('.rem-enabled')?.checked ?? true,
+        time: row.querySelector('.rem-time')?.value || '07:40',
+        message,
+        entity_id,
+      });
+    }
+  });
+  try {
+    await API.post('/api/settings/', { chore_reminders: JSON.stringify(reminders) });
+    document.getElementById('reminderSaveStatus').textContent = '✅ Saved';
+    setTimeout(() => { document.getElementById('reminderSaveStatus').textContent = ''; }, 3000);
+  } catch(e) {
+    showToast('Failed to save reminders', 'error');
+  }
+}
+
+async function testReminder() {
+  const firstRow = document.querySelector('#reminderRows > div');
+  if (!firstRow) { showToast('Add a reminder first', 'error'); return; }
+  const message = firstRow.querySelector('.rem-message')?.value.trim();
+  const entity_id = firstRow.querySelector('.rem-entity')?.value.trim();
+  if (!message || !entity_id) { showToast('Fill in message and speaker', 'error'); return; }
+  try {
+    await API.post('/api/homeassistant/tts', { message, entity_id });
+    showToast('🔊 Playing on speaker...', 'success');
+  } catch(e) {
+    showToast('Failed — check HA connection and entity ID', 'error');
   }
 }
 
