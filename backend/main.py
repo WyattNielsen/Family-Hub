@@ -34,7 +34,7 @@ async def _reminder_loop():
                 t = r.get("time", "")
                 if t == hhmm and t not in _fired_today:
                     _fired_today.add(t)
-                    await homeassistant.fire_tts(r.get("message", ""), r.get("entity_id", ""))
+                    await homeassistant.fire_tts(r.get("message", ""), r.get("entity_id", ""), r.get("tts_engine", "tts.google_translate_en_com"))
         except asyncio.CancelledError:
             break
         except Exception as e:

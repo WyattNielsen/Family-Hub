@@ -206,7 +206,8 @@ async def alarm_action(action: str, body: HAActionRequest):
 
 class TTSRequest(BaseModel):
     message: str
-    entity_id: str
+    entity_id: str  # media player / speaker
+    tts_engine: str = "tts.google_translate_en_com"
 
 @router.post("/tts")
 async def speak_tts(body: TTSRequest):
@@ -219,23 +220,31 @@ async def speak_tts(body: TTSRequest):
     ha_token = s.get("ha_token", "").strip()
     if not ha_url or not ha_token:
         raise HTTPException(status_code=400, detail="Home Assistant not configured")
+
+    payload = {
+        "entity_id": body.tts_engine,
+        "media_player_entity_id": body.entity_id,
+        "message": body.message,
+    }
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"{ha_url.rstrip('/')}/api/services/tts/google_translate_say",
+                f"{ha_url.rstrip('/')}/api/services/tts/speak",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
-                json={"entity_id": body.entity_id, "message": body.message, "language": "en"},
+                json=payload,
             )
             if resp.status_code not in (200, 201):
-                raise HTTPException(status_code=502, detail=f"HA returned {resp.status_code}: {resp.text}")
+                print(f"HA TTS error: status={resp.status_code} body={resp.text[:500]}")
+                raise HTTPException(status_code=502, detail=f"HA returned {resp.status_code}: {resp.text[:200]}")
     except HTTPException:
         raise
     except Exception as e:
+        print(f"HA TTS exception: {e}")
         raise HTTPException(status_code=502, detail=f"Could not reach Home Assistant: {e}")
     return {"ok": True}
 
 
-async def fire_tts(message: str, entity_id: str):
+async def fire_tts(message: str, entity_id: str, tts_engine: str = "tts.google_translate_en_com"):
     """Called by the reminder background loop — no HTTP context."""
     conn = get_db()
     s = {r["key"]: r["value"] for r in conn.execute(
@@ -249,9 +258,9 @@ async def fire_tts(message: str, entity_id: str):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(
-                f"{ha_url.rstrip('/')}/api/services/tts/google_translate_say",
+                f"{ha_url.rstrip('/')}/api/services/tts/speak",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
-                json={"entity_id": entity_id, "message": message, "language": "en"},
+                json={"entity_id": tts_engine, "media_player_entity_id": entity_id, "message": message},
             )
     except Exception as e:
         print(f"TTS reminder error: {e}")

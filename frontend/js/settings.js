@@ -643,7 +643,8 @@ function addReminderRow(r = {}) {
     <input type="checkbox" class="rem-enabled" ${r.enabled !== false ? 'checked' : ''} title="Enabled" style="width:18px;height:18px;flex-shrink:0">
     <input type="time" class="form-input rem-time" value="${r.time || '07:40'}" style="width:120px">
     <input type="text" class="form-input rem-message" value="${r.message || ''}" placeholder="Reminder message" style="flex:1;min-width:200px">
-    <input type="text" class="form-input rem-entity" value="${r.entity_id || ''}" placeholder="media_player.kitchen_hub" style="width:220px">
+    <input type="text" class="form-input rem-entity" value="${r.entity_id || 'media_player.kitchen_hub'}" placeholder="media_player.kitchen_hub" style="width:230px" title="Speaker / media player entity ID">
+    <input type="text" class="form-input rem-tts-engine" value="${r.tts_engine || 'tts.google_translate_en_com'}" placeholder="tts.google_translate_en_com" style="width:230px" title="TTS engine entity (for tts.speak service)">
     <button class="btn btn-ghost" onclick="this.closest('div').remove()" style="color:var(--red);flex-shrink:0">✕</button>`;
   el.appendChild(div);
 }
@@ -660,6 +661,7 @@ async function saveReminders() {
         time: row.querySelector('.rem-time')?.value || '07:40',
         message,
         entity_id,
+        tts_engine: row.querySelector('.rem-tts-engine')?.value.trim() || 'tts.google_translate_en_com',
       });
     }
   });
@@ -677,9 +679,10 @@ async function testReminder() {
   if (!firstRow) { showToast('Add a reminder first', 'error'); return; }
   const message = firstRow.querySelector('.rem-message')?.value.trim();
   const entity_id = firstRow.querySelector('.rem-entity')?.value.trim();
+  const tts_engine = firstRow.querySelector('.rem-tts-engine')?.value.trim() || 'tts.google_translate_en_com';
   if (!message || !entity_id) { showToast('Fill in message and speaker', 'error'); return; }
   try {
-    await API.post('/api/homeassistant/tts', { message, entity_id });
+    await API.post('/api/homeassistant/tts', { message, entity_id, tts_engine });
     showToast('🔊 Playing on speaker...', 'success');
   } catch(e) {
     showToast('Failed — check HA connection and entity ID', 'error');
