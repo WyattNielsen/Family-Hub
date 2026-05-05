@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadHAStatus();
   loadStocks();
   loadMessagePreview();
+  loadDashCameras();
   setInterval(loadHAStatus, 30000);
   setInterval(loadStocks, 5 * 60 * 1000);
 
@@ -588,4 +589,35 @@ async function loadLunchMenu() {
   } catch(e) {
     el.innerHTML = '<div class="empty-state">Menu unavailable today</div>';
   }
+}
+
+// ── Dashboard Cameras ─────────────────────────────────────────
+let _camRefreshTimer = null;
+
+async function loadDashCameras() {
+  const strip = document.getElementById('dashCameras');
+  if (!strip) return;
+  try {
+    const data = await API.get('/api/security/cameras');
+    const cameras = (data.cameras || []).slice(0, 2);
+    if (!cameras.length) return;
+
+    strip.innerHTML = cameras.map(cam => `
+      <a href="/security.html" class="dash-cam-card">
+        <img class="dash-cam-img" id="dashCam_${cam.ha_entity_id}"
+             src="/api/security/camera/${cam.ha_entity_id}/snapshot?t=${Date.now()}"
+             alt="${cam.name || cam.ha_entity_id}" onerror="this.style.display='none'">
+        <div class="dash-cam-label">${cam.name || cam.ha_entity_id}</div>
+      </a>`).join('');
+    strip.style.display = 'flex';
+
+    // Refresh snapshots every 10 seconds
+    clearInterval(_camRefreshTimer);
+    _camRefreshTimer = setInterval(() => {
+      cameras.forEach(cam => {
+        const img = document.getElementById(`dashCam_${cam.ha_entity_id}`);
+        if (img) { img.style.display = ''; img.src = `/api/security/camera/${cam.ha_entity_id}/snapshot?t=${Date.now()}`; }
+      });
+    }, 10000);
+  } catch(e) {}
 }

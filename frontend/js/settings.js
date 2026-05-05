@@ -597,13 +597,44 @@ async function loadCameraSettings() {
 function addCameraRow(name = '', haEntityId = '') {
   const list = document.getElementById('cameraList');
   const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--bg2);border-radius:10px';
+  row.draggable = true;
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--bg2);border-radius:10px;cursor:default';
   row.innerHTML = `
+    <span class="cam-drag-handle" title="Drag to reorder" style="cursor:grab;font-size:18px;color:var(--text-muted);padding:0 4px;flex-shrink:0">⠿</span>
     <input type="text" class="form-input cam-name" placeholder="Camera name (e.g. Driveway)" value="${name}" style="flex:1;min-width:160px">
     <input type="text" class="form-input cam-ha-entity" placeholder="HA Entity ID (e.g. camera.driveway)" value="${haEntityId}" style="flex:1;min-width:200px">
-    <button class="btn btn-danger-ghost" onclick="this.closest('div[style]').remove()" style="padding:8px 10px">✕</button>
+    <button class="btn btn-danger-ghost" onclick="this.closest('div[draggable]').remove()" style="padding:8px 10px">✕</button>
   `;
+  _bindCameraDrag(row);
   list.appendChild(row);
+}
+
+function _bindCameraDrag(row) {
+  row.addEventListener('dragstart', e => {
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('cam-dragging');
+    row._dragSrc = true;
+  });
+  row.addEventListener('dragend', () => {
+    row.classList.remove('cam-dragging');
+    document.querySelectorAll('#cameraList > div').forEach(r => r.classList.remove('cam-drag-over'));
+  });
+  row.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const list = document.getElementById('cameraList');
+    const dragging = list.querySelector('.cam-dragging');
+    if (dragging && dragging !== row) {
+      document.querySelectorAll('#cameraList > div').forEach(r => r.classList.remove('cam-drag-over'));
+      row.classList.add('cam-drag-over');
+      const rows = [...list.children];
+      const fromIdx = rows.indexOf(dragging);
+      const toIdx = rows.indexOf(row);
+      if (fromIdx < toIdx) list.insertBefore(dragging, row.nextSibling);
+      else list.insertBefore(dragging, row);
+    }
+  });
+  row.addEventListener('drop', e => { e.preventDefault(); });
 }
 
 async function saveCameraSettings() {
@@ -710,10 +741,9 @@ async function loadNightMode() {
       API.get('/api/settings/dark_mode_end').catch(() => ({value: '7'})),
       API.get('/api/settings/dim_minutes').catch(() => ({value: '5'}))
     ]);
-    const sel = v => parseInt(v?.value || '0');
-    document.getElementById('darkStart').value  = sel(s) || 21;
-    document.getElementById('darkEnd').value    = sel(e) || 7;
-    document.getElementById('dimMinutes').value = sel(d) || 5;
+    document.getElementById('darkStart').value  = s?.value ?? '21';
+    document.getElementById('darkEnd').value    = e?.value ?? '7';
+    document.getElementById('dimMinutes').value = d?.value ?? '5';
   } catch(e) {}
 }
 
