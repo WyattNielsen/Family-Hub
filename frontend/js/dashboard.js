@@ -555,21 +555,12 @@ async function loadLunchMenu() {
       link.style.display = '';
     }
 
-    const { breakfast, lunch } = data;
+    const { breakfast, lunch, sides = [] } = data;
 
     if (!breakfast.length && !lunch.length) {
       el.innerHTML = '<div class="empty-state">No menu available' + (isAfter5pm ? ' tomorrow' : ' today') + '</div>';
       return;
     }
-
-    // Filter to entrees + meaningful items, skip pure condiments/milk
-    const skipCategories = ['milk', 'fluid milk', 'condiment', 'condiments'];
-    const filterItems = items => items.filter(i =>
-      i.name && !skipCategories.includes(i.category)
-    );
-
-    const bItems = filterItems(breakfast);
-    const lItems = filterItems(lunch);
 
     const renderRow = (emoji, label, items) => {
       if (!items.length) return '';
@@ -583,8 +574,9 @@ async function loadLunchMenu() {
     };
 
     el.innerHTML = `<div class="menu-compact">
-      ${renderRow('🌅', 'Breakfast', bItems)}
-      ${renderRow('🍕', 'Lunch', lItems)}
+      ${renderRow('🌅', 'Breakfast', breakfast)}
+      ${renderRow('🍕', 'Lunch', lunch)}
+      ${renderRow('🥗', 'Sides', sides)}
     </div>`;
   } catch(e) {
     el.innerHTML = '<div class="empty-state">Menu unavailable today</div>';
