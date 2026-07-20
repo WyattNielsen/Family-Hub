@@ -68,14 +68,18 @@ conn.execute("SELECT value FROM settings WHERE key = ?", ("timezone",)).fetchone
 
 **Chore points** — there is no points table. Points are computed as `SUM(points) WHERE completed=1` in the leaderboard query.
 
+**Chore season reset** — `POST /api/chores/reset?mode=points` deletes all completed rows (zeroes everyone's score). `mode=all` deletes every chore row for a full fresh start. Button in Settings → Family → Chore Season Reset.
+
+**Database locked on reboot** — `_auto_sync_loop()` fires 30s after startup and can hold a write lock, causing `_advance_recurring_to_today()` to fail with `sqlite3.OperationalError: database is locked`. Workaround: `docker restart family-hub`. Not yet permanently fixed.
+
 **Schema migrations** use bare `ALTER TABLE` wrapped in try/except (see `init_db()` in `database.py`). Add new columns the same way.
 
 ## Frontend Patterns
 
 **Cache busting** — JS and CSS are versioned with `?v=N` on every `<script>` and `<link>` tag. After any frontend change, bump the version in all 6 HTML files:
 ```bash
-# Current version is ?v=50 — change both numbers when bumping
-sed -i 's/?v=50/?v=51/g' frontend/index.html frontend/calendar.html frontend/chores.html frontend/messages.html frontend/security.html frontend/settings.html
+# Current version is ?v=51 — change both numbers when bumping
+sed -i 's/?v=51/?v=52/g' frontend/index.html frontend/calendar.html frontend/chores.html frontend/messages.html frontend/security.html frontend/settings.html
 ```
 
 **Page initialization** — every page's `DOMContentLoaded` must call `await initAppTimezone()` first before rendering anything date-related. `initTheme()` and `loadMessageBadge()` are called automatically by `api.js`.
@@ -104,5 +108,5 @@ Set in `.env` (gitignored), passed into the container via `env_file` in `docker-
 - **Google Calendar** — OAuth tokens stored in `family_google_calendar` table (shared) and `members` table (per-person). Sync logic in `routers/calendar.py`.
 - **Home Assistant** — URL + long-lived token stored in settings table. All HA calls go through `routers/homeassistant.py`. TTS uses `tts.speak` service with `entity_id` = TTS engine, `media_player_entity_id` = speaker.
 - **Cameras** — HA MJPEG proxy via FastAPI `StreamingResponse` at `/api/security/camera/{entity_id}/stream`. No go2rtc.
-- **Lunch** — Nutrislice API, school domain stored in settings (`lunch_school`).
+- **Lunch** — Nutrislice API, school domain stored in settings (`lunch_school`). `lunch_hidden` setting (`'true'/'false'`) hides the dashboard lunch column — toggle in Settings → Integrations → Lunch (use during summer).
 - **Weather** — zip code based, stored in settings (`weather_zip`).
