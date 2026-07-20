@@ -139,6 +139,21 @@ def delete_chore(chore_id: int):
     conn.close()
     return {"ok": True}
 
+@router.post("/reset")
+def reset_chores(mode: str = Query("points")):
+    """Reset chore points for a new season.
+    mode=points: delete completed chore rows only (zeroes scores, keeps chore list)
+    mode=all: delete every chore row (full fresh start)
+    """
+    conn = get_db()
+    if mode == "all":
+        conn.execute("DELETE FROM chores")
+    else:
+        conn.execute("DELETE FROM chores WHERE completed=1")
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
 @router.get("/leaderboard")
 def get_leaderboard():
     conn = get_db()

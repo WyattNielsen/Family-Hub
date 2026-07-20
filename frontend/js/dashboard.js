@@ -525,6 +525,15 @@ async function loadLunchMenu() {
   const el = document.getElementById('lunchMenu');
   if (!el) return;
 
+  try {
+    const s = await API.get('/api/settings/lunch_hidden');
+    if (s.value === 'true') {
+      const section = document.getElementById('lunchSection');
+      if (section) section.style.display = 'none';
+      return;
+    }
+  } catch(e) {}
+
   // After 5pm show tomorrow's menu
   const now = new Date();
   const isAfter5pm = now.getHours() >= 17;

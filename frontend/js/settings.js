@@ -544,9 +544,11 @@ async function loadLunchSettings() {
     const district = document.getElementById('lunchDistrict');
     const slug = document.getElementById('lunchSchoolSlug');
     const menuType = document.getElementById('lunchMenuType');
+    const hidden = document.getElementById('lunchHidden');
     if (district) district.value = s.lunch_district || 'bcps';
     if (slug) slug.value = s.lunch_school_slug || 'bcps-weekly-menus';
     if (menuType) menuType.value = s.lunch_menu_type || 'weekly-menus';
+    if (hidden) hidden.checked = s.lunch_hidden === 'true';
   } catch(e) {}
 }
 
@@ -554,11 +556,13 @@ async function saveLunchSettings() {
   const district = (document.getElementById('lunchDistrict')?.value || '').trim();
   const slug = (document.getElementById('lunchSchoolSlug')?.value || '').trim();
   const menuType = (document.getElementById('lunchMenuType')?.value || '').trim();
+  const hidden = document.getElementById('lunchHidden')?.checked ?? false;
   try {
     await API.post('/api/settings/', {
       lunch_district: district,
       lunch_school_slug: slug,
       lunch_menu_type: menuType,
+      lunch_hidden: String(hidden),
     });
     showToast('✅ Lunch menu settings saved!', 'success');
   } catch(e) {
@@ -760,5 +764,26 @@ async function saveNightMode() {
     showToast('🌙 Night mode saved!', 'success');
   } catch(e) {
     showToast('Failed to save night mode', 'error');
+  }
+}
+
+async function resetChorePoints() {
+  if (!confirm('Reset everyone\'s chore points to 0?\n\nThis deletes all completed chore history but keeps your chore list intact. This cannot be undone.')) return;
+  try {
+    await API.post('/api/chores/reset?mode=points');
+    showToast('Points reset! Everyone starts at 0.', 'success');
+  } catch(e) {
+    showToast('Failed to reset points', 'error');
+  }
+}
+
+async function resetAllChores() {
+  if (!confirm('Delete ALL chores and history?\n\nThis is a full fresh start — all chores, completions, and points will be gone. This cannot be undone.')) return;
+  if (!confirm('Are you sure? This will delete every chore. You will need to create a new chore list from scratch.')) return;
+  try {
+    await API.post('/api/chores/reset?mode=all');
+    showToast('All chores cleared. Fresh start!', 'success');
+  } catch(e) {
+    showToast('Failed to clear chores', 'error');
   }
 }
