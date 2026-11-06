@@ -2,15 +2,75 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 import os
 
-from database import init_db
+from database import init_db, get_db
 from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages
+import json
+
+async def _reminder_loop():
+    _fired_today = set()  # track (time_str) already fired today so we don't double-fire
+    _last_date = None
+    while True:
+        try:
+            await asyncio.sleep(30)
+            from datetime import datetime as _dt
+            now = _dt.now()
+            today = now.date().isoformat()
+            if _last_date != today:
+                _fired_today.clear()
+                _last_date = today
+            hhmm = now.strftime("%H:%M")
+            conn = get_db()
+            row = conn.execute("SELECT value FROM settings WHERE key='chore_reminders'").fetchone()
+            conn.close()
+            if not row or not row["value"]:
+                continue
+            reminders = json.loads(row["value"])
+            for r in reminders:
+                if not r.get("enabled"):
+                    continue
+                t = r.get("time", "")
+                if t == hhmm and t not in _fired_today:
+                    _fired_today.add(t)
+                    await homeassistant.fire_tts(r.get("message", ""), r.get("entity_id", ""), r.get("tts_engine", "tts.google_translate_en_com"))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Reminder loop error: {e}")
+
+async def _auto_sync_loop():
+    await asyncio.sleep(30)  # let the app fully start first
+    while True:
+        try:
+            conn = get_db()
+            row = conn.execute("SELECT value FROM settings WHERE key='google_sync_interval'").fetchone()
+            conn.close()
+            interval = int(row["value"]) if row and row["value"] else 0
+            if interval > 0:
+                await calendar.run_full_sync()
+                await asyncio.sleep(interval * 60)
+            else:
+                await asyncio.sleep(60)  # check again in 1 min
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(300)  # back off 5 min on error
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    sync_task = asyncio.create_task(_auto_sync_loop())
+    reminder_task = asyncio.create_task(_reminder_loop())
     yield
+    sync_task.cancel()
+    reminder_task.cancel()
+    for t in (sync_task, reminder_task):
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(title="Family Hub", lifespan=lifespan)
 

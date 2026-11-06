@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Family Hub">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/css/style.css?v=30">
+<link rel="stylesheet" href="/css/style.css?v=51">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Nunito+Sans:wght@400;600&display=swap" rel="stylesheet">
 </head>
@@ -37,14 +37,14 @@
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
         <span>Chores</span>
       </a></li>
+      <li><a href="/security.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        <span>Security</span>
+      </a></li>
       <li><a href="/messages.html" class="nav-link">
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span>
         <span>Messages</span>
         <span class="nav-badge" id="msgNavBadge" style="display:none"></span>
-      </a></li>
-      <li><a href="/security.html" class="nav-link">
-        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
-        <span>Security</span>
       </a></li>
       <li><a href="/settings.html" class="nav-link active">
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></span>
@@ -52,7 +52,7 @@
       </a></li>
     </ul>
     <div class="sidebar-members" id="sidebarMembers"></div>
-    <button id="fullscreenBtn" onclick="toggleFullscreen()" title="Enter fullscreen" style="display:flex;align-items:center;justify-content:center;gap:8px;margin:12px 10px 0;padding:10px 14px;background:var(--surface2);color:var(--text);border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;width:calc(100% - 20px);">Fullscreen</button>
+    <button id="fullscreenBtn" onclick="toggleFullscreen()" title="Fullscreen" style="display:flex;align-items:center;justify-content:center;margin:8px auto 0;padding:10px;background:var(--surface2);color:var(--text);border:none;border-radius:10px;font-size:18px;cursor:pointer;width:44px;height:44px;">⛶</button>
     <button id="pwaInstallBtn" onclick="pwaInstall()" style="display:none;align-items:center;gap:8px;margin:12px 10px 0;padding:10px 14px;background:var(--primary);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;width:calc(100% - 20px);">⬇ Install App</button>
   </nav>
 
@@ -92,7 +92,46 @@
           Events you create in Family Hub are written to that person's <strong>Google primary</strong> calendar
           (Apple sources are sync-in only).
         </p>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;margin-bottom:16px;">
+          <label class="form-label" style="font-weight:800;margin-bottom:6px;display:block">🔄 Auto-sync interval</label>
+          <p class="settings-desc" style="margin-bottom:8px">Automatically pull updates from connected calendars in the background.</p>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <select id="syncIntervalPicker" class="form-input" style="max-width:220px" onchange="saveSyncInterval()">
+              <option value="0">Off</option>
+              <option value="15">Every 15 minutes</option>
+              <option value="30">Every 30 minutes</option>
+              <option value="60">Every hour</option>
+              <option value="120">Every 2 hours</option>
+            </select>
+            <span id="syncIntervalStatus" style="font-size:13px;color:var(--text-muted)"></span>
+          </div>
+        </div>
         <div id="memberCalendars"></div>
+      </section>
+
+      <!-- Chore Season Reset -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">🏆 Chore Season Reset</h2>
+        </div>
+        <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
+          <div>
+            <h3 style="margin:0 0 4px">Reset for a New Season</h3>
+            <p class="settings-desc">Use these when starting a new chore season (e.g. summer). Points are calculated from completed chore records — resetting clears that history.</p>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <div style="flex:1;min-width:200px;padding:14px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px">
+              <div style="font-weight:700;margin-bottom:4px">Reset Points Only</div>
+              <p class="settings-desc" style="margin-bottom:10px">Clears everyone's scores back to 0. Keeps your chore list intact so you don't have to re-enter anything.</p>
+              <button class="btn btn-danger-ghost" onclick="resetChorePoints()">🔄 Reset Points</button>
+            </div>
+            <div style="flex:1;min-width:200px;padding:14px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px">
+              <div style="font-weight:700;margin-bottom:4px">Full Fresh Start</div>
+              <p class="settings-desc" style="margin-bottom:10px">Deletes all chores and history. Use this to build a completely new summer chore list from scratch.</p>
+              <button class="btn btn-danger-ghost" onclick="resetAllChores()">🗑 Clear All Chores</button>
+            </div>
+          </div>
+        </div>
       </section>
 
     </div>
@@ -163,6 +202,21 @@
         </div>
       </section>
 
+      <!-- Chore Reminders -->
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2 class="section-title">🔔 Chore Reminders</h2>
+        </div>
+        <p class="settings-desc" style="margin-bottom:16px">Play a spoken reminder through a Home Assistant media player at a set time each day.</p>
+        <div id="reminderRows" style="display:flex;flex-direction:column;gap:12px"></div>
+        <div style="display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-secondary" onclick="addReminderRow()">+ Add Reminder</button>
+          <button class="btn btn-primary" onclick="saveReminders()">💾 Save</button>
+          <button class="btn btn-ghost" onclick="testReminder()" style="font-size:13px">▶ Test</button>
+          <span id="reminderSaveStatus" style="font-size:13px;color:var(--text-muted)"></span>
+        </div>
+      </section>
+
     </div>
 
     <!-- ── Tab: Integrations ───────────────────────────────────── -->
@@ -208,6 +262,16 @@
               <label class="form-label">Menu Type</label>
               <input type="text" id="lunchMenuType" class="form-input" placeholder="weekly-menus" style="max-width:200px">
               <div style="font-size:12px;color:var(--text2);margin-top:4px">Second path segment after <code>/menu/</code></div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;width:fit-content">
+            <label class="toggle-switch">
+              <input type="checkbox" id="lunchHidden">
+              <span class="toggle-slider"></span>
+            </label>
+            <div>
+              <div style="font-weight:700;font-size:14px">Hide during summer</div>
+              <div style="font-size:12px;color:var(--text2)">Removes the lunch column from the dashboard</div>
             </div>
           </div>
           <div style="display:flex;gap:10px;align-items:center">
@@ -413,9 +477,9 @@
   </div>
 </div>
 
-<script src="/js/api.js?v=30"></script>
-<script src="/js/settings.js?v=32"></script>
-<script src="/js/slideshow.js?v=30"></script>
+<script src="/js/api.js?v=51"></script>
+<script src="/js/settings.js?v=51"></script>
+<script src="/js/slideshow.js?v=51"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 <script>if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script>
 </body>

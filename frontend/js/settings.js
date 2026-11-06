@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   loadMembers();
   loadGoogleStatus();
+  loadSyncInterval();
   loadSlideshowSettings();
   loadWeatherZip();
   loadHASettings();
@@ -24,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadLunchSettings();
   loadStockSettings();
   loadCameraSettings();
+  loadReminders();
 
   document.getElementById('addMemberBtn').onclick = () => openMemberModal();
   document.getElementById('closeMemberModal').onclick = closeMemberModal;
@@ -189,6 +191,33 @@ async function disconnectMember(id) {
   await API.delete(`/api/auth/google/disconnect/member/${id}`);
   showToast('Disconnected', '');
   loadGoogleStatus();
+}
+
+async function loadSyncInterval() {
+  try {
+    const data = await API.get('/api/calendar/sync/status');
+    const sel = document.getElementById('syncIntervalPicker');
+    if (sel) sel.value = data.interval_minutes || 0;
+    _updateSyncStatus(data.last_synced);
+  } catch(e) {}
+}
+
+function _updateSyncStatus(lastSynced) {
+  const el = document.getElementById('syncIntervalStatus');
+  if (!el) return;
+  if (!lastSynced) { el.textContent = ''; return; }
+  const mins = Math.round((Date.now() - new Date(lastSynced + 'Z').getTime()) / 60000);
+  el.textContent = mins < 2 ? 'Last synced just now' : `Last synced ${mins} min ago`;
+}
+
+async function saveSyncInterval() {
+  const val = document.getElementById('syncIntervalPicker').value;
+  try {
+    await API.post('/api/settings/', { google_sync_interval: val });
+    showToast(val === '0' ? 'Auto-sync disabled' : 'Auto-sync saved', 'success');
+  } catch(e) {
+    showToast('Failed to save', 'error');
+  }
 }
 
 async function loadCalendarPicker(type, memberId) {
@@ -616,9 +645,11 @@ async function loadLunchSettings() {
     const district = document.getElementById('lunchDistrict');
     const slug = document.getElementById('lunchSchoolSlug');
     const menuType = document.getElementById('lunchMenuType');
+    const hidden = document.getElementById('lunchHidden');
     if (district) district.value = s.lunch_district || 'bcps';
     if (slug) slug.value = s.lunch_school_slug || 'bcps-weekly-menus';
     if (menuType) menuType.value = s.lunch_menu_type || 'weekly-menus';
+    if (hidden) hidden.checked = s.lunch_hidden === 'true';
   } catch(e) {}
 }
 
@@ -626,11 +657,13 @@ async function saveLunchSettings() {
   const district = (document.getElementById('lunchDistrict')?.value || '').trim();
   const slug = (document.getElementById('lunchSchoolSlug')?.value || '').trim();
   const menuType = (document.getElementById('lunchMenuType')?.value || '').trim();
+  const hidden = document.getElementById('lunchHidden')?.checked ?? false;
   try {
     await API.post('/api/settings/', {
       lunch_district: district,
       lunch_school_slug: slug,
       lunch_menu_type: menuType,
+      lunch_hidden: String(hidden),
     });
     showToast('✅ Lunch menu settings saved!', 'success');
   } catch(e) {
@@ -669,13 +702,44 @@ async function loadCameraSettings() {
 function addCameraRow(name = '', haEntityId = '') {
   const list = document.getElementById('cameraList');
   const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--bg2);border-radius:10px';
+  row.draggable = true;
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--bg2);border-radius:10px;cursor:default';
   row.innerHTML = `
+    <span class="cam-drag-handle" title="Drag to reorder" style="cursor:grab;font-size:18px;color:var(--text-muted);padding:0 4px;flex-shrink:0">⠿</span>
     <input type="text" class="form-input cam-name" placeholder="Camera name (e.g. Driveway)" value="${name}" style="flex:1;min-width:160px">
     <input type="text" class="form-input cam-ha-entity" placeholder="HA Entity ID (e.g. camera.driveway)" value="${haEntityId}" style="flex:1;min-width:200px">
-    <button class="btn btn-danger-ghost" onclick="this.closest('div[style]').remove()" style="padding:8px 10px">✕</button>
+    <button class="btn btn-danger-ghost" onclick="this.closest('div[draggable]').remove()" style="padding:8px 10px">✕</button>
   `;
+  _bindCameraDrag(row);
   list.appendChild(row);
+}
+
+function _bindCameraDrag(row) {
+  row.addEventListener('dragstart', e => {
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('cam-dragging');
+    row._dragSrc = true;
+  });
+  row.addEventListener('dragend', () => {
+    row.classList.remove('cam-dragging');
+    document.querySelectorAll('#cameraList > div').forEach(r => r.classList.remove('cam-drag-over'));
+  });
+  row.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const list = document.getElementById('cameraList');
+    const dragging = list.querySelector('.cam-dragging');
+    if (dragging && dragging !== row) {
+      document.querySelectorAll('#cameraList > div').forEach(r => r.classList.remove('cam-drag-over'));
+      row.classList.add('cam-drag-over');
+      const rows = [...list.children];
+      const fromIdx = rows.indexOf(dragging);
+      const toIdx = rows.indexOf(row);
+      if (fromIdx < toIdx) list.insertBefore(dragging, row.nextSibling);
+      else list.insertBefore(dragging, row);
+    }
+  });
+  row.addEventListener('drop', e => { e.preventDefault(); });
 }
 
 async function saveCameraSettings() {
@@ -691,6 +755,73 @@ async function saveCameraSettings() {
     showToast('✅ Cameras saved!', 'success');
   } catch(e) {
     showToast('Failed to save', 'error');
+  }
+}
+
+// ── Chore Reminders ───────────────────────────────────────────
+async function loadReminders() {
+  try {
+    const data = await API.get('/api/settings/chore_reminders').catch(() => ({ value: null }));
+    const reminders = data.value ? JSON.parse(data.value) : [
+      { enabled: true, time: '07:40', message: 'Please make sure you have done your morning chores', entity_id: 'media_player.kitchen_hub' }
+    ];
+    const el = document.getElementById('reminderRows');
+    el.innerHTML = '';
+    reminders.forEach(r => addReminderRow(r));
+  } catch(e) {}
+}
+
+function addReminderRow(r = {}) {
+  const el = document.getElementById('reminderRows');
+  const div = document.createElement('div');
+  div.style = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--surface);border-radius:10px;border:1px solid var(--border)';
+  div.innerHTML = `
+    <input type="checkbox" class="rem-enabled" ${r.enabled !== false ? 'checked' : ''} title="Enabled" style="width:18px;height:18px;flex-shrink:0">
+    <input type="time" class="form-input rem-time" value="${r.time || '07:40'}" style="width:120px">
+    <input type="text" class="form-input rem-message" value="${r.message || ''}" placeholder="Reminder message" style="flex:1;min-width:200px">
+    <input type="text" class="form-input rem-entity" value="${r.entity_id || 'media_player.kitchen_hub'}" placeholder="media_player.kitchen_hub" style="width:230px" title="Speaker / media player entity ID">
+    <input type="text" class="form-input rem-tts-engine" value="${r.tts_engine || 'tts.google_translate_en_com'}" placeholder="tts.google_translate_en_com" style="width:230px" title="TTS engine entity (for tts.speak service)">
+    <button class="btn btn-ghost" onclick="this.closest('div').remove()" style="color:var(--red);flex-shrink:0">✕</button>`;
+  el.appendChild(div);
+}
+
+async function saveReminders() {
+  const rows = document.querySelectorAll('#reminderRows > div');
+  const reminders = [];
+  rows.forEach(row => {
+    const message = row.querySelector('.rem-message')?.value.trim();
+    const entity_id = row.querySelector('.rem-entity')?.value.trim();
+    if (message && entity_id) {
+      reminders.push({
+        enabled: row.querySelector('.rem-enabled')?.checked ?? true,
+        time: row.querySelector('.rem-time')?.value || '07:40',
+        message,
+        entity_id,
+        tts_engine: row.querySelector('.rem-tts-engine')?.value.trim() || 'tts.google_translate_en_com',
+      });
+    }
+  });
+  try {
+    await API.post('/api/settings/', { chore_reminders: JSON.stringify(reminders) });
+    document.getElementById('reminderSaveStatus').textContent = '✅ Saved';
+    setTimeout(() => { document.getElementById('reminderSaveStatus').textContent = ''; }, 3000);
+  } catch(e) {
+    showToast('Failed to save reminders', 'error');
+  }
+}
+
+async function testReminder() {
+  const firstRow = document.querySelector('#reminderRows > div');
+  if (!firstRow) { showToast('Add a reminder first', 'error'); return; }
+  const message = firstRow.querySelector('.rem-message')?.value.trim();
+  const entity_id = firstRow.querySelector('.rem-entity')?.value.trim();
+  const tts_engine = firstRow.querySelector('.rem-tts-engine')?.value.trim() || 'tts.google_translate_en_com';
+  if (!message || !entity_id) { showToast('Fill in message and speaker', 'error'); return; }
+  try {
+    await API.post('/api/homeassistant/tts', { message, entity_id, tts_engine });
+    showToast('🔊 Playing on speaker...', 'success');
+  } catch(e) {
+    showToast('Failed — check HA connection and entity ID', 'error');
   }
 }
 
@@ -715,10 +846,9 @@ async function loadNightMode() {
       API.get('/api/settings/dark_mode_end').catch(() => ({value: '7'})),
       API.get('/api/settings/dim_minutes').catch(() => ({value: '5'}))
     ]);
-    const sel = v => parseInt(v?.value || '0');
-    document.getElementById('darkStart').value  = sel(s) || 21;
-    document.getElementById('darkEnd').value    = sel(e) || 7;
-    document.getElementById('dimMinutes').value = sel(d) || 5;
+    document.getElementById('darkStart').value  = s?.value ?? '21';
+    document.getElementById('darkEnd').value    = e?.value ?? '7';
+    document.getElementById('dimMinutes').value = d?.value ?? '5';
   } catch(e) {}
 }
 
@@ -735,5 +865,26 @@ async function saveNightMode() {
     showToast('🌙 Night mode saved!', 'success');
   } catch(e) {
     showToast('Failed to save night mode', 'error');
+  }
+}
+
+async function resetChorePoints() {
+  if (!confirm('Reset everyone\'s chore points to 0?\n\nThis deletes all completed chore history but keeps your chore list intact. This cannot be undone.')) return;
+  try {
+    await API.post('/api/chores/reset?mode=points');
+    showToast('Points reset! Everyone starts at 0.', 'success');
+  } catch(e) {
+    showToast('Failed to reset points', 'error');
+  }
+}
+
+async function resetAllChores() {
+  if (!confirm('Delete ALL chores and history?\n\nThis is a full fresh start — all chores, completions, and points will be gone. This cannot be undone.')) return;
+  if (!confirm('Are you sure? This will delete every chore. You will need to create a new chore list from scratch.')) return;
+  try {
+    await API.post('/api/chores/reset?mode=all');
+    showToast('All chores cleared. Fresh start!', 'success');
+  } catch(e) {
+    showToast('Failed to clear chores', 'error');
   }
 }

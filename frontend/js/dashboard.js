@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadHAStatus();
   loadStocks();
   loadMessagePreview();
+  loadDashCameras();
   setInterval(loadHAStatus, 30000);
   setInterval(loadStocks, 5 * 60 * 1000);
 
@@ -198,7 +199,7 @@ async function loadUpcomingChores() {
   const el = document.getElementById('upcomingChores');
   try {
     const [chores, members] = await Promise.all([
-      API.get('/api/chores/?hide_future=true&completed=false'),
+      API.get('/api/chores/?hide_future=true&completed=false&since_days=0'),
       API.get('/api/members/')
     ]);
 
@@ -524,6 +525,15 @@ async function loadLunchMenu() {
   const el = document.getElementById('lunchMenu');
   if (!el) return;
 
+  try {
+    const s = await API.get('/api/settings/lunch_hidden');
+    if (s.value === 'true') {
+      const section = document.getElementById('lunchSection');
+      if (section) section.style.display = 'none';
+      return;
+    }
+  } catch(e) {}
+
   // After 5pm show tomorrow's menu
   const now = new Date();
   const isAfter5pm = now.getHours() >= 17;
@@ -554,21 +564,12 @@ async function loadLunchMenu() {
       link.style.display = '';
     }
 
-    const { breakfast, lunch } = data;
+    const { breakfast, lunch, sides = [] } = data;
 
     if (!breakfast.length && !lunch.length) {
       el.innerHTML = '<div class="empty-state">No menu available' + (isAfter5pm ? ' tomorrow' : ' today') + '</div>';
       return;
     }
-
-    // Filter to entrees + meaningful items, skip pure condiments/milk
-    const skipCategories = ['milk', 'fluid milk', 'condiment', 'condiments'];
-    const filterItems = items => items.filter(i =>
-      i.name && !skipCategories.includes(i.category)
-    );
-
-    const bItems = filterItems(breakfast);
-    const lItems = filterItems(lunch);
 
     const renderRow = (emoji, label, items) => {
       if (!items.length) return '';
@@ -582,10 +583,42 @@ async function loadLunchMenu() {
     };
 
     el.innerHTML = `<div class="menu-compact">
-      ${renderRow('🌅', 'Breakfast', bItems)}
-      ${renderRow('🍕', 'Lunch', lItems)}
+      ${renderRow('🌅', 'Breakfast', breakfast)}
+      ${renderRow('🍕', 'Lunch', lunch)}
+      ${renderRow('🥗', 'Sides', sides)}
     </div>`;
   } catch(e) {
     el.innerHTML = '<div class="empty-state">Menu unavailable today</div>';
   }
+}
+
+// ── Dashboard Cameras ─────────────────────────────────────────
+let _camRefreshTimer = null;
+
+async function loadDashCameras() {
+  const strip = document.getElementById('dashCameras');
+  if (!strip) return;
+  try {
+    const data = await API.get('/api/security/cameras');
+    const cameras = (data.cameras || []).slice(0, 2);
+    if (!cameras.length) return;
+
+    strip.innerHTML = cameras.map(cam => `
+      <a href="/security.html" class="dash-cam-card">
+        <img class="dash-cam-img" id="dashCam_${cam.ha_entity_id}"
+             src="/api/security/camera/${cam.ha_entity_id}/snapshot?t=${Date.now()}"
+             alt="${cam.name || cam.ha_entity_id}" onerror="this.style.display='none'">
+        <div class="dash-cam-label">${cam.name || cam.ha_entity_id}</div>
+      </a>`).join('');
+    strip.style.display = 'flex';
+
+    // Refresh snapshots every 10 seconds
+    clearInterval(_camRefreshTimer);
+    _camRefreshTimer = setInterval(() => {
+      cameras.forEach(cam => {
+        const img = document.getElementById(`dashCam_${cam.ha_entity_id}`);
+        if (img) { img.style.display = ''; img.src = `/api/security/camera/${cam.ha_entity_id}/snapshot?t=${Date.now()}`; }
+      });
+    }, 10000);
+  } catch(e) {}
 }

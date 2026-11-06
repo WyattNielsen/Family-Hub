@@ -67,17 +67,17 @@ async def fetch_items_for_date(date_key: str):
     if not today_day:
         return None
 
-    skip_names = {
+    entree_skip = {
         "100% fruit juice", "assorted fresh fruits", "fresh fruits",
         "1% white milk", "white milk", "chocolate milk", "skim milk",
         "fat free chocolate milk"
     }
 
-    breakfast, lunch = [], []
-    # The BCPS weekly menu image asset IDs tell us the section:
-    # 277390 = BREAKFAST banner → next items are breakfast
-    # 397211 / 397212 / 397213 = LUNCH banners → next items are lunch
-    # We start as "unknown" and assign based on the first banner we see
+    def is_beverage(name: str) -> bool:
+        n = name.lower()
+        return "milk" in n or "juice" in n or "punch" in n or "drink" in n
+
+    breakfast, lunch, sides = [], [], []
     current_section = None
 
     for mi in today_day.get("menu_items", []):
@@ -86,40 +86,37 @@ async def fetch_items_for_date(date_key: str):
         # Banner image items have no food — use them to detect section switches
         if mi.get("food") is None:
             if image:
-                # Extract asset ID from URL like .../image/png/277390
                 parts = image.rstrip("/").split("/")
                 asset_id = parts[-1] if parts[-1].isdigit() else (parts[-2] if len(parts) > 1 else "")
-                # 277390 = breakfast header banner
                 if asset_id == "277390":
                     current_section = "breakfast"
-                # 277391 = lunch header banner
                 elif asset_id == "277391":
                     current_section = "lunch"
-                # 397211/397212/397213 are sub-section headers within breakfast
-                # (Elementary/Secondary/All Schools) — do NOT change section
             continue
 
         food = mi.get("food")
         if not food:
             continue
 
-        # Only show featured (starred) items
-        if not mi.get("featured", False):
-            continue
-
         name = (food.get("name") or "").strip()
-        if not name or name.lower() in skip_names:
+        if not name:
             continue
 
-        item = {"name": name, "is_entree": True}
+        featured = mi.get("featured", False)
 
-        if current_section == "breakfast":
-            breakfast.append(item)
-        elif current_section == "lunch":
-            lunch.append(item)
-        # If section still unknown, skip — shouldn't happen with valid data
+        if featured:
+            if name.lower() in entree_skip:
+                continue
+            item = {"name": name, "is_entree": True}
+            if current_section == "breakfast":
+                breakfast.append(item)
+            elif current_section == "lunch":
+                lunch.append(item)
+        elif current_section == "lunch" and not is_beverage(name):
+            # Non-featured lunch items are sides (fruits, vegs, side dishes)
+            sides.append({"name": name, "is_entree": False})
 
-    result = {"date": date_key, "breakfast": breakfast, "lunch": lunch}
+    result = {"date": date_key, "breakfast": breakfast, "lunch": lunch, "sides": sides}
     _cache[cache_key] = result
     return result
 
