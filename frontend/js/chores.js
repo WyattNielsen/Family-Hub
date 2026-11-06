@@ -105,20 +105,17 @@ function isTodayChore(c) {
   const _d = new Date();
   const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
   const todayDow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][_d.getDay()];
-  if (c.completed) {
-    const completedAt = c.completed_at ? c.completed_at.split('T')[0] : null;
-    return completedAt === today;
+
+  // If there's a specific due_date, that's the source of truth
+  if (c.due_date) return c.due_date === today;
+
+  // No due_date — fall back to recurrence type to decide if due today
+  if (!c.recurrence) return true;
+  if (c.recurrence === 'weekdays') return new Date().getDay() >= 1 && new Date().getDay() <= 5;
+  if (c.recurrence === 'custom_days') {
+    return (c.recurrence_days||'').split(',').map(d=>d.trim()).includes(todayDow);
   }
-  if (!c.due_date && !c.recurrence) return true;
-  if (c.recurrence) {
-    if (c.recurrence === 'daily') return !c.due_date || c.due_date <= today;
-    if (c.recurrence === 'weekdays') { const dow = new Date().getDay(); return dow >= 1 && dow <= 5; }
-    if (c.recurrence === 'custom_days') {
-      return (c.recurrence_days||'').split(',').map(d=>d.trim()).includes(todayDow);
-    }
-    return c.due_date && c.due_date <= today;
-  }
-  return c.due_date && c.due_date <= today;
+  return true;
 }
 
 function renderChores() {
@@ -224,7 +221,7 @@ function renderChoreCard(c, color) {
   const tod = c.time_of_day || 'anytime';
   const todColor = TOD_CONFIG[tod]?.color || color;
   return `
-    <div class="chore-card ${isDone ? 'done' : ''}" id="chore-${c.id}">
+    <div class="chore-card ${isDone ? 'done' : ''}" id="chore-${c.id}" style="border-left:3px solid ${color};background:${color}18">
       <div class="chore-card-check ${isDone ? 'checked' : ''}"
            style="${isDone ? `background:${color};border-color:${color}` : `border-color:${color}`}"
            onclick="toggleChore(${c.id}, ${isDone})">
@@ -277,7 +274,7 @@ function renderChoreItemFull(c) {
   const rec = c.recurrence ? `🔁 ${c.recurrence === 'custom_days' ? c.recurrence_days : c.recurrence}` : '';
   const tod = c.time_of_day ? `<span class="chore-tod chore-tod-${c.time_of_day}">${TOD_CONFIG[c.time_of_day]?.emoji} ${c.time_of_day}</span>` : '';
   return `
-    <div class="chore-item ${isDone ? 'completed' : ''}" id="chore-${c.id}">
+    <div class="chore-item ${isDone ? 'completed' : ''}" id="chore-${c.id}" style="border-left:3px solid ${color};background:${color}18">
       <div class="chore-check ${isDone ? 'checked' : ''}"
            style="${isDone ? `background:${color};border-color:${color}` : `border-color:${color}`}"
            onclick="toggleChore(${c.id}, ${isDone})">${isDone ? '✓' : ''}</div>

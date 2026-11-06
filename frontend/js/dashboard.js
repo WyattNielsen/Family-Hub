@@ -41,9 +41,84 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadWeather();
   loadHAStatus();
   loadStocks();
+  loadMessagePreview();
   setInterval(loadHAStatus, 30000);
   setInterval(loadStocks, 5 * 60 * 1000);
+
+  // Auto-refresh all dashboard data every 5 minutes
+  setInterval(() => {
+    const h = new Date().getHours();
+    document.getElementById('timeGreeting').textContent = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+    document.getElementById('todayDate').textContent = new Date().toLocaleDateString('en-US', { timeZone: TZ,
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
+    loadTodayEvents();
+    loadUpcomingChores();
+    loadLunchMenu();
+    loadWeather();
+    loadMessagePreview();
+    loadMessageBadge();
+  }, 5 * 60 * 1000);
 });
+
+async function loadMessagePreview() {
+  const content = document.getElementById('msgPreviewContent');
+  if (!content) return;
+  try {
+    const msgs = await API.get('/api/messages/');
+    if (!msgs.length) {
+      content.innerHTML = `<span class="msg-preview-icon">💬</span><span class="msg-preview-text" style="color:var(--text3)">No messages yet — tap ✏️ to leave a note</span>`;
+      return;
+    }
+    const m = msgs[0];
+    const color  = m.color  || 'var(--text2)';
+    const avatar = m.avatar || '💬';
+    const name   = m.name   || 'Someone';
+    const extra  = msgs.length > 1 ? `+${msgs.length - 1} more` : '';
+    content.innerHTML = `
+      <span class="msg-preview-icon">💬</span>
+      <span class="msg-preview-from" style="color:${color}">${avatar} ${name}</span>
+      <span class="msg-preview-divider">·</span>
+      <span class="msg-preview-text">"${m.body}"</span>
+      ${extra ? `<span class="msg-preview-more">${extra} →</span>` : '<span class="msg-preview-more">→</span>'}
+    `;
+  } catch(e) { /* silently fail */ }
+}
+
+async function openComposeModal(e) {
+  e.preventDefault();
+  // Populate author dropdown
+  const sel = document.getElementById('composeAuthor');
+  sel.innerHTML = '<option value="">— Anonymous —</option>';
+  try {
+    const members = await API.get('/api/members/');
+    members.forEach(m => {
+      sel.innerHTML += `<option value="${m.id}">${m.avatar || '👤'} ${m.name}</option>`;
+    });
+  } catch(_) {}
+  document.getElementById('composeBody').value = '';
+  document.getElementById('composeModal').style.display = 'flex';
+  setTimeout(() => document.getElementById('composeBody').focus(), 100);
+}
+
+function closeComposeModal() {
+  document.getElementById('composeModal').style.display = 'none';
+}
+
+async function postQuickMessage() {
+  const body = document.getElementById('composeBody').value.trim();
+  if (!body) return;
+  const author_id = document.getElementById('composeAuthor').value || null;
+  try {
+    await API.post('/api/messages/', { body, author_id: author_id ? parseInt(author_id) : null });
+    closeComposeModal();
+    showToast('Message posted!', 'success');
+    loadMessagePreview();
+    loadMessageBadge();
+  } catch(e) {
+    showToast('Failed to post message', 'error');
+  }
+}
 
 async function loadTodayEvents() {
   const el = document.getElementById('todayEvents');
@@ -128,7 +203,28 @@ async function loadUpcomingChores() {
     ]);
 
     if (!chores.length) {
-      el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>';
+      // Show mini leaderboard instead of blank state
+      try {
+        const lb = await API.get('/api/chores/leaderboard');
+        if (lb && lb.length) {
+          const medals = ['🥇','🥈','🥉'];
+          el.innerHTML = `
+            <div class="dash-chores-done">
+              <div class="dash-chores-done-title">🙌 All done today!</div>
+              <div class="dash-mini-lb">
+                ${lb.slice(0, 3).map((p, i) => `
+                  <div class="dash-mini-lb-row">
+                    <span class="dash-mini-lb-medal">${medals[i] || ''}</span>
+                    <span class="dash-mini-lb-avatar">${p.avatar || '👤'}</span>
+                    <span class="dash-mini-lb-name" style="color:${p.color}">${p.name}</span>
+                    <span class="dash-mini-lb-pts" style="color:${p.color}">${p.streak > 0 ? `🔥 ${p.streak}` : '—'}<small> day streak</small></span>
+                  </div>`).join('')}
+              </div>
+            </div>`;
+        } else {
+          el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>';
+        }
+      } catch { el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>'; }
       return;
     }
 
@@ -170,7 +266,7 @@ async function loadUpcomingChores() {
 
 function renderDashboardChore(c, color) {
   return `
-    <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}">
+    <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}" style="border-left:3px solid ${color};background:${color}18">
       <div class="dashboard-chore-check ${c.completed ? 'checked' : ''}"
            style="${c.completed ? `background:${color}` : `border-color:${color}`}"
            onclick="toggleDashboardChore(${c.id}, ${c.completed})">
@@ -378,12 +474,23 @@ async function loadWeather() {
     const data = await API.get('/api/weather/');
     if (data.error === 'no_location') { el.innerHTML = ''; return; }
     if (data.error) { el.innerHTML = ''; return; }
+    const t = data.tomorrow;
+    const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
     el.innerHTML = `
       <div class="weather-icon">${data.icon}</div>
       <div class="weather-temp">${Math.round(data.temp)}°F</div>
       <div class="weather-condition">${data.condition}</div>
       <div class="weather-hilo">↑${Math.round(data.high)}° ↓${Math.round(data.low)}°</div>
       ${data.city ? `<div class="weather-city">${data.city}</div>` : ''}
+      ${t && t.high != null ? `
+        <div class="weather-tomorrow">
+          <div class="weather-tmr-label">Tomorrow</div>
+          <div class="weather-tmr-row">
+            <span class="weather-tmr-icon">${t.icon}</span>
+            <span class="weather-tmr-hilo">↑${Math.round(t.high)}° ↓${Math.round(t.low)}°</span>
+            ${precipStr}
+          </div>
+        </div>` : ''}
     `;
   } catch(e) {
     el.innerHTML = '';
@@ -399,14 +506,15 @@ async function loadStocks() {
     const stocks = await API.get(`/api/stocks/?symbols=${encodeURIComponent(symbols)}`);
     if (!stocks.length) { el.style.display = 'none'; return; }
     el.style.display = 'flex';
-    el.innerHTML = stocks.map(s => {
+    const items = stocks.map(s => {
       const up = s.change_pct >= 0;
       return `<div class="ticker-item">
         <span class="ticker-symbol">${s.symbol}</span>
         <span class="ticker-price">$${s.price_fmt}</span>
         <span class="ticker-change ${up ? 'ticker-up' : 'ticker-down'}">${up ? '▲' : '▼'} ${Math.abs(s.change_pct).toFixed(2)}%</span>
       </div>`;
-    }).join('<div class="ticker-sep">·</div>');
+    }).join('<div class="ticker-sep">|</div>');
+    el.innerHTML = `<div class="ticker-scroll">${items}</div>`;
   } catch(e) {
     if (el) el.style.display = 'none';
   }
@@ -424,10 +532,10 @@ async function loadLunchMenu() {
   const dateKey = target.getFullYear() + '-' +
     String(target.getMonth() + 1).padStart(2, '0') + '-' +
     String(target.getDate()).padStart(2, '0');
-  const displayDate = target.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const displayDate = target.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
   const titleEl = document.getElementById('lunchMenuTitle');
-  if (titleEl) titleEl.textContent = '🍽️ ' + (isAfter5pm ? 'Tomorrow — ' : '') + displayDate;
+  if (titleEl) titleEl.textContent = '🍽️ ' + (isAfter5pm ? 'Tomorrow · ' : 'Today · ') + displayDate;
 
   try {
     const data = await API.get(`/api/lunch/today?date=${dateKey}`);

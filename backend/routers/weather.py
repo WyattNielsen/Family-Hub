@@ -93,11 +93,11 @@ async def get_weather():
                     "latitude": lat,
                     "longitude": lon,
                     "current": "temperature_2m,weather_code",
-                    "daily": "temperature_2m_max,temperature_2m_min",
+                    "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max",
                     "temperature_unit": "fahrenheit",
                     "wind_speed_unit": "mph",
                     "timezone": "auto",
-                    "forecast_days": 1,
+                    "forecast_days": 2,
                 }
             )
             if resp.status_code != 200:
@@ -112,6 +112,11 @@ async def get_weather():
     code = current.get("weather_code", 0)
     condition, icon = get_condition(code)
 
+    # Tomorrow's forecast (index 1)
+    tmr_code = (daily.get("weather_code") or [0, 0])[1]
+    tmr_condition, tmr_icon = get_condition(tmr_code)
+    tmr_precip = (daily.get("precipitation_probability_max") or [None, None])[1]
+
     return {
         "temp": current.get("temperature_2m"),
         "high": daily.get("temperature_2m_max", [None])[0],
@@ -119,4 +124,11 @@ async def get_weather():
         "condition": condition,
         "icon": icon,
         "city": city,
+        "tomorrow": {
+            "high": (daily.get("temperature_2m_max") or [None, None])[1],
+            "low": (daily.get("temperature_2m_min") or [None, None])[1],
+            "condition": tmr_condition,
+            "icon": tmr_icon,
+            "precip": tmr_precip,
+        }
     }

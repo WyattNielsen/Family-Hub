@@ -106,7 +106,7 @@ function renderCalendar() {
       <div class="cal-events">
         ${dayEvents.slice(0, 3).map(e => {
           const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
-          return `<div class="cal-event-dot" style="background:${color}">${e.title}</div>`;
+          return `<div class="cal-event-dot" style="background:${color}" onclick="showEventDetail(${e.id},event)">${e.title}</div>`;
         }).join('')}
         ${dayEvents.length > 3 ? `<div style="font-size:10px;color:var(--text3);font-weight:700">+${dayEvents.length - 3} more</div>` : ''}
       </div>
@@ -174,6 +174,7 @@ function openEventModal(dateStr) {
   document.getElementById('eventModalTitle').textContent = 'Add Event';
   document.getElementById('eventTitle').value = '';
   document.getElementById('eventDesc').value = '';
+  document.getElementById('eventLocation').value = '';
   document.getElementById('eventAllDay').checked = false;
   document.getElementById('eventMember').value = '';
   // Default to first real calendar (index 1, after "Don't sync")
@@ -203,6 +204,7 @@ async function saveEvent() {
   const payload = {
     title,
     description: document.getElementById('eventDesc').value.trim(),
+    location: document.getElementById('eventLocation').value.trim(),
     start_datetime: document.getElementById('eventStart').value,
     end_datetime: document.getElementById('eventEnd').value,
     all_day: document.getElementById('eventAllDay').checked,
@@ -230,6 +232,79 @@ async function deleteEvent(id) {
   } catch(e) {
     showToast('Failed to delete', 'error');
   }
+}
+
+function showEventDetail(eventId, domEvent) {
+  domEvent.stopPropagation();
+  const e = allEvents.find(ev => ev.id === eventId);
+  if (!e) return;
+
+  const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
+
+  // Color bar
+  document.getElementById('eventDetailBar').style.background = color;
+
+  // Title
+  document.getElementById('eventDetailTitle').textContent = e.title;
+
+  // Time
+  let timeStr;
+  if (e.all_day) {
+    const start = new Date(e.start_datetime.split('T')[0] + 'T12:00:00');
+    const end   = e.end_datetime ? new Date(e.end_datetime.split('T')[0] + 'T12:00:00') : null;
+    const fmt = d => d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', timeZone: TZ });
+    timeStr = end && e.end_datetime.split('T')[0] !== e.start_datetime.split('T')[0]
+      ? `${fmt(start)} – ${fmt(end)}`
+      : fmt(start);
+    timeStr += ' · All day';
+  } else {
+    const start = new Date(e.start_datetime);
+    timeStr = start.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', timeZone: TZ })
+      + ' · ' + formatTime(e.start_datetime);
+    if (e.end_datetime) timeStr += ' – ' + formatTime(e.end_datetime);
+  }
+  document.getElementById('eventDetailTime').textContent = timeStr;
+
+  // Location
+  const locEl = document.getElementById('eventDetailLocation');
+  if (e.location && e.location.trim()) {
+    const mapsUrl = `https://maps.google.com/?q=${encodeURIComponent(e.location)}`;
+    locEl.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">📍 ${e.location}</a>`;
+    locEl.style.display = 'block';
+  } else {
+    locEl.style.display = 'none';
+  }
+
+  // Description
+  const descEl = document.getElementById('eventDetailDesc');
+  if (e.description && e.description.trim()) {
+    descEl.textContent = e.description;
+    descEl.style.display = 'block';
+  } else {
+    descEl.style.display = 'none';
+  }
+
+  // Tags (member / family)
+  const tagsEl = document.getElementById('eventDetailTags');
+  let tags = '';
+  if (e.member_name) {
+    tags += `<span class="event-detail-tag" style="background:${color}22;color:${color}">${e.member_name}</span>`;
+  } else if (e.is_family) {
+    tags += `<span class="event-detail-tag" style="background:#F6BF2622;color:#c49a00">🏠 Family</span>`;
+  }
+  tagsEl.innerHTML = tags;
+
+  // Delete button
+  document.getElementById('eventDetailDelete').onclick = () => {
+    closeEventDetail();
+    deleteEvent(eventId);
+  };
+
+  document.getElementById('eventDetailModal').style.display = 'flex';
+}
+
+function closeEventDetail() {
+  document.getElementById('eventDetailModal').style.display = 'none';
 }
 
 async function syncGoogle() {

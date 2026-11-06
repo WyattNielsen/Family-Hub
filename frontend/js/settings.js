@@ -4,12 +4,23 @@ let members = [];
 let editingMemberId = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Tab switching
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    });
+  });
+
   loadMembers();
   loadGoogleStatus();
   loadSlideshowSettings();
   loadWeatherZip();
   loadHASettings();
   loadTimezone();
+  loadNightMode();
   loadLunchSettings();
   loadStockSettings();
   loadCameraSettings();
@@ -411,12 +422,11 @@ async function loadWeatherZip() {
 
 async function saveWeatherZip() {
   const zip = (document.getElementById('weatherZip')?.value || '').trim();
-  const status = document.getElementById('weatherSaveStatus');
   try {
     await API.post('/api/settings/', { weather_zip: zip, weather_lat: '', weather_lon: '', weather_city: '' });
-    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+    showToast('✅ Weather location saved!', 'success');
   } catch(e) {
-    if (status) status.textContent = '❌ Failed to save';
+    showToast('Failed to save', 'error');
   }
 }
 
@@ -430,12 +440,11 @@ async function loadTimezone() {
 
 async function saveTimezone() {
   const tz = document.getElementById('timezoneSelect')?.value || 'America/New_York';
-  const status = document.getElementById('timezoneSaveStatus');
   try {
     await API.post('/api/settings/', { timezone: tz });
-    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+    showToast('✅ Timezone saved!', 'success');
   } catch(e) {
-    if (status) status.textContent = '❌ Failed to save';
+    showToast('Failed to save', 'error');
   }
 }
 
@@ -486,7 +495,6 @@ async function saveHASettings() {
     const name = row.querySelector('.ha-entity-name')?.value.trim();
     if (eid) entities.push({ entity_id: eid, name: name || eid });
   });
-  const status = document.getElementById('haSaveStatus');
   try {
     const alarmCode = document.getElementById('haAlarmCode')?.value.trim() || '';
     await API.post('/api/settings/', {
@@ -495,9 +503,9 @@ async function saveHASettings() {
       ha_entities: JSON.stringify(entities),
       ha_alarm_code: alarmCode,
     });
-    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+    showToast('✅ Home Assistant settings saved!', 'success');
   } catch(e) {
-    if (status) status.textContent = '❌ Failed to save';
+    showToast('Failed to save', 'error');
   }
 }
 
@@ -517,16 +525,15 @@ async function saveLunchSettings() {
   const district = (document.getElementById('lunchDistrict')?.value || '').trim();
   const slug = (document.getElementById('lunchSchoolSlug')?.value || '').trim();
   const menuType = (document.getElementById('lunchMenuType')?.value || '').trim();
-  const status = document.getElementById('lunchSaveStatus');
   try {
     await API.post('/api/settings/', {
       lunch_district: district,
       lunch_school_slug: slug,
       lunch_menu_type: menuType,
     });
-    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+    showToast('✅ Lunch menu settings saved!', 'success');
   } catch(e) {
-    if (status) status.textContent = '❌ Failed to save';
+    showToast('Failed to save', 'error');
   }
 }
 
@@ -540,12 +547,11 @@ async function loadStockSettings() {
 
 async function saveStockSettings() {
   const symbols = (document.getElementById('stockSymbols')?.value || '').trim();
-  const status = document.getElementById('stockSaveStatus');
   try {
     await API.post('/api/settings/', { stock_symbols: symbols });
-    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+    showToast('✅ Stock tickers saved!', 'success');
   } catch(e) {
-    if (status) status.textContent = '❌ Failed to save';
+    showToast('Failed to save', 'error');
   }
 }
 
@@ -579,12 +585,11 @@ async function saveCameraSettings() {
     const haEntity = row.querySelector('.cam-ha-entity')?.value.trim();
     if (name && haEntity) cameras.push({ name, ha_entity_id: haEntity });
   });
-  const status = document.getElementById('cameraSaveStatus');
   try {
     await API.post('/api/security/cameras', { cameras });
-    if (status) { status.textContent = '✅ Saved!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+    showToast('✅ Cameras saved!', 'success');
   } catch(e) {
-    if (status) status.textContent = '❌ Failed to save';
+    showToast('Failed to save', 'error');
   }
 }
 
@@ -599,5 +604,35 @@ async function saveSlideShowSettings() {
     showToast('✅ Slideshow settings saved!', 'success');
   } catch(e) {
     showToast('Failed to save settings', 'error');
+  }
+}
+
+async function loadNightMode() {
+  try {
+    const [s, e, d] = await Promise.all([
+      API.get('/api/settings/dark_mode_start').catch(() => ({value: '21'})),
+      API.get('/api/settings/dark_mode_end').catch(() => ({value: '7'})),
+      API.get('/api/settings/dim_minutes').catch(() => ({value: '5'}))
+    ]);
+    const sel = v => parseInt(v?.value || '0');
+    document.getElementById('darkStart').value  = sel(s) || 21;
+    document.getElementById('darkEnd').value    = sel(e) || 7;
+    document.getElementById('dimMinutes').value = sel(d) || 5;
+  } catch(e) {}
+}
+
+async function saveNightMode() {
+  const start = document.getElementById('darkStart').value;
+  const end   = document.getElementById('darkEnd').value;
+  const dim   = document.getElementById('dimMinutes').value;
+  try {
+    await API.post('/api/settings/', {
+      dark_mode_start: start,
+      dark_mode_end:   end,
+      dim_minutes:     dim
+    });
+    showToast('🌙 Night mode saved!', 'success');
+  } catch(e) {
+    showToast('Failed to save night mode', 'error');
   }
 }

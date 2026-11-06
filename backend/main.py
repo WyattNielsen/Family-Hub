@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import os
 
 from database import init_db
-from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security
+from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,6 +33,7 @@ app.include_router(weather.router, prefix="/api/weather", tags=["weather"])
 app.include_router(homeassistant.router, prefix="/api/homeassistant", tags=["homeassistant"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
 app.include_router(security.router, prefix="/api/security", tags=["security"])
+app.include_router(messages.router, prefix="/api/messages", tags=["messages"])
 
 # Serve frontend static files (configurable for LXC/native installs)
 FRONTEND_DIR = os.environ.get("FRONTEND_DIR", "/app/frontend")

@@ -103,5 +103,111 @@ function toLocalISO(date) {
   return `${yr}-${m}-${day}T${timePart.replace('24:', '00:')}`;
 }
 
-// Init sidebar on all pages
-document.addEventListener('DOMContentLoaded', loadSidebarMembers);
+// ── Night Mode + Auto-dim ──────────────────────────────────────
+let _darkStart = 21;
+let _darkEnd   = 7;
+let _dimDelay  = 5 * 60 * 1000;
+let _dimTimer  = null;
+
+function _applyTheme() {
+  const h = new Date().getHours();
+  const isNight = _darkStart > _darkEnd
+    ? (h >= _darkStart || h < _darkEnd)
+    : (h >= _darkStart && h < _darkEnd);
+  document.documentElement.setAttribute('data-theme', isNight ? 'dark' : 'light');
+}
+
+function _resetDim() {
+  document.documentElement.classList.remove('dimmed');
+  clearTimeout(_dimTimer);
+  if (_dimDelay > 0) {
+    _dimTimer = setTimeout(() => document.documentElement.classList.add('dimmed'), _dimDelay);
+  }
+}
+
+async function initTheme() {
+  try {
+    const [s, e, d] = await Promise.all([
+      API.get('/api/settings/dark_mode_start').catch(() => ({value: '21'})),
+      API.get('/api/settings/dark_mode_end').catch(() => ({value: '7'})),
+      API.get('/api/settings/dim_minutes').catch(() => ({value: '5'}))
+    ]);
+    _darkStart = parseInt(s.value || '21');
+    _darkEnd   = parseInt(e.value || '7');
+    _dimDelay  = parseInt(d.value || '5') * 60000;
+  } catch(e) {}
+  _applyTheme();
+  setInterval(_applyTheme, 60000);
+  ['touchstart', 'mousemove', 'keydown', 'click'].forEach(ev =>
+    document.addEventListener(ev, _resetDim, { passive: true })
+  );
+  _resetDim();
+}
+
+// ── Message Badge (all pages) ─────────────────────────────────
+async function loadMessageBadge() {
+  const badge = document.getElementById('msgNavBadge');
+  if (!badge) return;
+  // If on messages page, mark as seen and hide badge
+  if (window.location.pathname === '/messages.html') {
+    localStorage.setItem('msg_last_seen', new Date().toISOString());
+    badge.style.display = 'none';
+    return;
+  }
+  try {
+    const msgs = await API.get('/api/messages/');
+    const lastSeen = localStorage.getItem('msg_last_seen') || '1970-01-01T00:00:00Z';
+    const unread = msgs.filter(m => new Date(m.created_at + 'Z') > new Date(lastSeen));
+    if (unread.length > 0) {
+      badge.textContent = unread.length > 9 ? '9+' : unread.length;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch(e) {}
+}
+
+// ── PWA Install Prompt ────────────────────────────────────────
+let _installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  _installPrompt = e;
+  const btn = document.getElementById('pwaInstallBtn');
+  if (btn) btn.style.display = 'flex';
+});
+window.addEventListener('appinstalled', () => {
+  _installPrompt = null;
+  const btn = document.getElementById('pwaInstallBtn');
+  if (btn) btn.style.display = 'none';
+});
+function pwaInstall() {
+  if (!_installPrompt) return;
+  _installPrompt.prompt();
+  _installPrompt.userChoice.then(() => { _installPrompt = null; });
+}
+
+// ── Fullscreen ────────────────────────────────────────────────
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+function _updateFullscreenBtn() {
+  const btn = document.getElementById('fullscreenBtn');
+  if (!btn) return;
+  btn.title = document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen';
+  btn.innerHTML = document.fullscreenElement
+    ? '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3"/></svg>'
+    : '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>';
+}
+document.addEventListener('fullscreenchange', _updateFullscreenBtn);
+
+// Init sidebar + theme on all pages
+document.addEventListener('DOMContentLoaded', () => {
+  loadSidebarMembers();
+  initTheme();
+  _updateFullscreenBtn();
+  loadMessageBadge();
+});
