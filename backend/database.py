@@ -107,6 +107,18 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (author_id) REFERENCES members(id) ON DELETE SET NULL
         );
+
+        CREATE TABLE IF NOT EXISTS apple_calendar_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            color TEXT DEFAULT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+        );
     """)
 
     conn.commit()
@@ -114,6 +126,46 @@ def init_db():
     # Run migrations for existing databases
     try:
         conn.execute("ALTER TABLE members ADD COLUMN google_calendar_ids TEXT DEFAULT NULL")
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute("ALTER TABLE members ADD COLUMN apple_id TEXT DEFAULT NULL")
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute("ALTER TABLE members ADD COLUMN apple_app_password TEXT DEFAULT NULL")
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute("ALTER TABLE events ADD COLUMN external_event_id TEXT DEFAULT NULL")
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute("ALTER TABLE events ADD COLUMN external_source_id INTEGER DEFAULT NULL")
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS apple_calendar_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            color TEXT DEFAULT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+        )""")
         conn.commit()
     except Exception:
         pass

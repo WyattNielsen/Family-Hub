@@ -38,9 +38,10 @@ A self-hosted family dashboard built for a wall-mounted touchscreen. Combines ca
 - Month view with color-coded event dots per family member
 - **Tap any event** to see a detail popover — title, time, location (tappable → Google Maps), description, person tag, delete button
 - Tap a day to see all events in a side panel
-- Google Calendar sync — shared family calendar + per-member calendars
+- Google Calendar sync — per-person calendars (including subscribed school/sports calendars)
+- Apple Calendar sync — iCloud (CalDAV) and shared ICS/webcal feeds per person
 - Location field synced from Google Calendar automatically
-- Add events directly with optional location and Google Calendar targeting
+- Add events for a selected person — writes to that person's primary Google Calendar
 
 ### Chores
 - Daily chore assignments per family member with morning/afternoon/evening grouping
@@ -107,12 +108,28 @@ Required only for Google Calendar sync.
 1. Go to [https://console.cloud.google.com](https://console.cloud.google.com)
 2. Create a project → enable the **Google Calendar API**
 3. Create **OAuth 2.0 Client ID** credentials (Web application type)
-4. Add these **Authorized redirect URIs** (replace with your `APP_BASE_URL`):
+4. Copy the Client ID and Secret into your `.env`
+5. Set a `TOKEN_IMPORT_SECRET` in `.env` (see `.env.example`)
+
+**Proxmox / LAN note:** Google rejects most `http://192.168.x.x` redirect URIs. Prefer the local helper:
+
+1. In Google Cloud Console, add this **Authorized redirect URI**:
    ```
-   http://192.168.1.100:3000/api/auth/google/callback/family
-   http://192.168.1.100:3000/api/auth/google/callback/member
+   http://127.0.0.1:8765/callback
    ```
-5. Copy the Client ID and Secret into your `.env`
+2. On your PC (with the same Google client ID/secret and the server’s `TOKEN_IMPORT_SECRET`):
+   ```bash
+   python tools/google-oauth-local/oauth_local.py \
+     --hub http://192.168.1.50:3000 \
+     --target family
+   ```
+   Use `--target member --member-id N` for a person, or `--target photos` for Photos.
+
+If you have a public HTTPS `APP_BASE_URL`, you can instead register the in-app callbacks and use **Connect Google** in Settings:
+```
+https://your-host/api/auth/google/callback/family
+https://your-host/api/auth/google/callback/member
+```
 
 ---
 
@@ -237,11 +254,11 @@ Select your local timezone — affects all date/time displays and the lunch menu
 ### Weather
 Enter your US zip code for current conditions and tomorrow's forecast on the dashboard.
 
-### Google Calendar
-- Connect a shared family Google account for the main calendar
-- Choose which Google Calendars to sync
-- New events created in Family Hub are added to your selected calendar
-- Event locations sync automatically from Google Calendar
+### Google & Apple Calendar
+- Connect each person's Google and/or Apple calendars in Settings → Family
+- Google: choose calendars to sync in; new events write to that person's **primary** Google Calendar
+- Apple: connect iCloud with an [app-specific password](https://appleid.apple.com), or paste a shared `webcal://` / ICS URL
+- Apple sources are sync-in only (read); event locations sync from Google when present
 
 ### School Lunch Menu
 Enter your Nutrislice school domain (e.g. `bcps`) in Settings → Integrations → Lunch.

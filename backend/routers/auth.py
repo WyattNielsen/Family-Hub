@@ -1,20 +1,34 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
 import httpx
 import os
+import secrets
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from typing import Literal, Optional
 
 router = APIRouter()
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000")
+TOKEN_IMPORT_SECRET = os.environ.get("TOKEN_IMPORT_SECRET", "").strip()
 
 SCOPES = "https://www.googleapis.com/auth/calendar openid email profile"
 PHOTOS_SCOPES = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly openid email profile"
+
+
+class GoogleTokenImport(BaseModel):
+    """Tokens obtained via the local OAuth helper (tools/google-oauth-local)."""
+    target: Literal["family", "member", "photos"]
+    access_token: str
+    refresh_token: Optional[str] = None
+    expires_in: int = Field(default=3600, ge=1)
+    email: Optional[str] = None
+    member_id: Optional[int] = None
 
 def build_oauth_url(redirect_uri: str, state: str) -> str:
     params = {
@@ -53,20 +67,7 @@ async def google_callback_family(code: str = Query(...), state: str = Query(...)
     redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/family"
     tokens = await _exchange_code(code, redirect_uri)
     email = await _get_google_email(tokens["access_token"])
-    expiry = (datetime.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in", 3600))).isoformat()
-
-    conn = get_db()
-    existing = conn.execute("SELECT id FROM family_google_calendar LIMIT 1").fetchone()
-    if existing:
-        conn.execute("""UPDATE family_google_calendar
-                       SET google_access_token=?, google_refresh_token=?, google_token_expiry=?, google_email=?, updated_at=datetime('now')""",
-                     (tokens["access_token"], tokens.get("refresh_token"), expiry, email))
-    else:
-        conn.execute("""INSERT INTO family_google_calendar (google_access_token, google_refresh_token, google_token_expiry, google_email)
-                       VALUES (?, ?, ?, ?)""",
-                     (tokens["access_token"], tokens.get("refresh_token"), expiry, email))
-    conn.commit()
-    conn.close()
+    _store_family_tokens(tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email)
     return RedirectResponse(f"{APP_BASE_URL}/?connected=family")
 
 @router.get("/google/callback/member")
@@ -76,15 +77,7 @@ async def google_callback_member(code: str = Query(...), state: str = Query(...)
     redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/member"
     tokens = await _exchange_code(code, redirect_uri)
     email = await _get_google_email(tokens["access_token"])
-    expiry = (datetime.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in", 3600))).isoformat()
-
-    conn = get_db()
-    conn.execute("""UPDATE members
-                   SET google_access_token=?, google_refresh_token=?, google_token_expiry=?, google_email=?
-                   WHERE id=?""",
-                 (tokens["access_token"], tokens.get("refresh_token"), expiry, email, member_id))
-    conn.commit()
-    conn.close()
+    _store_member_tokens(member_id, tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email)
     return RedirectResponse(f"{APP_BASE_URL}/settings.html?connected=member&id={member_id}")
 
 @router.get("/google/connect/photos")
@@ -109,20 +102,49 @@ async def google_callback_photos(code: str = Query(...), state: str = Query(...)
     redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/photos"
     tokens = await _exchange_code(code, redirect_uri)
     email = await _get_google_email(tokens["access_token"])
-    expiry = (datetime.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in", 3600))).isoformat()
-    conn = get_db()
-    existing = conn.execute("SELECT id FROM photos_auth LIMIT 1").fetchone()
-    if existing:
-        conn.execute("""UPDATE photos_auth
-                       SET google_access_token=?, google_refresh_token=?, google_token_expiry=?, google_email=?, updated_at=datetime('now')""",
-                     (tokens["access_token"], tokens.get("refresh_token"), expiry, email))
-    else:
-        conn.execute("""INSERT INTO photos_auth (google_access_token, google_refresh_token, google_token_expiry, google_email)
-                       VALUES (?, ?, ?, ?)""",
-                     (tokens["access_token"], tokens.get("refresh_token"), expiry, email))
-    conn.commit()
-    conn.close()
+    _store_photos_tokens(tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email)
     return RedirectResponse(f"{APP_BASE_URL}/settings.html?connected=photos")
+
+
+@router.post("/google/import")
+async def import_google_tokens(
+    payload: GoogleTokenImport,
+    x_familyhub_import_secret: Optional[str] = Header(default=None),
+):
+    """Accept tokens from the local OAuth helper (Proxmox / LAN installs).
+
+    Requires TOKEN_IMPORT_SECRET to be set on the server and sent as
+    X-FamilyHub-Import-Secret. Disabled when the secret is unset.
+    """
+    if not TOKEN_IMPORT_SECRET:
+        raise HTTPException(
+            status_code=403,
+            detail="Token import is disabled. Set TOKEN_IMPORT_SECRET on the server.",
+        )
+    provided = x_familyhub_import_secret or ""
+    secret_ok = (
+        len(provided) == len(TOKEN_IMPORT_SECRET)
+        and secrets.compare_digest(provided, TOKEN_IMPORT_SECRET)
+    )
+    if not secret_ok:
+        raise HTTPException(status_code=401, detail="Invalid import secret")
+
+    email = (payload.email or "").strip()
+    if not email:
+        email = await _get_google_email(payload.access_token)
+
+    if payload.target == "family":
+        _store_family_tokens(payload.access_token, payload.refresh_token, payload.expires_in, email)
+    elif payload.target == "member":
+        if payload.member_id is None:
+            raise HTTPException(status_code=400, detail="member_id is required for target=member")
+        _store_member_tokens(
+            payload.member_id, payload.access_token, payload.refresh_token, payload.expires_in, email
+        )
+    else:
+        _store_photos_tokens(payload.access_token, payload.refresh_token, payload.expires_in, email)
+
+    return {"ok": True, "target": payload.target, "email": email, "member_id": payload.member_id}
 
 @router.delete("/google/disconnect/photos")
 def disconnect_photos():
@@ -175,6 +197,75 @@ def get_google_status():
         "family": {"connected": bool(family), "email": family["google_email"] if family else None},
         "members": [{"id": m["id"], "name": m["name"], "connected": bool(m["google_email"]), "email": m["google_email"]} for m in members]
     }
+
+def _token_expiry(expires_in: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+
+
+def _store_family_tokens(access_token: str, refresh_token: Optional[str], expires_in: int, email: str) -> None:
+    expiry = _token_expiry(expires_in)
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM family_google_calendar LIMIT 1").fetchone()
+    if existing:
+        conn.execute(
+            """UPDATE family_google_calendar
+               SET google_access_token=?, google_refresh_token=COALESCE(?, google_refresh_token),
+                   google_token_expiry=?, google_email=?, updated_at=datetime('now')""",
+            (access_token, refresh_token, expiry, email),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO family_google_calendar
+               (google_access_token, google_refresh_token, google_token_expiry, google_email)
+               VALUES (?, ?, ?, ?)""",
+            (access_token, refresh_token, expiry, email),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _store_member_tokens(
+    member_id: int, access_token: str, refresh_token: Optional[str], expires_in: int, email: str
+) -> None:
+    conn = get_db()
+    member = conn.execute("SELECT id FROM members WHERE id=?", (member_id,)).fetchone()
+    if not member:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Member not found")
+    expiry = _token_expiry(expires_in)
+    conn.execute(
+        """UPDATE members
+           SET google_access_token=?,
+               google_refresh_token=COALESCE(?, google_refresh_token),
+               google_token_expiry=?, google_email=?
+           WHERE id=?""",
+        (access_token, refresh_token, expiry, email, member_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _store_photos_tokens(access_token: str, refresh_token: Optional[str], expires_in: int, email: str) -> None:
+    expiry = _token_expiry(expires_in)
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM photos_auth LIMIT 1").fetchone()
+    if existing:
+        conn.execute(
+            """UPDATE photos_auth
+               SET google_access_token=?, google_refresh_token=COALESCE(?, google_refresh_token),
+                   google_token_expiry=?, google_email=?, updated_at=datetime('now')""",
+            (access_token, refresh_token, expiry, email),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO photos_auth
+               (google_access_token, google_refresh_token, google_token_expiry, google_email)
+               VALUES (?, ?, ?, ?)""",
+            (access_token, refresh_token, expiry, email),
+        )
+    conn.commit()
+    conn.close()
+
 
 async def _exchange_code(code: str, redirect_uri: str) -> dict:
     async with httpx.AsyncClient() as client:
