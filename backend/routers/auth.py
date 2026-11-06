@@ -180,8 +180,17 @@ def disconnect_member(member_id: int):
     conn = get_db()
     conn.execute("""UPDATE members
                    SET google_access_token=NULL, google_refresh_token=NULL,
-                       google_token_expiry=NULL, google_email=NULL
+                       google_token_expiry=NULL, google_email=NULL,
+                       google_calendar_ids=NULL
                    WHERE id=?""", (member_id,))
+    # Drop inbound Google sync rows; keep locally created events that were pushed
+    # (those have google_calendar_id set) and Apple/external imports.
+    conn.execute(
+        """DELETE FROM events
+           WHERE member_id=? AND google_event_id IS NOT NULL AND google_calendar_id IS NULL
+             AND external_event_id IS NULL""",
+        (member_id,),
+    )
     conn.commit()
     conn.close()
     return {"ok": True}

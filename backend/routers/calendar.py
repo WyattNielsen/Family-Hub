@@ -38,7 +38,6 @@ class EventCreate(BaseModel):
     is_family: bool = False
     color: Optional[str] = None
     recurrence: Optional[str] = None
-    target_calendar_id: Optional[str] = None
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -114,11 +113,16 @@ def _build_google_body(event_row: dict, tz: str = "America/New_York") -> dict:
 async def _push_to_google(event_row: dict, conn) -> tuple:
     """Push a locally created event to the selected person's primary Google calendar.
 
-    Synced-in events (google_event_id set, no google_calendar_id) are left alone.
+    Skips externally synced events (Apple/ICS) and inbound Google sync rows
+    (google_event_id set without google_calendar_id).
     Returns (google_event_id, calendar_id) or (None, None) on failure / skip.
     """
     member_id = event_row.get("member_id")
     if not member_id:
+        return None, None
+
+    # Apple/ICS (and other external) imports — never create/update on Google from these.
+    if event_row.get("external_event_id") or event_row.get("external_source_id"):
         return None, None
 
     # Inbound Google sync events have an id but no write calendar — don't re-home them.
@@ -403,11 +407,19 @@ async def _sync_calendars(access_token: str, calendar_ids: list, conn, is_family
         # which contain # characters (e.g. en.usa#holiday@group.v.calendar.google.com)
         encoded_cal_id = quote(cal_id, safe='')
 
+        window_start, window_end = apple_sync.sync_window()
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"https://www.googleapis.com/calendar/v3/calendars/{encoded_cal_id}/events",
                 headers={"Authorization": f"Bearer {access_token}"},
-                params={"timeMin": "2025-01-01T00:00:00Z", "singleEvents": "true", "orderBy": "startTime", "maxResults": "2500", "timeZone": get_app_tz()}
+                params={
+                    "timeMin": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "timeMax": window_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "singleEvents": "true",
+                    "orderBy": "startTime",
+                    "maxResults": "2500",
+                    "timeZone": get_app_tz(),
+                },
             )
             if resp.status_code != 200:
                 print(f"Calendar fetch failed for {cal_id}: {resp.status_code} {resp.text[:200]}")

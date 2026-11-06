@@ -67,15 +67,30 @@ def _event_fields_from_component(component, fallback_color: Optional[str] = None
         end, end_all_day = _as_utc_naive_iso(dtend.dt)
         all_day = 1 if all_day or end_all_day else 0
     else:
-        # No DTEND — all-day defaults to same day; timed defaults to +1 hour
-        if all_day:
+        end = None
+
+    # All-day iCal DTEND is exclusive (same as Google). Normalize so single-day
+    # events use start+1 day, matching Google sync + frontend display logic.
+    if all_day:
+        try:
+            start_d = date.fromisoformat(str(start)[:10])
+            if end:
+                end_d = date.fromisoformat(str(end)[:10])
+            else:
+                end_d = start_d
+            # Missing or inclusive-looking end → exclusive next day
+            if end_d <= start_d:
+                end_d = start_d + timedelta(days=1)
+            end = end_d.isoformat()
+            start = start_d.isoformat()
+        except Exception:
+            end = end or start
+    elif end is None:
+        try:
+            end = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat(timespec="seconds")
+        except Exception:
             end = start
-        else:
-            try:
-                end_dt = datetime.fromisoformat(start) + timedelta(hours=1)
-                end = end_dt.isoformat(timespec="seconds")
-            except Exception:
-                end = start
+
     return {
         "uid": uid,
         "title": summary,
