@@ -38,10 +38,10 @@ A self-hosted family dashboard built for a wall-mounted touchscreen. Combines ca
 - Month view with color-coded event dots per family member
 - **Tap any event** to see a detail popover — title, time, location (tappable → Google Maps), description, person tag, delete button
 - Tap a day to see all events in a side panel
-- Google Calendar sync — per-person calendars (including subscribed school/sports calendars)
-- Apple Calendar sync — iCloud (CalDAV) and shared ICS/webcal feeds per person
+- Shared Google & iCloud accounts — add calendars into a pool, assign each to a person
+- ICS / webcal feeds (school, sports, etc.) alongside account calendars
 - Location field synced from Google Calendar automatically
-- Add events for a selected person — writes to that person's primary Google Calendar
+- Add events for a selected person — writes to that person's configured write calendar
 
 ### Chores
 - Daily chore assignments per family member with morning/afternoon/evening grouping
@@ -70,7 +70,7 @@ Launches full-screen in landscape with no browser chrome.
 
 ### Settings
 Organized into 4 tabs:
-- **Family** — members (name, color, avatar) + Google Calendar connection
+- **Family** — members (name, color, avatar) + shared calendar accounts / sources
 - **Home** — Home Assistant URL/token/entities + camera feeds
 - **Integrations** — Weather zip, lunch school, stock symbols, slideshow
 - **General** — Timezone + Night Mode (dark hours + auto-dim timeout)
@@ -121,14 +121,13 @@ Required only for Google Calendar sync.
    ```bash
    python tools/google-oauth-local/oauth_local.py \
      --hub http://192.168.1.50:3000 \
-     --target family
+     --target account
    ```
-   Use `--target member --member-id N` for a person, or `--target photos` for Photos.
+   Use `--target account` for shared calendar accounts (Settings → Family Calendar), or `--target photos` for Photos.
 
-If you have a public HTTPS `APP_BASE_URL`, you can instead register the in-app callbacks and use **Connect Google** in Settings:
+If you have a public HTTPS `APP_BASE_URL`, you can instead register the in-app callback and use **Connect Google Account** in Settings:
 ```
-https://your-host/api/auth/google/callback/family
-https://your-host/api/auth/google/callback/member
+https://your-host/api/auth/google/callback/account
 ```
 
 ---
@@ -255,10 +254,13 @@ Select your local timezone — affects all date/time displays and the lunch menu
 Enter your US zip code for current conditions and tomorrow's forecast on the dashboard.
 
 ### Google & Apple Calendar
-- Connect each person's Google and/or Apple calendars in Settings → Family
-- Google: choose calendars to sync in; new events write to that person's **primary** Google Calendar
-- Apple: connect iCloud with an [app-specific password](https://appleid.apple.com), or paste a shared `webcal://` / ICS URL
-- Apple sources are sync-in only (read); event locations sync from Google when present
+In **Settings → Family → Family Calendar**:
+
+1. **Accounts** — Connect Google (`Connect Google Account`, or local OAuth with `--target account`) and/or iCloud ([app-specific password](https://appleid.apple.com))
+2. **Calendars** — Browse calendars from each account (or paste an ICS/webcal URL) into the shared pool, then assign each to a person or to **Family** (holidays, birthdays, shared events — visible for everyone)
+3. **Write calendars** — Pick the Family write calendar plus each person's write calendar for new events created in Family Hub
+
+Event locations sync from Google when present. Rebuild the Docker image after frontend changes so Settings picks up the new UI.
 
 ### School Lunch Menu
 Enter your Nutrislice school domain (e.g. `bcps`) in Settings → Integrations → Lunch.

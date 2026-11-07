@@ -2,6 +2,8 @@ const COLORS = ['#4F6EF7','#FF6B6B','#FFB347','#34C759','#AF52DE','#FF2D55','#5A
 const EMOJIS = ['👤','👨','👩','👧','👦','👶','🧑','👴','👵','🧔','👸','🤴','🦸','🧙','🧝','🐱','🐶','🦊','🐼','🦁'];
 let members = [];
 let editingMemberId = null;
+let calendarAccounts = [];
+let calendarSources = [];
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Tab switching
@@ -14,8 +16,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  loadMembers();
-  loadGoogleStatus();
+  await loadMembers();
+  loadFamilyCalendar();
   loadSyncInterval();
   loadSlideshowSettings();
   loadWeatherZip();
@@ -44,7 +46,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('memberColor').oninput = e => selectColor(e.target.value);
 
   const params = new URLSearchParams(window.location.search);
-  if (params.get('connected') === 'member') {
+  const connected = params.get('connected');
+  if (connected === 'account' || connected === 'member') {
     showToast('✅ Google Calendar connected!', 'success');
     history.replaceState({}, '', '/settings.html');
   }
@@ -65,7 +68,7 @@ async function loadMembers() {
           <span class="member-color-swatch" style="background:${m.color}"></span>
           ${m.name}
         </div>
-        <div class="member-item-sub">${m.google_email ? '📅 ' + m.google_email : 'No Google Calendar connected'}</div>
+        <div class="member-item-sub">Assign calendars in Family Calendar below</div>
       </div>
       <div style="display:flex;gap:8px">
         <button class="chore-action-btn" onclick="openMemberModal(${m.id})">✏️ Edit</button>
@@ -74,42 +77,431 @@ async function loadMembers() {
     </div>`).join('');
 }
 
-async function loadGoogleStatus() {
+async function apiPatch(path, body) {
+  const r = await fetch(path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+function _escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function _accountLabel(a) {
+  return a.label || a.email || a.apple_id || a.name || `Account ${a.id}`;
+}
+
+function _accountProvider(a) {
+  const p = (a.provider || a.kind || '').toLowerCase();
+  if (p.includes('google')) return 'google';
+  if (p.includes('icloud') || p.includes('apple') || p.includes('caldav')) return 'icloud';
+  return p || 'unknown';
+}
+
+function _sourceKindLabel(s) {
+  const k = (s.kind || '').toLowerCase();
+  if (k === 'google') return 'Google';
+  if (k === 'caldav') return 'iCloud';
+  if (k === 'ics') return 'ICS';
+  return k || 'Calendar';
+}
+
+let familyWriteSourceId = null;
+
+async function loadFamilyCalendar() {
+  await loadCalendarAccounts();
+  await loadCalendarSources();
+  // Refresh members so write_calendar_source_id stays current
+  try { members = await API.get('/api/members/'); } catch (_) {}
   try {
-    const status = await API.get('/api/auth/google/status');
-    const el = document.getElementById('memberCalendars');
-    if (!status.members.length) {
-      el.innerHTML = '<div class="empty-state">Add family members above, then connect each person\'s Google Calendar here.</div>';
-      return;
-    }
-    el.innerHTML = status.members.map(m => `
-      <div class="settings-card" style="flex-direction:column;align-items:stretch;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+    const fw = await API.get('/api/calendar/family/write-calendar');
+    familyWriteSourceId = fw.source_id ?? null;
+  } catch (_) {
+    familyWriteSourceId = null;
+  }
+  renderWriteCalendars();
+}
+
+async function loadCalendarAccounts() {
+  const el = document.getElementById('calendarAccountsList');
+  const addEl = document.getElementById('accountAddCalendars');
+  if (!el) return;
+  try {
+    const data = await API.get('/api/calendar/accounts');
+    calendarAccounts = Array.isArray(data) ? data : (data.accounts || []);
+  } catch (e) {
+    calendarAccounts = [];
+    el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load accounts: ${_escapeHtml(e.message)}</div>`;
+    if (addEl) addEl.innerHTML = '';
+    return;
+  }
+
+  if (!calendarAccounts.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:8px 0">No accounts yet — connect Google or iCloud above.</div>';
+  } else {
+    el.innerHTML = calendarAccounts.map(a => {
+      const provider = _accountProvider(a);
+      const icon = provider === 'google' ? '🔵' : provider === 'icloud' ? '☁️' : '📅';
+      const providerName = provider === 'google' ? 'Google' : provider === 'icloud' ? 'iCloud' : provider;
+      return `
+        <div class="settings-card" style="margin-bottom:8px">
           <div class="settings-card-info">
-            <h3>${members.find(mb => mb.id == m.id)?.avatar || '👤'} ${m.name}</h3>
-            <p class="settings-desc">Google sync-in · new events write to Google primary · Apple sync-in below</p>
-            <div class="google-status">
-              <span class="status-dot ${m.connected ? 'connected' : 'disconnected'}"></span>
-              <span class="status-text ${m.connected ? 'connected' : ''}">${m.connected ? 'Google: ' + m.email : 'Google not connected'}</span>
+            <h3 style="margin:0">${icon} ${_escapeHtml(_accountLabel(a))}</h3>
+            <div class="google-status" style="margin-top:4px">
+              <span class="status-dot connected"></span>
+              <span class="status-text connected">${providerName}</span>
             </div>
           </div>
           <div class="settings-card-actions">
-            ${!m.connected ? `<a href="/api/auth/google/connect/member/${m.id}" class="btn btn-google">
-              <svg width="16" height="16" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
-              Connect Google
-            </a>` : `<button class="btn btn-danger-ghost" onclick="disconnectMember(${m.id})">Disconnect Google</button>`}
+            <button class="btn btn-danger-ghost" onclick="disconnectCalendarAccount(${a.id})">Disconnect</button>
           </div>
-        </div>
-        <div id="memberCalPicker_${m.id}"></div>
-        <div id="memberApple_${m.id}" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)"></div>
-      </div>`).join('');
-    setTimeout(() => {
-      for (const m of (status?.members || [])) {
-        if (m.connected) loadCalendarPicker('member', m.id);
-        loadAppleCalendarSection(m.id);
-      }
-    }, 100);
-  } catch(e) {}
+        </div>`;
+    }).join('');
+  }
+
+  if (addEl) {
+    if (!calendarAccounts.length) {
+      addEl.innerHTML = '';
+    } else {
+      addEl.innerHTML = calendarAccounts.map(a => `
+        <div style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+            <div style="font-weight:800;font-size:13px">From ${_escapeHtml(_accountLabel(a))}</div>
+            <button class="btn btn-secondary" onclick="loadAvailableCalendars(${a.id})">Browse calendars</button>
+          </div>
+          <div id="availableCals_${a.id}"></div>
+        </div>`).join('');
+    }
+  }
+}
+
+async function loadCalendarSources() {
+  const el = document.getElementById('calendarSourcesList');
+  if (!el) return;
+  try {
+    const data = await API.get('/api/calendar/sources');
+    calendarSources = Array.isArray(data) ? data : (data.sources || []);
+  } catch (e) {
+    calendarSources = [];
+    el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load calendars: ${_escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  if (!calendarSources.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:8px 0">No calendars in the pool yet.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="cal-picker">
+      <div class="cal-picker-title">Synced calendars</div>
+      ${calendarSources.map(s => {
+        const acct = calendarAccounts.find(a => a.id === s.account_id);
+        const acctHint = acct ? ` · ${_escapeHtml(_accountLabel(acct))}` : '';
+        const color = s.color || '#4F6EF7';
+        const isFamily = !!Number(s.is_family);
+        const memberOpts = members.map(m => {
+          const sel = !isFamily && s.member_id != null && String(s.member_id) === String(m.id) ? ' selected' : '';
+          return `<option value="${m.id}"${sel}>${_escapeHtml(m.avatar || '👤')} ${_escapeHtml(m.name)}</option>`;
+        }).join('');
+        const assignVal = isFamily ? 'family' : (s.member_id == null ? '' : String(s.member_id));
+        return `
+          <div class="cal-option selected" style="cursor:default;flex-wrap:wrap;gap:8px">
+            <div class="cal-option-dot" style="background:${_escapeHtml(color)}"></div>
+            <div class="cal-option-name" style="flex:1;min-width:120px">
+              ${_escapeHtml(s.name || 'Calendar')}
+              <div style="font-size:11px;font-weight:600;color:var(--text2)">${_sourceKindLabel(s)}${acctHint}${isFamily ? ' · Family' : ''}</div>
+            </div>
+            <select class="form-input" style="max-width:180px;padding:6px 8px;font-size:13px"
+              onchange="assignCalendarSource(${s.id}, this.value)">
+              <option value=""${assignVal === '' ? ' selected' : ''}>Unassigned</option>
+              <option value="family"${assignVal === 'family' ? ' selected' : ''}>🏠 Family</option>
+              ${memberOpts}
+            </select>
+            <button class="btn btn-danger-ghost" style="padding:4px 8px;font-size:12px"
+              onclick="removeCalendarSource(${s.id})">Remove</button>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function renderWriteCalendars() {
+  const el = document.getElementById('writeCalendarsList');
+  if (!el) return;
+
+  const familyWritable = calendarSources.filter(s =>
+    Number(s.is_family) && (s.kind === 'google' || s.kind === 'caldav')
+  );
+  const familyAssignedAny = calendarSources.some(s => Number(s.is_family));
+  let familyEmpty = 'Assign a Google or iCloud calendar to Family first';
+  if (familyWritable.length) familyEmpty = 'No write calendar';
+  else if (familyAssignedAny) familyEmpty = 'ICS feeds are sync-in only';
+  const familyOpts = familyWritable.map(s => {
+    const sel = String(familyWriteSourceId) === String(s.id) ? ' selected' : '';
+    return `<option value="${s.id}"${sel}>${_escapeHtml(s.name || 'Calendar')} (${_sourceKindLabel(s)})</option>`;
+  }).join('');
+
+  const familyRow = `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="min-width:120px;font-weight:700">🏠 Family</div>
+      <select id="writeCal_family" class="form-input" style="flex:1;min-width:200px;max-width:360px"
+        ${familyWritable.length ? '' : 'disabled'}>
+        <option value="">${familyEmpty}</option>
+        ${familyOpts}
+      </select>
+      <button class="btn btn-primary" style="padding:8px 12px"
+        onclick="saveFamilyWriteCalendar()" ${familyWritable.length ? '' : 'disabled'}>Save</button>
+    </div>`;
+
+  if (!members.length) {
+    el.innerHTML = familyRow + '<div class="empty-state" style="padding:8px 0">Add family members for personal write calendars.</div>';
+    return;
+  }
+  el.innerHTML = familyRow + members.map(m => {
+    const writable = calendarSources.filter(s =>
+      String(s.member_id) === String(m.id) && (s.kind === 'google' || s.kind === 'caldav')
+    );
+    const assignedAny = calendarSources.some(s => String(s.member_id) === String(m.id));
+    const opts = writable.length
+      ? writable.map(s => {
+          const sel = String(m.write_calendar_source_id) === String(s.id) ? ' selected' : '';
+          return `<option value="${s.id}"${sel}>${_escapeHtml(s.name || 'Calendar')} (${_sourceKindLabel(s)})</option>`;
+        }).join('')
+      : '';
+    let emptyLabel = 'Assign a Google or iCloud calendar first';
+    if (writable.length) emptyLabel = 'No write calendar';
+    else if (assignedAny) emptyLabel = 'ICS feeds are sync-in only';
+    return `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="min-width:120px;font-weight:700">${m.avatar || '👤'} ${_escapeHtml(m.name)}</div>
+        <select id="writeCal_${m.id}" class="form-input" style="flex:1;min-width:200px;max-width:360px"
+          ${writable.length ? '' : 'disabled'}>
+          <option value="">${emptyLabel}</option>
+          ${opts}
+        </select>
+        <button class="btn btn-primary" style="padding:8px 12px"
+          onclick="saveWriteCalendar(${m.id})" ${writable.length ? '' : 'disabled'}>Save</button>
+      </div>`;
+  }).join('');
+}
+
+async function disconnectCalendarAccount(id) {
+  if (!confirm('Disconnect this account? Calendars from it may stop syncing.')) return;
+  try {
+    await API.delete(`/api/calendar/accounts/${id}`);
+    showToast('Account disconnected', '');
+    await loadFamilyCalendar();
+  } catch (e) {
+    showToast(e.message || 'Failed to disconnect', 'error');
+  }
+}
+
+async function connectIcloudAccount() {
+  const apple_id = document.getElementById('icloudAppleId')?.value.trim();
+  const app_password = document.getElementById('icloudAppPassword')?.value.trim();
+  const label = document.getElementById('icloudLabel')?.value.trim();
+  if (!apple_id || !app_password) {
+    showToast('Enter Apple ID and app-specific password', 'error');
+    return;
+  }
+  try {
+    const body = { apple_id, app_password };
+    if (label) body.label = label;
+    await API.post('/api/calendar/accounts/icloud', body);
+    showToast('✅ iCloud connected', 'success');
+    document.getElementById('icloudAppleId').value = '';
+    document.getElementById('icloudAppPassword').value = '';
+    document.getElementById('icloudLabel').value = '';
+    await loadFamilyCalendar();
+  } catch (e) {
+    showToast(e.message || 'iCloud connect failed', 'error');
+  }
+}
+
+function copyGoogleAccountOAuthHelp() {
+  const text = [
+    'Connect a shared Google account (Proxmox / LAN):',
+    '1. In Google Cloud Console, add redirect URI: http://127.0.0.1:8765/callback',
+    '2. On your PC run:',
+    '   python tools/google-oauth-local/oauth_local.py --hub http://YOUR_HUB:3000 --target account',
+    '3. Or with public HTTPS, use Connect Google Account in Settings (links to /api/auth/google/connect/account).',
+  ].join('\n');
+  navigator.clipboard.writeText(text).then(
+    () => showToast('OAuth instructions copied', 'success'),
+    () => showToast(text, 'info')
+  );
+}
+
+async function loadAvailableCalendars(accountId) {
+  const box = document.getElementById(`availableCals_${accountId}`);
+  if (!box) return;
+  box.innerHTML = '<div style="font-size:13px;color:var(--text2);padding:8px">Loading calendars…</div>';
+  try {
+    const data = await API.get(`/api/calendar/accounts/${accountId}/available`);
+    const calendars = data.calendars || [];
+    const account = calendarAccounts.find(a => a.id === accountId);
+    const provider = _accountProvider(account || {});
+    const kind = provider === 'google' ? 'google' : 'caldav';
+    const existing = new Set(
+      calendarSources
+        .filter(s => s.account_id === accountId)
+        .map(s => s.external_id || s.url)
+    );
+
+    if (!calendars.length) {
+      box.innerHTML = '<div style="padding:8px;color:var(--text2);font-size:13px">No calendars found</div>';
+      return;
+    }
+
+    box.innerHTML = `
+      <div class="cal-picker">
+        <div class="cal-picker-title">Select calendars to add</div>
+        ${calendars.map(c => {
+          const extId = c.id || c.url || '';
+          const already = existing.has(extId) || (c.url && existing.has(c.url));
+          const name = c.name || c.summary || 'Calendar';
+          const color = c.backgroundColor || c.color || '#4F6EF7';
+          return `
+            <div class="cal-option ${already ? 'selected' : ''}"
+                 data-ext="${encodeURIComponent(extId)}"
+                 data-url="${encodeURIComponent(c.url || '')}"
+                 data-name="${encodeURIComponent(name)}"
+                 data-color="${encodeURIComponent(color)}"
+                 data-kind="${kind}"
+                 ${already ? 'style="opacity:0.55;cursor:default"' : `onclick="toggleCalOption(this)"`}>
+              <div class="cal-option-dot" style="background:${_escapeHtml(color)}"></div>
+              <div class="cal-option-name">${_escapeHtml(name)}${c.primary ? ' ⭐' : ''}${already ? ' (added)' : ''}</div>
+              <div class="cal-option-check" style="opacity:${already ? '1' : '0'}">✓</div>
+            </div>`;
+        }).join('')}
+        <button class="btn btn-primary cal-picker-save" onclick="addSelectedAccountCalendars(${accountId})">
+          Add selected
+        </button>
+      </div>`;
+  } catch (e) {
+    box.innerHTML = `<div style="font-size:13px;color:var(--red);padding:8px">${_escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function addSelectedAccountCalendars(accountId) {
+  const box = document.getElementById(`availableCals_${accountId}`);
+  if (!box) return;
+  // Only newly toggled ones (have onclick); already-added ones have no onclick
+  const toAdd = [...box.querySelectorAll('.cal-option')].filter(el =>
+    el.classList.contains('selected') && el.getAttribute('onclick')
+  );
+  if (!toAdd.length) {
+    showToast('Select at least one calendar to add', 'error');
+    return;
+  }
+  try {
+    for (const el of toAdd) {
+      const kind = el.dataset.kind || 'google';
+      const external_id = decodeURIComponent(el.dataset.ext || '');
+      const url = decodeURIComponent(el.dataset.url || '');
+      const name = decodeURIComponent(el.dataset.name || 'Calendar');
+      const color = decodeURIComponent(el.dataset.color || '');
+      const body = { account_id: accountId, kind, external_id: external_id || url, name };
+      if (color) body.color = color;
+      if (kind === 'caldav' && url) body.external_id = url;
+      await API.post('/api/calendar/sources', body);
+    }
+    showToast(`✅ Added ${toAdd.length} calendar${toAdd.length !== 1 ? 's' : ''}`, 'success');
+    await loadFamilyCalendar();
+    await loadAvailableCalendars(accountId);
+  } catch (e) {
+    showToast(e.message || 'Failed to add calendars', 'error');
+  }
+}
+
+async function addIcsSource() {
+  const name = document.getElementById('icsSourceName')?.value.trim();
+  const url = document.getElementById('icsSourceUrl')?.value.trim();
+  if (!name || !url) {
+    showToast('Enter a name and calendar URL', 'error');
+    return;
+  }
+  try {
+    await API.post('/api/calendar/sources', { kind: 'ics', url, name });
+    showToast('✅ ICS calendar added', 'success');
+    document.getElementById('icsSourceName').value = '';
+    document.getElementById('icsSourceUrl').value = '';
+    await loadFamilyCalendar();
+  } catch (e) {
+    showToast(e.message || 'Failed to add calendar', 'error');
+  }
+}
+
+async function assignCalendarSource(sourceId, assignVal) {
+  let body;
+  if (assignVal === 'family') {
+    body = { is_family: true, member_id: null };
+  } else if (assignVal === '') {
+    body = { is_family: false, member_id: null };
+  } else {
+    body = { is_family: false, member_id: Number(assignVal) };
+  }
+  try {
+    await apiPatch(`/api/calendar/sources/${sourceId}`, body);
+    const label = assignVal === 'family' ? 'Assigned to Family' : (assignVal ? 'Assigned' : 'Unassigned');
+    showToast(label, 'success');
+    await loadFamilyCalendar();
+  } catch (e) {
+    showToast(e.message || 'Failed to assign', 'error');
+  }
+}
+
+async function saveFamilyWriteCalendar() {
+  const sel = document.getElementById('writeCal_family');
+  if (!sel) return;
+  const source_id = sel.value === '' ? null : Number(sel.value);
+  try {
+    const r = await API.put('/api/calendar/family/write-calendar', { source_id });
+    familyWriteSourceId = r.source_id ?? null;
+    showToast('✅ Family write calendar saved', 'success');
+  } catch (e) {
+    showToast(e.message || 'Failed to save', 'error');
+  }
+}
+
+async function removeCalendarSource(sourceId) {
+  if (!confirm('Remove this calendar and its synced events?')) return;
+  try {
+    await API.delete(`/api/calendar/sources/${sourceId}`);
+    showToast('Removed', '');
+    await loadFamilyCalendar();
+  } catch (e) {
+    showToast(e.message || 'Failed to remove', 'error');
+  }
+}
+
+async function saveWriteCalendar(memberId) {
+  const sel = document.getElementById(`writeCal_${memberId}`);
+  if (!sel) return;
+  const val = sel.value;
+  const write_calendar_source_id = val === '' ? null : Number(val);
+  try {
+    await API.put(`/api/members/${memberId}`, { write_calendar_source_id });
+    const m = members.find(x => x.id === memberId);
+    if (m) m.write_calendar_source_id = write_calendar_source_id;
+    showToast('✅ Write calendar saved', 'success');
+  } catch (e) {
+    showToast(e.message || 'Failed to save', 'error');
+  }
+}
+
+function toggleCalOption(el, _containerId) {
+  el.classList.toggle('selected');
+  const check = el.querySelector('.cal-option-check');
+  if (check) check.style.opacity = el.classList.contains('selected') ? '1' : '0';
 }
 
 function openMemberModal(memberId) {
@@ -166,9 +558,9 @@ async function saveMember() {
       showToast('✅ Member added!', 'success');
     }
     closeMemberModal();
-    loadMembers();
+    await loadMembers();
     loadSidebarMembers();
-    loadGoogleStatus();
+    await loadFamilyCalendar();
   } catch(e) {
     showToast('Failed to save member', 'error');
   }
@@ -179,18 +571,12 @@ async function deleteMember(id) {
   try {
     await API.delete(`/api/members/${id}`);
     showToast('Member removed', '');
-    loadMembers();
+    await loadMembers();
     loadSidebarMembers();
+    await loadFamilyCalendar();
   } catch(e) {
     showToast('Failed to delete', 'error');
   }
-}
-
-async function disconnectMember(id) {
-  if (!confirm('Disconnect their Google Calendar?')) return;
-  await API.delete(`/api/auth/google/disconnect/member/${id}`);
-  showToast('Disconnected', '');
-  loadGoogleStatus();
 }
 
 async function loadSyncInterval() {
@@ -217,211 +603,6 @@ async function saveSyncInterval() {
     showToast(val === '0' ? 'Auto-sync disabled' : 'Auto-sync saved', 'success');
   } catch(e) {
     showToast('Failed to save', 'error');
-  }
-}
-
-async function loadCalendarPicker(type, memberId) {
-  const containerId = `memberCalPicker_${memberId}`;
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  container.innerHTML = '<div style="font-size:13px;color:var(--text2);padding:8px">Loading calendars...</div>';
-  try {
-    const data = await API.get(`/api/calendar/google-calendars/member/${memberId}`);
-    if (!data || !data.calendars) throw new Error('Bad response');
-    const { calendars, selected } = data;
-    let selectedIds = new Set(selected);
-    container.innerHTML = `
-      <div class="cal-picker">
-        <div class="cal-picker-title">Calendars to sync into Family Hub (⭐ = primary, used for new events):</div>
-        ${calendars.map(c => `
-          <div class="cal-option ${selectedIds.has(c.id) ? 'selected' : ''}"
-               data-id="${c.id}"
-               onclick="toggleCalOption(this, '${containerId}')">
-            <div class="cal-option-dot" style="background:${c.backgroundColor}"></div>
-            <div class="cal-option-name">${c.summary}${c.primary ? ' ⭐' : ''}</div>
-            ${selectedIds.has(c.id) ? '<div class="cal-option-check">✓</div>' : '<div class="cal-option-check" style="opacity:0">✓</div>'}
-          </div>`).join('')}
-        <button class="btn btn-primary cal-picker-save" onclick="saveCalendarSelection('member', ${memberId}, '${containerId}')">
-          Save Selection
-        </button>
-      </div>`;
-  } catch(e) {
-    container.innerHTML = `<div style="font-size:13px;color:var(--red);padding:8px">Error: ${e.message}</div>`;
-  }
-}
-
-function toggleCalOption(el, _containerId) {
-  el.classList.toggle('selected');
-  const check = el.querySelector('.cal-option-check');
-  check.style.opacity = el.classList.contains('selected') ? '1' : '0';
-}
-
-async function saveCalendarSelection(type, memberId, containerId) {
-  const container = document.getElementById(containerId);
-  const selected = [...container.querySelectorAll('.cal-option.selected')].map(el => el.dataset.id);
-  if (!selected.length) { showToast('Select at least one calendar', 'error'); return; }
-  try {
-    await API.post(`/api/calendar/google-calendars/member/${memberId}/select`, { calendar_ids: selected });
-    showToast(`✅ Saved! ${selected.length} calendar${selected.length !== 1 ? 's' : ''} will sync`, 'success');
-  } catch(e) {
-    showToast('Failed to save selection', 'error');
-  }
-}
-
-async function loadAppleCalendarSection(memberId) {
-  const el = document.getElementById(`memberApple_${memberId}`);
-  if (!el) return;
-  el.innerHTML = '<div style="font-size:13px;color:var(--text2)">Loading Apple calendars…</div>';
-  try {
-    const data = await API.get(`/api/calendar/apple/member/${memberId}`);
-    const sources = data.sources || [];
-    const sourceList = sources.length
-      ? sources.map(s => `
-          <div class="cal-option selected" style="cursor:default">
-            <div class="cal-option-dot" style="background:${s.color || '#AF52DE'}"></div>
-            <div class="cal-option-name">${s.kind === 'caldav' ? '☁️ ' : '🔗 '}${s.name}</div>
-            <button class="btn btn-danger-ghost" style="padding:4px 8px;font-size:12px"
-              onclick="removeAppleSource(${s.id}, ${memberId})">Remove</button>
-          </div>`).join('')
-      : '<div style="font-size:13px;color:var(--text2);padding:4px 0">No Apple / ICS calendars yet.</div>';
-
-    el.innerHTML = `
-      <h3 style="margin:0 0 6px">🍎 Apple Calendar</h3>
-      <p class="settings-desc" style="margin-bottom:10px">
-        Sync from iCloud (CalDAV) or a shared webcal/ICS link. Events are tagged to this person (read-only sync-in).
-      </p>
-      <div class="cal-picker" style="margin-bottom:12px">${sourceList}</div>
-
-      <div style="display:grid;gap:10px;margin-bottom:14px">
-        <div style="font-weight:800;font-size:13px">Add shared calendar (ICS / webcal)</div>
-        <input id="appleIcsName_${memberId}" class="form-input" placeholder="Name (e.g. School sports)">
-        <input id="appleIcsUrl_${memberId}" class="form-input" placeholder="webcal://… or https://…/*.ics">
-        <button class="btn btn-primary" onclick="addAppleIcs(${memberId})">Add ICS calendar</button>
-      </div>
-
-      <div style="display:grid;gap:10px;padding-top:12px;border-top:1px solid var(--border)">
-        <div style="font-weight:800;font-size:13px">iCloud account</div>
-        ${data.icloud_connected ? `
-          <div class="google-status">
-            <span class="status-dot connected"></span>
-            <span class="status-text connected">Connected: ${data.apple_id}</span>
-          </div>
-          <div id="appleIcloudPicker_${memberId}"></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-primary" onclick="loadIcloudCalendarPicker(${memberId})">Choose iCloud calendars</button>
-            <button class="btn btn-danger-ghost" onclick="disconnectIcloud(${memberId})">Disconnect iCloud</button>
-          </div>
-        ` : `
-          <p class="settings-desc">Use an <a href="https://appleid.apple.com" target="_blank" rel="noopener">app-specific password</a> (Apple ID → Sign-In and Security).</p>
-          <input id="appleId_${memberId}" class="form-input" placeholder="Apple ID email" autocomplete="username">
-          <input id="applePass_${memberId}" class="form-input" type="password" placeholder="App-specific password" autocomplete="current-password">
-          <button class="btn btn-primary" onclick="connectIcloud(${memberId})">Connect iCloud</button>
-        `}
-      </div>
-    `;
-    if (data.icloud_connected) {
-      // Show currently selected CalDAV sources hint only; picker on demand
-    }
-  } catch (e) {
-    el.innerHTML = `<div style="font-size:13px;color:var(--red)">Apple calendar error: ${e.message}</div>`;
-  }
-}
-
-async function addAppleIcs(memberId) {
-  const name = document.getElementById(`appleIcsName_${memberId}`)?.value.trim();
-  const url = document.getElementById(`appleIcsUrl_${memberId}`)?.value.trim();
-  if (!name || !url) { showToast('Enter a name and calendar URL', 'error'); return; }
-  try {
-    await API.post(`/api/calendar/apple/member/${memberId}/ics`, { name, url });
-    showToast('✅ Apple/ICS calendar added', 'success');
-    loadAppleCalendarSection(memberId);
-  } catch (e) {
-    showToast(e.message || 'Failed to add calendar', 'error');
-  }
-}
-
-async function removeAppleSource(sourceId, memberId) {
-  if (!confirm('Remove this Apple/ICS calendar and its synced events?')) return;
-  try {
-    await API.delete(`/api/calendar/apple/sources/${sourceId}`);
-    showToast('Removed', '');
-    loadAppleCalendarSection(memberId);
-  } catch (e) {
-    showToast('Failed to remove', 'error');
-  }
-}
-
-async function connectIcloud(memberId) {
-  const apple_id = document.getElementById(`appleId_${memberId}`)?.value.trim();
-  const app_password = document.getElementById(`applePass_${memberId}`)?.value.trim();
-  if (!apple_id || !app_password) { showToast('Enter Apple ID and app-specific password', 'error'); return; }
-  try {
-    const res = await API.post(`/api/calendar/apple/member/${memberId}/icloud`, { apple_id, app_password });
-    showToast('✅ iCloud connected', 'success');
-    await loadAppleCalendarSection(memberId);
-    if (res.calendars?.length) {
-      await renderIcloudPicker(memberId, res.calendars);
-    }
-  } catch (e) {
-    showToast(e.message || 'iCloud connect failed', 'error');
-  }
-}
-
-async function disconnectIcloud(memberId) {
-  if (!confirm('Disconnect iCloud and remove synced CalDAV calendars for this person?')) return;
-  try {
-    await API.delete(`/api/calendar/apple/member/${memberId}/icloud`);
-    showToast('iCloud disconnected', '');
-    loadAppleCalendarSection(memberId);
-  } catch (e) {
-    showToast('Failed to disconnect', 'error');
-  }
-}
-
-async function loadIcloudCalendarPicker(memberId) {
-  try {
-    const data = await API.get(`/api/calendar/apple/member/${memberId}/icloud/calendars`);
-    await renderIcloudPicker(memberId, data.calendars || []);
-  } catch (e) {
-    showToast(e.message || 'Failed to list iCloud calendars', 'error');
-  }
-}
-
-async function renderIcloudPicker(memberId, calendars) {
-  const box = document.getElementById(`appleIcloudPicker_${memberId}`);
-  if (!box) return;
-  const status = await API.get(`/api/calendar/apple/member/${memberId}`);
-  const selectedUrls = new Set(
-    (status.sources || []).filter(s => s.kind === 'caldav').map(s => s.url)
-  );
-  box.innerHTML = `
-    <div class="cal-picker" style="margin-top:10px">
-      <div class="cal-picker-title">Choose iCloud calendars to sync:</div>
-      ${calendars.map(c => `
-        <div class="cal-option ${selectedUrls.has(c.url) ? 'selected' : ''}"
-             data-url="${encodeURIComponent(c.url)}" data-name="${encodeURIComponent(c.name || 'Calendar')}"
-             onclick="toggleCalOption(this)">
-          <div class="cal-option-dot" style="background:#AF52DE"></div>
-          <div class="cal-option-name">${c.name}</div>
-          <div class="cal-option-check" style="opacity:${selectedUrls.has(c.url) ? '1' : '0'}">✓</div>
-        </div>`).join('') || '<div style="padding:8px;color:var(--text2)">No calendars found</div>'}
-      <button class="btn btn-primary cal-picker-save" onclick="saveIcloudSelection(${memberId})">Save iCloud selection</button>
-    </div>`;
-}
-
-async function saveIcloudSelection(memberId) {
-  const box = document.getElementById(`appleIcloudPicker_${memberId}`);
-  const selected = [...box.querySelectorAll('.cal-option.selected')].map(el => ({
-    url: decodeURIComponent(el.dataset.url || ''),
-    name: decodeURIComponent(el.dataset.name || 'Calendar'),
-  }));
-  if (!selected.length) { showToast('Select at least one iCloud calendar', 'error'); return; }
-  try {
-    await API.post(`/api/calendar/apple/member/${memberId}/icloud/select`, { calendars: selected });
-    showToast(`✅ Saved ${selected.length} iCloud calendar${selected.length !== 1 ? 's' : ''}`, 'success');
-    loadAppleCalendarSection(memberId);
-  } catch (e) {
-    showToast(e.message || 'Failed to save', 'error');
   }
 }
 

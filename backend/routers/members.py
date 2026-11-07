@@ -6,6 +6,11 @@ from database import get_db
 
 router = APIRouter()
 
+MEMBER_SELECT = (
+    "SELECT id, name, color, avatar, is_admin, write_calendar_source_id "
+    "FROM members"
+)
+
 class MemberCreate(BaseModel):
     name: str
     color: str = "#4A90D9"
@@ -17,13 +22,31 @@ class MemberUpdate(BaseModel):
     color: Optional[str] = None
     avatar: Optional[str] = None
     is_admin: Optional[bool] = None
+    write_calendar_source_id: Optional[int] = None
+
+def _validate_write_source(conn, member_id: int, source_id: Optional[int]):
+    if source_id is None:
+        return
+    source = conn.execute(
+        "SELECT id, member_id, kind FROM calendar_sources WHERE id=?", (source_id,)
+    ).fetchone()
+    if not source:
+        raise HTTPException(status_code=400, detail="Write calendar source not found")
+    if source["member_id"] != member_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Write calendar must be assigned to this member",
+        )
+    if source["kind"] not in ("google", "caldav"):
+        raise HTTPException(
+            status_code=400,
+            detail="Write calendar must be Google or iCloud CalDAV",
+        )
 
 @router.get("/")
 def get_members():
     conn = get_db()
-    members = conn.execute(
-        "SELECT id, name, color, avatar, is_admin, google_email FROM members ORDER BY name"
-    ).fetchall()
+    members = conn.execute(f"{MEMBER_SELECT} ORDER BY name").fetchall()
     conn.close()
     return [dict(m) for m in members]
 
@@ -36,29 +59,46 @@ def create_member(member: MemberCreate):
     )
     conn.commit()
     new_id = cur.lastrowid
-    row = conn.execute("SELECT id, name, color, avatar, is_admin, google_email FROM members WHERE id=?", (new_id,)).fetchone()
+    row = conn.execute(f"{MEMBER_SELECT} WHERE id=?", (new_id,)).fetchone()
     conn.close()
     return dict(row)
 
-@router.put("/{member_id}")
-def update_member(member_id: int, member: MemberUpdate):
+def _apply_member_update(member_id: int, member: MemberUpdate):
     conn = get_db()
     existing = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
     if not existing:
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
+
+    data = member.dict(exclude_unset=True)
     updates = {}
-    if member.name is not None: updates["name"] = member.name
-    if member.color is not None: updates["color"] = member.color
-    if member.avatar is not None: updates["avatar"] = member.avatar
-    if member.is_admin is not None: updates["is_admin"] = 1 if member.is_admin else 0
+    if "name" in data and data["name"] is not None:
+        updates["name"] = data["name"]
+    if "color" in data and data["color"] is not None:
+        updates["color"] = data["color"]
+    if "avatar" in data:
+        updates["avatar"] = data["avatar"]
+    if "is_admin" in data and data["is_admin"] is not None:
+        updates["is_admin"] = 1 if data["is_admin"] else 0
+    if "write_calendar_source_id" in data:
+        _validate_write_source(conn, member_id, data["write_calendar_source_id"])
+        updates["write_calendar_source_id"] = data["write_calendar_source_id"]
+
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         conn.execute(f"UPDATE members SET {set_clause} WHERE id=?", (*updates.values(), member_id))
         conn.commit()
-    row = conn.execute("SELECT id, name, color, avatar, is_admin, google_email FROM members WHERE id=?", (member_id,)).fetchone()
+    row = conn.execute(f"{MEMBER_SELECT} WHERE id=?", (member_id,)).fetchone()
     conn.close()
     return dict(row)
+
+@router.put("/{member_id}")
+def update_member(member_id: int, member: MemberUpdate):
+    return _apply_member_update(member_id, member)
+
+@router.patch("/{member_id}")
+def patch_member(member_id: int, member: MemberUpdate):
+    return _apply_member_update(member_id, member)
 
 @router.delete("/{member_id}")
 def delete_member(member_id: int):

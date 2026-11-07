@@ -49,7 +49,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function populateMemberSelect() {
   const sel = document.getElementById('eventMember');
-  sel.innerHTML = '<option value="">Select a person…</option>' +
+  sel.innerHTML = '<option value="">Select who…</option>' +
+    '<option value="family">🏠 Family</option>' +
     members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${m.name}</option>`).join('');
 }
 
@@ -178,8 +179,9 @@ function closeEventModal() {
 async function saveEvent() {
   const title = document.getElementById('eventTitle').value.trim();
   if (!title) { showToast('Please enter a title', 'error'); return; }
-  const memberId = document.getElementById('eventMember').value;
-  if (!memberId) { showToast('Select a person for this event', 'error'); return; }
+  const who = document.getElementById('eventMember').value;
+  if (!who) { showToast('Select a person or Family for this event', 'error'); return; }
+  const isFamily = who === 'family';
   const payload = {
     title,
     description: document.getElementById('eventDesc').value.trim(),
@@ -187,15 +189,19 @@ async function saveEvent() {
     start_datetime: document.getElementById('eventStart').value,
     end_datetime: document.getElementById('eventEnd').value,
     all_day: document.getElementById('eventAllDay').checked,
-    member_id: Number(memberId),
-    is_family: false,
+    member_id: isFamily ? null : Number(who),
+    is_family: isFamily,
   };
   try {
     await API.post('/api/calendar/events', payload);
     closeEventModal();
-    const person = members.find(m => String(m.id) === String(memberId));
-    const name = person ? person.name : 'their';
-    showToast(`✅ Event saved to ${name}'s primary calendar`, 'success');
+    if (isFamily) {
+      showToast('✅ Event saved to the family calendar', 'success');
+    } else {
+      const person = members.find(m => String(m.id) === String(who));
+      const name = person ? person.name : 'their';
+      showToast(`✅ Event saved to ${name}'s calendar`, 'success');
+    }
     loadEvents();
   } catch(e) {
     showToast(e.message || 'Failed to save event', 'error');
@@ -302,39 +308,8 @@ async function syncGoogle() {
   btn.textContent = '⏳ Syncing...';
   btn.disabled = true;
   try {
-    const [status, memberList] = await Promise.all([
-      API.get('/api/auth/google/status'),
-      API.get('/api/members/'),
-    ]);
-    let synced = 0;
-    let any = false;
-    for (const m of (status.members || [])) {
-      let hasApple = false;
-      try {
-        const apple = await API.get(`/api/calendar/apple/member/${m.id}`);
-        hasApple = !!(apple.icloud_connected || (apple.sources || []).length);
-      } catch (_) {}
-      if (!m.connected && !hasApple) continue;
-      any = true;
-      const r = await API.post(`/api/calendar/sync/member/${m.id}`, {});
-      synced += r.synced || 0;
-    }
-    // Also sync members who only have Apple (may be missing from google status edge cases)
-    for (const m of memberList) {
-      if ((status.members || []).some(s => s.id === m.id)) continue;
-      try {
-        const apple = await API.get(`/api/calendar/apple/member/${m.id}`);
-        if (!(apple.sources || []).length && !apple.icloud_connected) continue;
-        any = true;
-        const r = await API.post(`/api/calendar/sync/member/${m.id}`, {});
-        synced += r.synced || 0;
-      } catch (_) {}
-    }
-    if (!any) {
-      showToast('Connect Google or Apple calendars in Settings first', 'error');
-      return;
-    }
-    showToast(`✅ Synced ${synced} events`, 'success');
+    const r = await API.post('/api/calendar/sync/all', {});
+    showToast(`✅ Synced ${r.synced || 0} events`, 'success');
     loadEvents();
     loadSyncStatus();
   } catch(e) {

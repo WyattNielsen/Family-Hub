@@ -23,12 +23,12 @@ PHOTOS_SCOPES = "https://www.googleapis.com/auth/photospicker.mediaitems.readonl
 
 class GoogleTokenImport(BaseModel):
     """Tokens obtained via the local OAuth helper (tools/google-oauth-local)."""
-    target: Literal["family", "member", "photos"]
+    target: Literal["account", "photos"]
     access_token: str
     refresh_token: Optional[str] = None
     expires_in: int = Field(default=3600, ge=1)
     email: Optional[str] = None
-    member_id: Optional[int] = None
+    label: Optional[str] = None
 
 def build_oauth_url(redirect_uri: str, state: str) -> str:
     params = {
@@ -42,43 +42,23 @@ def build_oauth_url(redirect_uri: str, state: str) -> str:
     }
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
 
-@router.get("/google/connect/family")
-def connect_family_calendar():
-    """Start OAuth flow for the shared family calendar."""
-    redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/family"
-    url = build_oauth_url(redirect_uri, state="family")
+@router.get("/google/connect/account")
+def connect_google_account():
+    """Start OAuth flow for a shared Google calendar_accounts row."""
+    redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/account"
+    url = build_oauth_url(redirect_uri, state="account")
     return RedirectResponse(url)
 
-@router.get("/google/connect/member/{member_id}")
-def connect_member_calendar(member_id: int):
-    """Start OAuth flow for an individual family member's calendar."""
-    conn = get_db()
-    member = conn.execute("SELECT id FROM members WHERE id=?", (member_id,)).fetchone()
-    conn.close()
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-    redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/member"
-    url = build_oauth_url(redirect_uri, state=str(member_id))
-    return RedirectResponse(url)
-
-@router.get("/google/callback/family")
-async def google_callback_family(code: str = Query(...), state: str = Query(...)):
-    """Handle OAuth callback for the family calendar."""
-    redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/family"
+@router.get("/google/callback/account")
+async def google_callback_account(code: str = Query(...), state: str = Query(...)):
+    """Handle OAuth callback that stores tokens into calendar_accounts."""
+    redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/account"
     tokens = await _exchange_code(code, redirect_uri)
     email = await _get_google_email(tokens["access_token"])
-    _store_family_tokens(tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email)
-    return RedirectResponse(f"{APP_BASE_URL}/?connected=family")
-
-@router.get("/google/callback/member")
-async def google_callback_member(code: str = Query(...), state: str = Query(...)):
-    """Handle OAuth callback for a member's personal calendar."""
-    member_id = int(state)
-    redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/member"
-    tokens = await _exchange_code(code, redirect_uri)
-    email = await _get_google_email(tokens["access_token"])
-    _store_member_tokens(member_id, tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email)
-    return RedirectResponse(f"{APP_BASE_URL}/settings.html?connected=member&id={member_id}")
+    account_id = _store_account_tokens(
+        tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email
+    )
+    return RedirectResponse(f"{APP_BASE_URL}/settings.html?connected=account&id={account_id}")
 
 @router.get("/google/connect/photos")
 def connect_photos():
@@ -133,18 +113,24 @@ async def import_google_tokens(
     if not email:
         email = await _get_google_email(payload.access_token)
 
-    if payload.target == "family":
-        _store_family_tokens(payload.access_token, payload.refresh_token, payload.expires_in, email)
-    elif payload.target == "member":
-        if payload.member_id is None:
-            raise HTTPException(status_code=400, detail="member_id is required for target=member")
-        _store_member_tokens(
-            payload.member_id, payload.access_token, payload.refresh_token, payload.expires_in, email
+    account_id = None
+    if payload.target == "account":
+        account_id = _store_account_tokens(
+            payload.access_token,
+            payload.refresh_token,
+            payload.expires_in,
+            email,
+            label=payload.label,
         )
     else:
         _store_photos_tokens(payload.access_token, payload.refresh_token, payload.expires_in, email)
 
-    return {"ok": True, "target": payload.target, "email": email, "member_id": payload.member_id}
+    return {
+        "ok": True,
+        "target": payload.target,
+        "email": email,
+        "account_id": account_id,
+    }
 
 @router.delete("/google/disconnect/photos")
 def disconnect_photos():
@@ -167,91 +153,48 @@ def get_photos_status():
         "cached_photos": count["c"] if count else 0
     }
 
-@router.delete("/google/disconnect/family")
-def disconnect_family():
-    conn = get_db()
-    conn.execute("DELETE FROM family_google_calendar")
-    conn.commit()
-    conn.close()
-    return {"ok": True}
-
-@router.delete("/google/disconnect/member/{member_id}")
-def disconnect_member(member_id: int):
-    conn = get_db()
-    conn.execute("""UPDATE members
-                   SET google_access_token=NULL, google_refresh_token=NULL,
-                       google_token_expiry=NULL, google_email=NULL,
-                       google_calendar_ids=NULL
-                   WHERE id=?""", (member_id,))
-    # Drop inbound Google sync rows; keep locally created events that were pushed
-    # (those have google_calendar_id set) and Apple/external imports.
-    conn.execute(
-        """DELETE FROM events
-           WHERE member_id=? AND google_event_id IS NOT NULL AND google_calendar_id IS NULL
-             AND external_event_id IS NULL""",
-        (member_id,),
-    )
-    conn.commit()
-    conn.close()
-    return {"ok": True}
-
-@router.get("/google/status")
-def get_google_status():
-    """Return connection status for family + all members."""
-    conn = get_db()
-    family = conn.execute("SELECT google_email FROM family_google_calendar LIMIT 1").fetchone()
-    members = conn.execute("SELECT id, name, google_email FROM members").fetchall()
-    conn.close()
-    return {
-        "family": {"connected": bool(family), "email": family["google_email"] if family else None},
-        "members": [{"id": m["id"], "name": m["name"], "connected": bool(m["google_email"]), "email": m["google_email"]} for m in members]
-    }
-
 def _token_expiry(expires_in: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
 
-def _store_family_tokens(access_token: str, refresh_token: Optional[str], expires_in: int, email: str) -> None:
+def _store_account_tokens(
+    access_token: str,
+    refresh_token: Optional[str],
+    expires_in: int,
+    email: str,
+    label: Optional[str] = None,
+) -> int:
+    """Upsert a Google calendar_accounts row. Same email updates tokens; otherwise insert."""
     expiry = _token_expiry(expires_in)
+    email = (email or "").strip()
     conn = get_db()
-    existing = conn.execute("SELECT id FROM family_google_calendar LIMIT 1").fetchone()
+    existing = None
+    if email:
+        existing = conn.execute(
+            "SELECT id FROM calendar_accounts WHERE provider='google' AND email=?",
+            (email,),
+        ).fetchone()
     if existing:
         conn.execute(
-            """UPDATE family_google_calendar
-               SET google_access_token=?, google_refresh_token=COALESCE(?, google_refresh_token),
-                   google_token_expiry=?, google_email=?, updated_at=datetime('now')""",
-            (access_token, refresh_token, expiry, email),
+            """UPDATE calendar_accounts
+               SET access_token=?, refresh_token=COALESCE(?, refresh_token),
+                   token_expiry=?, email=?, label=COALESCE(?, label),
+                   updated_at=datetime('now')
+               WHERE id=?""",
+            (access_token, refresh_token, expiry, email, label, existing["id"]),
         )
+        account_id = existing["id"]
     else:
-        conn.execute(
-            """INSERT INTO family_google_calendar
-               (google_access_token, google_refresh_token, google_token_expiry, google_email)
-               VALUES (?, ?, ?, ?)""",
-            (access_token, refresh_token, expiry, email),
+        cur = conn.execute(
+            """INSERT INTO calendar_accounts
+               (provider, email, label, access_token, refresh_token, token_expiry)
+               VALUES ('google', ?, ?, ?, ?, ?)""",
+            (email or None, label or email or "Google", access_token, refresh_token, expiry),
         )
+        account_id = cur.lastrowid
     conn.commit()
     conn.close()
-
-
-def _store_member_tokens(
-    member_id: int, access_token: str, refresh_token: Optional[str], expires_in: int, email: str
-) -> None:
-    conn = get_db()
-    member = conn.execute("SELECT id FROM members WHERE id=?", (member_id,)).fetchone()
-    if not member:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Member not found")
-    expiry = _token_expiry(expires_in)
-    conn.execute(
-        """UPDATE members
-           SET google_access_token=?,
-               google_refresh_token=COALESCE(?, google_refresh_token),
-               google_token_expiry=?, google_email=?
-           WHERE id=?""",
-        (access_token, refresh_token, expiry, email, member_id),
-    )
-    conn.commit()
-    conn.close()
+    return account_id
 
 
 def _store_photos_tokens(access_token: str, refresh_token: Optional[str], expires_in: int, email: str) -> None:

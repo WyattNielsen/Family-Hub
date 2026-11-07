@@ -105,7 +105,7 @@ Set in `.env` (gitignored), passed into the container via `env_file` in `docker-
 
 ## Key Integrations
 
-- **Google Calendar** — OAuth tokens stored in `family_google_calendar` table (shared) and `members` table (per-person). Sync logic in `routers/calendar.py`.
+- **Google / Apple Calendar** — OAuth/iCloud credentials in `calendar_accounts`; calendars in `calendar_sources` assigned to a member or marked `is_family` (shared). Person write via `members.write_calendar_source_id`; family write via settings `family_write_calendar_source_id`. Sync/write in `routers/calendar.py`.
 - **Home Assistant** — URL + long-lived token stored in settings table. All HA calls go through `routers/homeassistant.py`. TTS uses `tts.speak` service with `entity_id` = TTS engine, `media_player_entity_id` = speaker.
 - **Cameras** — HA MJPEG proxy via FastAPI `StreamingResponse` at `/api/security/camera/{entity_id}/stream`. No go2rtc.
 - **Lunch** — Nutrislice API, school domain stored in settings (`lunch_school`). `lunch_hidden` setting (`'true'/'false'`) hides the dashboard lunch column — toggle in Settings → Integrations → Lunch (use during summer).

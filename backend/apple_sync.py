@@ -191,13 +191,33 @@ def fetch_caldav_events(apple_id: str, app_password: str, calendar_url: str, col
     return events
 
 
-def upsert_apple_events(conn, member_id: int, source_id: int, events: list[dict]) -> int:
-    """Replace synced Apple events for a source with the fresh set."""
+def upsert_apple_events(
+    conn,
+    member_id: Optional[int],
+    source_id: int,
+    events: list[dict],
+    *,
+    is_family: bool = False,
+) -> int:
+    """Replace synced Apple/ICS inbound events for a source with the fresh set.
+
+    Preserves locally-written events (google_calendar_id set) on the same source.
+    """
     prefix = f"apple:{source_id}:"
     conn.execute(
-        "DELETE FROM events WHERE member_id=? AND external_event_id LIKE ?",
-        (member_id, prefix + "%"),
+        """DELETE FROM events
+           WHERE external_source_id=? AND google_calendar_id IS NULL""",
+        (source_id,),
     )
+    # Legacy rows keyed only by the apple: prefix
+    if member_id is not None:
+        conn.execute(
+            """DELETE FROM events
+               WHERE member_id=? AND external_event_id LIKE ? AND google_calendar_id IS NULL
+                 AND (external_source_id IS NULL OR external_source_id=?)""",
+            (member_id, prefix + "%", source_id),
+        )
+    family_flag = 1 if is_family else 0
     synced = 0
     for ev in events:
         ext_id = f"{prefix}{ev['uid']}"
@@ -205,7 +225,7 @@ def upsert_apple_events(conn, member_id: int, source_id: int, events: list[dict]
             """INSERT INTO events
                (title, description, location, start_datetime, end_datetime, all_day,
                 member_id, is_family, color, external_event_id, external_source_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ev["title"],
                 ev.get("description") or "",
@@ -214,6 +234,7 @@ def upsert_apple_events(conn, member_id: int, source_id: int, events: list[dict]
                 ev["end_datetime"],
                 ev.get("all_day") or 0,
                 member_id,
+                family_flag,
                 ev.get("color"),
                 ext_id,
                 source_id,
@@ -221,3 +242,93 @@ def upsert_apple_events(conn, member_id: int, source_id: int, events: list[dict]
         )
         synced += 1
     return synced
+
+
+def _vevent_ical(event_row: dict, uid: str) -> bytes:
+    from icalendar import Calendar, Event as VEvent
+    from datetime import date as date_cls, datetime as dt_cls
+
+    cal = Calendar()
+    cal.add("prodid", "-//Family Hub//EN")
+    cal.add("version", "2.0")
+    vevent = VEvent()
+    vevent.add("uid", uid)
+    vevent.add("summary", event_row.get("title") or "(No title)")
+    if event_row.get("description"):
+        vevent.add("description", event_row["description"])
+    if event_row.get("location"):
+        vevent.add("location", event_row["location"])
+
+    if event_row.get("all_day"):
+        start_d = date_cls.fromisoformat(str(event_row["start_datetime"])[:10])
+        end_d = date_cls.fromisoformat(str(event_row["end_datetime"])[:10])
+        vevent.add("dtstart", start_d)
+        vevent.add("dtend", end_d)
+    else:
+        start_s = str(event_row["start_datetime"])
+        end_s = str(event_row["end_datetime"])
+        if len(start_s) == 16:
+            start_s += ":00"
+        if len(end_s) == 16:
+            end_s += ":00"
+        vevent.add("dtstart", dt_cls.fromisoformat(start_s.replace("Z", "")))
+        vevent.add("dtend", dt_cls.fromisoformat(end_s.replace("Z", "")))
+
+    cal.add_component(vevent)
+    return cal.to_ical()
+
+
+def create_caldav_event(apple_id: str, app_password: str, calendar_url: str, event_row: dict) -> str:
+    """Create a CalDAV event; returns the UID used as the remote id."""
+    import uuid
+    from caldav import DAVClient
+
+    uid = str(uuid.uuid4())
+    ical = _vevent_ical(event_row, uid)
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    cal = client.calendar(url=calendar_url)
+    cal.save_event(ical)
+    return uid
+
+
+def update_caldav_event(
+    apple_id: str, app_password: str, calendar_url: str, uid: str, event_row: dict
+) -> bool:
+    """Update an existing CalDAV event by UID. Returns True on success."""
+    from caldav import DAVClient
+
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    cal = client.calendar(url=calendar_url)
+    try:
+        existing = cal.event_by_uid(uid)
+    except Exception:
+        try:
+            results = cal.search(event=True, uid=uid)
+            existing = results[0] if results else None
+        except Exception:
+            existing = None
+    if not existing:
+        return False
+    existing.data = _vevent_ical(event_row, uid)
+    existing.save()
+    return True
+
+
+def delete_caldav_event(apple_id: str, app_password: str, calendar_url: str, uid: str) -> bool:
+    """Delete a CalDAV event by UID. Returns True if deleted."""
+    from caldav import DAVClient
+
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    cal = client.calendar(url=calendar_url)
+    try:
+        existing = cal.event_by_uid(uid)
+    except Exception:
+        try:
+            results = cal.search(event=True, uid=uid)
+            existing = results[0] if results else None
+        except Exception:
+            existing = None
+    if not existing:
+        return False
+    existing.delete()
+    return True

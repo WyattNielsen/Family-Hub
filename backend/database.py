@@ -26,34 +26,24 @@ def init_db():
             color TEXT NOT NULL DEFAULT '#4A90D9',
             avatar TEXT DEFAULT NULL,
             is_admin INTEGER DEFAULT 0,
-            google_access_token TEXT DEFAULT NULL,
-            google_refresh_token TEXT DEFAULT NULL,
-            google_token_expiry TEXT DEFAULT NULL,
-            google_email TEXT DEFAULT NULL,
-            google_calendar_ids TEXT DEFAULT NULL,
+            write_calendar_source_id INTEGER DEFAULT NULL,
             created_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS family_google_calendar (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            google_access_token TEXT,
-            google_refresh_token TEXT,
-            google_token_expiry TEXT,
-            google_email TEXT,
-            calendar_id TEXT DEFAULT 'primary',
-            updated_at TEXT DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             description TEXT DEFAULT '',
+            location TEXT DEFAULT '',
             start_datetime TEXT NOT NULL,
             end_datetime TEXT NOT NULL,
             all_day INTEGER DEFAULT 0,
             member_id INTEGER DEFAULT NULL,
             is_family INTEGER DEFAULT 0,
             google_event_id TEXT DEFAULT NULL,
+            google_calendar_id TEXT DEFAULT NULL,
+            external_event_id TEXT DEFAULT NULL,
+            external_source_id INTEGER DEFAULT NULL,
             color TEXT DEFAULT NULL,
             recurrence TEXT DEFAULT NULL,
             created_at TEXT DEFAULT (datetime('now')),
@@ -108,123 +98,63 @@ def init_db():
             FOREIGN KEY (author_id) REFERENCES members(id) ON DELETE SET NULL
         );
 
-        CREATE TABLE IF NOT EXISTS apple_calendar_sources (
+        CREATE TABLE IF NOT EXISTS calendar_accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            member_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            email TEXT DEFAULT NULL,
+            label TEXT DEFAULT NULL,
+            access_token TEXT DEFAULT NULL,
+            refresh_token TEXT DEFAULT NULL,
+            token_expiry TEXT DEFAULT NULL,
+            apple_id TEXT DEFAULT NULL,
+            app_password TEXT DEFAULT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS calendar_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER DEFAULT NULL,
             kind TEXT NOT NULL,
             name TEXT NOT NULL,
-            url TEXT NOT NULL,
+            external_id TEXT NOT NULL,
             color TEXT DEFAULT NULL,
             enabled INTEGER DEFAULT 1,
+            member_id INTEGER DEFAULT NULL,
+            is_family INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+            FOREIGN KEY (account_id) REFERENCES calendar_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE SET NULL
         );
     """)
 
     conn.commit()
 
-    # Run migrations for existing databases
-    try:
-        conn.execute("ALTER TABLE members ADD COLUMN google_calendar_ids TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
+    # Drop superseded tables from earlier calendar designs (app not live yet)
+    for table in ("family_google_calendar", "apple_calendar_sources"):
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.commit()
+        except Exception:
+            pass
 
-    try:
-        conn.execute("ALTER TABLE members ADD COLUMN apple_id TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
+    # Additive migrations for DBs created before columns were in CREATE TABLE
+    for stmt in (
+        "ALTER TABLE members ADD COLUMN write_calendar_source_id INTEGER DEFAULT NULL",
+        "ALTER TABLE calendar_sources ADD COLUMN is_family INTEGER DEFAULT 0",
+        "ALTER TABLE events ADD COLUMN location TEXT DEFAULT ''",
+        "ALTER TABLE events ADD COLUMN google_calendar_id TEXT DEFAULT NULL",
+        "ALTER TABLE events ADD COLUMN external_event_id TEXT DEFAULT NULL",
+        "ALTER TABLE events ADD COLUMN external_source_id INTEGER DEFAULT NULL",
+        "ALTER TABLE chores ADD COLUMN recurrence_days TEXT DEFAULT NULL",
+        "ALTER TABLE chores ADD COLUMN time_of_day TEXT DEFAULT NULL",
+    ):
+        try:
+            conn.execute(stmt)
+            conn.commit()
+        except Exception:
+            pass
 
-    try:
-        conn.execute("ALTER TABLE members ADD COLUMN apple_app_password TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE events ADD COLUMN external_event_id TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE events ADD COLUMN external_source_id INTEGER DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("""CREATE TABLE IF NOT EXISTS apple_calendar_sources (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            member_id INTEGER NOT NULL,
-            kind TEXT NOT NULL,
-            name TEXT NOT NULL,
-            url TEXT NOT NULL,
-            color TEXT DEFAULT NULL,
-            enabled INTEGER DEFAULT 1,
-            created_at TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
-        )""")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE chores ADD COLUMN recurrence_days TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE chores ADD COLUMN time_of_day TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE events ADD COLUMN google_calendar_id TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE events ADD COLUMN location TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("""CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )""")
-        conn.commit()
-    except Exception:
-        pass
-
-    try:
-        conn.execute("""CREATE TABLE IF NOT EXISTS photos_auth (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            google_access_token TEXT,
-            google_refresh_token TEXT,
-            google_token_expiry TEXT,
-            google_email TEXT,
-            updated_at TEXT DEFAULT (datetime('now'))
-        )""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS photos_cache (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            media_item_id TEXT UNIQUE,
-            base_url TEXT NOT NULL,
-            url_expiry TEXT NOT NULL,
-            mime_type TEXT DEFAULT 'image/jpeg',
-            created_at TEXT DEFAULT (datetime('now'))
-        )""")
-        conn.commit()
-    except Exception:
-        pass
-
-    # Seed default settings
     defaults = [
         ('slideshow_timeout', '120'),
         ('slideshow_interval', '5'),

@@ -1,11 +1,10 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel
+from typing import Optional
 from database import get_db
 import apple_sync
 import httpx
-import json
 import os as _os
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
@@ -25,7 +24,6 @@ def get_app_tz(conn=None) -> str:
 
 GOOGLE_CLIENT_ID = _os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = _os.environ.get("GOOGLE_CLIENT_SECRET", "")
-APP_BASE_URL = _os.environ.get("APP_BASE_URL", "http://localhost:3000")
 
 class EventCreate(BaseModel):
     title: str
@@ -48,18 +46,28 @@ class EventUpdate(BaseModel):
     member_id: Optional[int] = None
     is_family: Optional[bool] = None
     color: Optional[str] = None
+    location: Optional[str] = None
 
-class AppleIcloudConnect(BaseModel):
+class IcloudAccountCreate(BaseModel):
     apple_id: str
     app_password: str
+    label: Optional[str] = None
 
-class AppleIcsCreate(BaseModel):
+class CalendarSourceCreate(BaseModel):
+    account_id: Optional[int] = None
+    kind: str
+    external_id: Optional[str] = None
+    url: Optional[str] = None  # alias for ICS
     name: str
-    url: str
     color: Optional[str] = None
+    member_id: Optional[int] = None
 
-class AppleCaldavSelect(BaseModel):
-    calendars: List[dict] = Field(default_factory=list)  # [{url, name, color?}]
+class CalendarSourceUpdate(BaseModel):
+    member_id: Optional[int] = None
+    is_family: Optional[bool] = None
+    name: Optional[str] = None
+    color: Optional[str] = None
+    enabled: Optional[bool] = None
 
 @router.get("/events")
 def get_events(
@@ -82,7 +90,8 @@ def get_events(
         query += " AND e.start_datetime <= ?"
         params.append(end)
     if member_id:
-        query += " AND e.member_id = ?"
+        # Person view: that member's events plus shared family calendars
+        query += " AND (e.member_id = ? OR e.is_family = 1)"
         params.append(member_id)
     query += " ORDER BY e.start_datetime"
     events = conn.execute(query, params).fetchall()
@@ -110,110 +119,268 @@ def _build_google_body(event_row: dict, tz: str = "America/New_York") -> dict:
     return body
 
 
-async def _push_to_google(event_row: dict, conn) -> tuple:
-    """Push a locally created event to the selected person's primary Google calendar.
-
-    Skips externally synced events (Apple/ICS) and inbound Google sync rows
-    (google_event_id set without google_calendar_id).
-    Returns (google_event_id, calendar_id) or (None, None) on failure / skip.
-    """
-    member_id = event_row.get("member_id")
-    if not member_id:
-        return None, None
-
-    # Apple/ICS (and other external) imports — never create/update on Google from these.
-    if event_row.get("external_event_id") or event_row.get("external_source_id"):
-        return None, None
-
-    # Inbound Google sync events have an id but no write calendar — don't re-home them.
+def _is_inbound_only(event_row: dict) -> bool:
+    """Inbound sync rows are not pushed back to the provider."""
     if event_row.get("google_event_id") and not event_row.get("google_calendar_id"):
+        return True
+    if event_row.get("external_event_id") and not event_row.get("google_calendar_id"):
+        return True
+    return False
+
+
+def _account_public(row) -> dict:
+    d = dict(row)
+    return {
+        "id": d["id"],
+        "provider": d["provider"],
+        "email": d.get("email"),
+        "label": d.get("label"),
+        "apple_id": d.get("apple_id"),
+        "has_app_password": bool(d.get("app_password")),
+        "created_at": d.get("created_at"),
+        "updated_at": d.get("updated_at"),
+    }
+
+
+def _setting(conn, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _set_setting(conn, key: str, value: Optional[str]):
+    if value is None:
+        conn.execute("DELETE FROM settings WHERE key=?", (key,))
+    else:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, str(value)),
+        )
+
+
+def _source_with_account(conn, source_id: int):
+    source = conn.execute("SELECT * FROM calendar_sources WHERE id=?", (source_id,)).fetchone()
+    if not source:
         return None, None
+    account = None
+    if source["account_id"]:
+        account = conn.execute(
+            "SELECT * FROM calendar_accounts WHERE id=?", (source["account_id"],)
+        ).fetchone()
+    return dict(source), (dict(account) if account else None)
 
-    body = _build_google_body(event_row, tz=get_app_tz(conn))
-    calendar_id = event_row.get("google_calendar_id") or "primary"
 
+def _get_member_write_source(conn, member_id: int):
+    member = conn.execute(
+        "SELECT id, write_calendar_source_id FROM members WHERE id=?", (member_id,)
+    ).fetchone()
+    if not member or not member["write_calendar_source_id"]:
+        return None, None
+    return _source_with_account(conn, member["write_calendar_source_id"])
+
+
+def _get_family_write_source(conn):
+    raw = _setting(conn, "family_write_calendar_source_id")
+    if not raw:
+        return None, None
     try:
-        member = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
-        if not member or not member["google_access_token"]:
-            return None, None
-        access_token = await refresh_token_if_needed(dict(member), is_family=False, member_id=member_id)
+        source_id = int(raw)
+    except (TypeError, ValueError):
+        return None, None
+    source, account = _source_with_account(conn, source_id)
+    if not source or not source.get("is_family"):
+        return None, None
+    return source, account
 
-        existing_gid = event_row.get("google_event_id")
-        async with httpx.AsyncClient() as client:
-            if existing_gid:
-                resp = await client.put(
-                    f"https://www.googleapis.com/calendar/v3/calendars/{quote(calendar_id, safe='')}/events/{existing_gid}",
-                    headers={"Authorization": f"Bearer {access_token}"}, json=body)
+
+def _clear_family_write_if_source(conn, source_id: int):
+    raw = _setting(conn, "family_write_calendar_source_id")
+    if raw and str(raw) == str(source_id):
+        _set_setting(conn, "family_write_calendar_source_id", None)
+
+
+async def _push_event_to_write_calendar(event_row: dict, conn) -> tuple:
+    """Push a locally created/updated event to the configured write calendar.
+
+    Returns (remote_id, calendar_external_id, source_id) or (None, None, None).
+    """
+    if _is_inbound_only(event_row):
+        return None, None, None
+
+    if event_row.get("is_family"):
+        source, account = _get_family_write_source(conn)
+    else:
+        member_id = event_row.get("member_id")
+        if not member_id:
+            return None, None, None
+        source, account = _get_member_write_source(conn, member_id)
+    if not source:
+        return None, None, None
+
+    kind = source["kind"]
+    remote_id = event_row.get("google_event_id")
+    calendar_ext = source["external_id"]
+
+    if kind == "google":
+        if not account or not account.get("access_token"):
+            return None, None, None
+        access_token = await refresh_account_token_if_needed(account)
+        body = _build_google_body(event_row, tz=get_app_tz(conn))
+        encoded = quote(calendar_ext, safe="")
+        try:
+            async with httpx.AsyncClient() as client:
+                if remote_id:
+                    resp = await client.put(
+                        f"https://www.googleapis.com/calendar/v3/calendars/{encoded}/events/{remote_id}",
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        json=body,
+                    )
+                else:
+                    resp = await client.post(
+                        f"https://www.googleapis.com/calendar/v3/calendars/{encoded}/events",
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        json=body,
+                    )
+            if resp.status_code in (200, 201):
+                return resp.json()["id"], calendar_ext, source["id"]
+            print(f"Google Calendar push failed ({calendar_ext}): {resp.status_code} {resp.text[:300]}")
+        except Exception as e:
+            print(f"Google Calendar push error: {e}")
+        return None, None, None
+
+    if kind == "caldav":
+        if not account or not account.get("apple_id") or not account.get("app_password"):
+            return None, None, None
+        try:
+            if remote_id:
+                ok = apple_sync.update_caldav_event(
+                    account["apple_id"], account["app_password"], calendar_ext, remote_id, event_row
+                )
+                if not ok:
+                    remote_id = apple_sync.create_caldav_event(
+                        account["apple_id"], account["app_password"], calendar_ext, event_row
+                    )
             else:
-                resp = await client.post(
-                    f"https://www.googleapis.com/calendar/v3/calendars/{quote(calendar_id, safe='')}/events",
-                    headers={"Authorization": f"Bearer {access_token}"}, json=body)
-        if resp.status_code in (200, 201):
-            return resp.json()["id"], calendar_id
-        print(f"Google Calendar push failed ({calendar_id}): {resp.status_code} {resp.text[:300]}")
-    except Exception as e:
-        print(f"Google Calendar push error: {e}")
-    return None, None
+                remote_id = apple_sync.create_caldav_event(
+                    account["apple_id"], account["app_password"], calendar_ext, event_row
+                )
+            return remote_id, calendar_ext, source["id"]
+        except Exception as e:
+            print(f"CalDAV push error: {e}")
+            return None, None, None
+
+    # ICS sources are inbound-only
+    return None, None, None
 
 
-async def _delete_from_google(event_row: dict, conn):
-    """Delete an event from Google Calendar if it has a google_event_id."""
-    gid = event_row.get("google_event_id")
-    if not gid:
+async def _delete_from_write_calendar(event_row: dict, conn):
+    """Delete a locally-written event from its remote calendar."""
+    if _is_inbound_only(event_row):
         return
-    member_id = event_row.get("member_id")
-    # Only delete events we wrote (google_calendar_id set). Synced-in events stay on Google.
+    remote_id = event_row.get("google_event_id")
     calendar_id = event_row.get("google_calendar_id")
-    if not member_id or not calendar_id:
+    source_id = event_row.get("external_source_id")
+    if not remote_id or not calendar_id:
         return
-    try:
-        member = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
-        if not member or not member["google_access_token"]:
+
+    source = None
+    account = None
+    if source_id:
+        source = conn.execute("SELECT * FROM calendar_sources WHERE id=?", (source_id,)).fetchone()
+        if source and source["account_id"]:
+            account = conn.execute(
+                "SELECT * FROM calendar_accounts WHERE id=?", (source["account_id"],)
+            ).fetchone()
+
+    kind = source["kind"] if source else "google"
+
+    if kind == "google":
+        if not account:
             return
-        access_token = await refresh_token_if_needed(dict(member), is_family=False, member_id=member_id)
-        async with httpx.AsyncClient() as client:
-            await client.delete(
-                f"https://www.googleapis.com/calendar/v3/calendars/{quote(calendar_id, safe='')}/events/{gid}",
-                headers={"Authorization": f"Bearer {access_token}"})
-    except Exception as e:
-        print(f"Google Calendar delete error: {e}")
+        try:
+            access_token = await refresh_account_token_if_needed(dict(account))
+            encoded = quote(calendar_id, safe="")
+            async with httpx.AsyncClient() as client:
+                await client.delete(
+                    f"https://www.googleapis.com/calendar/v3/calendars/{encoded}/events/{remote_id}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+        except Exception as e:
+            print(f"Google Calendar delete error: {e}")
+        return
+
+    if kind == "caldav" and account:
+        try:
+            apple_sync.delete_caldav_event(
+                account["apple_id"], account["app_password"], calendar_id, remote_id
+            )
+        except Exception as e:
+            print(f"CalDAV delete error: {e}")
 
 
 @router.post("/events")
 async def create_event(event: EventCreate):
-    if not event.member_id:
-        raise HTTPException(status_code=400, detail="Select a person for this event")
-
+    is_family = bool(event.is_family)
     conn = get_db()
-    member = conn.execute(
-        "SELECT id, google_access_token FROM members WHERE id=?", (event.member_id,)
-    ).fetchone()
-    if not member:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Member not found")
+
+    if is_family:
+        source, _account = _get_family_write_source(conn)
+        if not source:
+            conn.close()
+            raise HTTPException(status_code=400, detail="No family write calendar configured")
+        if source["kind"] not in ("google", "caldav"):
+            conn.close()
+            raise HTTPException(status_code=400, detail="Write calendar must be Google or iCloud CalDAV")
+        member_id = None
+        color = event.color or source.get("color") or "#F6BF26"
+    else:
+        if not event.member_id:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Select a person or Family for this event")
+        member = conn.execute(
+            "SELECT id, write_calendar_source_id FROM members WHERE id=?", (event.member_id,)
+        ).fetchone()
+        if not member:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Member not found")
+        if not member["write_calendar_source_id"]:
+            conn.close()
+            raise HTTPException(status_code=400, detail="No write calendar configured for this member")
+        source = conn.execute(
+            "SELECT * FROM calendar_sources WHERE id=?", (member["write_calendar_source_id"],)
+        ).fetchone()
+        if not source or source["member_id"] != event.member_id:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Write calendar is invalid for this member")
+        if source["kind"] not in ("google", "caldav"):
+            conn.close()
+            raise HTTPException(status_code=400, detail="Write calendar must be Google or iCloud CalDAV")
+        member_id = event.member_id
+        color = event.color
 
     cur = conn.execute("""
         INSERT INTO events (title, description, location, start_datetime, end_datetime, all_day, member_id, is_family, color, recurrence)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (event.title, event.description, event.location, event.start_datetime, event.end_datetime,
-          1 if event.all_day else 0, event.member_id, event.color, event.recurrence))
+          1 if event.all_day else 0, member_id, 1 if is_family else 0, color, event.recurrence))
     conn.commit()
     new_id = cur.lastrowid
     row = dict(conn.execute("SELECT * FROM events WHERE id=?", (new_id,)).fetchone())
 
-    if member["google_access_token"]:
-        gid, cal_id = await _push_to_google(row, conn)
-        if gid:
-            conn.execute(
-                "UPDATE events SET google_event_id=?, google_calendar_id=? WHERE id=?",
-                (gid, cal_id, new_id),
-            )
-            conn.commit()
-            row["google_event_id"] = gid
-            row["google_calendar_id"] = cal_id
-        else:
-            # Keep local event even if Google push fails (e.g. token expired)
-            print(f"Event {new_id} saved locally but not pushed to Google primary for member {event.member_id}")
+    remote_id, cal_id, source_id = await _push_event_to_write_calendar(row, conn)
+    if remote_id:
+        conn.execute(
+            """UPDATE events
+               SET google_event_id=?, google_calendar_id=?, external_source_id=?
+               WHERE id=?""",
+            (remote_id, cal_id, source_id, new_id),
+        )
+        conn.commit()
+        row["google_event_id"] = remote_id
+        row["google_calendar_id"] = cal_id
+        row["external_source_id"] = source_id
+    else:
+        target = "family" if is_family else f"member {member_id}"
+        print(f"Event {new_id} saved locally but not pushed to write calendar ({target})")
 
     conn.close()
     return row
@@ -234,12 +401,19 @@ async def update_event(event_id: int, event: EventUpdate):
         conn.commit()
     row = dict(conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone())
 
-    gid, cal_id = await _push_to_google(row, conn)
-    if gid and not row.get("google_event_id"):
-        conn.execute("UPDATE events SET google_event_id=?, google_calendar_id=? WHERE id=?", (gid, cal_id, event_id))
-        conn.commit()
-        row["google_event_id"] = gid
-        row["google_calendar_id"] = cal_id
+    if not _is_inbound_only(row):
+        remote_id, cal_id, source_id = await _push_event_to_write_calendar(row, conn)
+        if remote_id:
+            conn.execute(
+                """UPDATE events
+                   SET google_event_id=?, google_calendar_id=?, external_source_id=?
+                   WHERE id=?""",
+                (remote_id, cal_id, source_id, event_id),
+            )
+            conn.commit()
+            row["google_event_id"] = remote_id
+            row["google_calendar_id"] = cal_id
+            row["external_source_id"] = source_id
 
     conn.close()
     return row
@@ -249,7 +423,7 @@ async def delete_event(event_id: int):
     conn = get_db()
     row = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
     if row:
-        await _delete_from_google(dict(row), conn)
+        await _delete_from_write_calendar(dict(row), conn)
     conn.execute("DELETE FROM events WHERE id=?", (event_id,))
     conn.commit()
     conn.close()
@@ -257,10 +431,12 @@ async def delete_event(event_id: int):
 
 # ── Token Refresh ─────────────────────────────────────────────────────────────
 
-async def refresh_token_if_needed(token_row: dict, is_family: bool = False, member_id: int = None) -> str:
-    expiry = token_row.get("google_token_expiry")
-    access_token = token_row.get("google_access_token")
-    refresh_token = token_row.get("google_refresh_token")
+async def refresh_account_token_if_needed(account: dict) -> str:
+    """Refresh Google OAuth tokens stored on a calendar_accounts row."""
+    expiry = account.get("token_expiry")
+    access_token = account.get("access_token")
+    refresh_token = account.get("refresh_token")
+    account_id = account.get("id")
     needs_refresh = True
     if expiry:
         try:
@@ -283,94 +459,360 @@ async def refresh_token_if_needed(token_row: dict, is_family: bool = False, memb
                 new_token = data["access_token"]
                 new_expiry = (datetime.now(timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))).isoformat()
                 conn = get_db()
-                if is_family:
-                    conn.execute("UPDATE family_google_calendar SET google_access_token=?, google_token_expiry=?",
-                                 (new_token, new_expiry))
-                else:
-                    conn.execute("UPDATE members SET google_access_token=?, google_token_expiry=? WHERE id=?",
-                                 (new_token, new_expiry, member_id))
+                conn.execute(
+                    """UPDATE calendar_accounts
+                       SET access_token=?, token_expiry=?, updated_at=datetime('now')
+                       WHERE id=?""",
+                    (new_token, new_expiry, account_id),
+                )
                 conn.commit()
                 conn.close()
                 return new_token
     return access_token
 
-# ── List Available Calendars ──────────────────────────────────────────────────
 
-@router.get("/google-calendars/family")
-async def list_family_google_calendars():
-    """List all calendars on the connected family Google account."""
+
+# ── Calendar Accounts ─────────────────────────────────────────────────────────
+
+@router.get("/accounts")
+def list_calendar_accounts():
     conn = get_db()
-    family_cal = conn.execute("SELECT * FROM family_google_calendar LIMIT 1").fetchone()
+    rows = conn.execute(
+        "SELECT * FROM calendar_accounts ORDER BY provider, email, apple_id, id"
+    ).fetchall()
     conn.close()
-    if not family_cal:
-        raise HTTPException(status_code=400, detail="Family Google Calendar not connected")
-    access_token = await refresh_token_if_needed(dict(family_cal), is_family=True)
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://www.googleapis.com/calendar/v3/users/me/calendarList",
-            headers={"Authorization": f"Bearer {access_token}"}
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Google API error: {resp.text}")
-        items = resp.json().get("items", [])
-    try:
-        selected = json.loads(dict(family_cal).get("calendar_id") or '["primary"]')
-        if not isinstance(selected, list):
-            selected = [selected]
-    except Exception:
-        selected = ["primary"]
-    return {
-        "calendars": [{"id": c["id"], "summary": c.get("summary", ""), "primary": c.get("primary", False), "backgroundColor": c.get("backgroundColor", "#4F6EF7")} for c in items],
-        "selected": selected
-    }
+    return [_account_public(r) for r in rows]
 
-@router.get("/google-calendars/member/{member_id}")
-async def list_member_google_calendars(member_id: int):
-    """List all calendars on a member's connected Google account."""
+
+@router.post("/accounts/icloud")
+def create_icloud_account(payload: IcloudAccountCreate):
+    apple_id = payload.apple_id.strip()
+    app_password = payload.app_password.strip().replace(" ", "")
+    if not apple_id or not app_password:
+        raise HTTPException(status_code=400, detail="Apple ID and app-specific password are required")
+    try:
+        apple_sync.list_icloud_calendars(apple_id, app_password)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"iCloud login failed: {exc}") from exc
+
+    label = (payload.label or apple_id).strip()
     conn = get_db()
-    member = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
+    existing = conn.execute(
+        "SELECT id FROM calendar_accounts WHERE provider='apple_icloud' AND apple_id=?",
+        (apple_id,),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """UPDATE calendar_accounts
+               SET app_password=?, label=?, email=COALESCE(email, ?), updated_at=datetime('now')
+               WHERE id=?""",
+            (app_password, label, apple_id, existing["id"]),
+        )
+        account_id = existing["id"]
+    else:
+        cur = conn.execute(
+            """INSERT INTO calendar_accounts
+               (provider, email, label, apple_id, app_password)
+               VALUES ('apple_icloud', ?, ?, ?, ?)""",
+            (apple_id, label, apple_id, app_password),
+        )
+        account_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM calendar_accounts WHERE id=?", (account_id,)).fetchone()
     conn.close()
-    if not member or not member["google_access_token"]:
-        raise HTTPException(status_code=400, detail="Member Google Calendar not connected")
-    access_token = await refresh_token_if_needed(dict(member), is_family=False, member_id=member_id)
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://www.googleapis.com/calendar/v3/users/me/calendarList",
-            headers={"Authorization": f"Bearer {access_token}"}
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Google API error: {resp.text}")
-        items = resp.json().get("items", [])
-    try:
-        selected = json.loads(dict(member).get("google_calendar_ids") or '["primary"]')
-        if not isinstance(selected, list):
-            selected = [selected]
-    except Exception:
-        selected = ["primary"]
-    return {
-        "calendars": [{"id": c["id"], "summary": c.get("summary", ""), "primary": c.get("primary", False), "backgroundColor": c.get("backgroundColor", "#4F6EF7")} for c in items],
-        "selected": selected
-    }
+    return _account_public(row)
 
-# ── Save Calendar Selections ──────────────────────────────────────────────────
 
-@router.post("/google-calendars/family/select")
-async def select_family_calendars(payload: dict):
-    calendar_ids = payload.get("calendar_ids", ["primary"])
+@router.delete("/accounts/{account_id}")
+def delete_calendar_account(account_id: int):
     conn = get_db()
-    conn.execute("UPDATE family_google_calendar SET calendar_id=?", (json.dumps(calendar_ids),))
+    account = conn.execute("SELECT * FROM calendar_accounts WHERE id=?", (account_id,)).fetchone()
+    if not account:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    sources = conn.execute(
+        "SELECT * FROM calendar_sources WHERE account_id=?", (account_id,)
+    ).fetchall()
+    for src in sources:
+        _delete_synced_events_for_source(conn, dict(src))
+        conn.execute(
+            "UPDATE members SET write_calendar_source_id=NULL WHERE write_calendar_source_id=?",
+            (src["id"],),
+        )
+        _clear_family_write_if_source(conn, src["id"])
+        conn.execute("DELETE FROM calendar_sources WHERE id=?", (src["id"],))
+
+    conn.execute("DELETE FROM calendar_accounts WHERE id=?", (account_id,))
     conn.commit()
     conn.close()
-    return {"ok": True, "selected": calendar_ids}
+    return {"ok": True}
 
-@router.post("/google-calendars/member/{member_id}/select")
-async def select_member_calendars(member_id: int, payload: dict):
-    calendar_ids = payload.get("calendar_ids", ["primary"])
+
+@router.get("/accounts/{account_id}/available")
+async def list_available_calendars(account_id: int):
     conn = get_db()
-    conn.execute("UPDATE members SET google_calendar_ids=? WHERE id=?", (json.dumps(calendar_ids), member_id))
+    account = conn.execute("SELECT * FROM calendar_accounts WHERE id=?", (account_id,)).fetchone()
+    conn.close()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    account = dict(account)
+
+    if account["provider"] == "google":
+        if not account.get("access_token"):
+            raise HTTPException(status_code=400, detail="Google account has no access token")
+        access_token = await refresh_account_token_if_needed(account)
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Google API error: {resp.text}")
+            items = resp.json().get("items", [])
+        return {
+            "calendars": [
+                {
+                    "id": c["id"],
+                    "external_id": c["id"],
+                    "name": c.get("summary", ""),
+                    "primary": c.get("primary", False),
+                    "backgroundColor": c.get("backgroundColor", "#4F6EF7"),
+                    "kind": "google",
+                }
+                for c in items
+            ]
+        }
+
+    if account["provider"] == "apple_icloud":
+        if not account.get("apple_id") or not account.get("app_password"):
+            raise HTTPException(status_code=400, detail="iCloud credentials missing")
+        try:
+            calendars = apple_sync.list_icloud_calendars(account["apple_id"], account["app_password"])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to list iCloud calendars: {exc}") from exc
+        return {
+            "calendars": [
+                {
+                    "id": c["url"],
+                    "external_id": c["url"],
+                    "name": c["name"],
+                    "url": c["url"],
+                    "kind": "caldav",
+                }
+                for c in calendars
+            ]
+        }
+
+    raise HTTPException(status_code=400, detail=f"Unknown provider: {account['provider']}")
+
+
+# ── Calendar Sources ──────────────────────────────────────────────────────────
+
+def _delete_synced_events_for_source(conn, source: dict):
+    """Remove inbound synced events for a source; keep locally-written rows."""
+    conn.execute(
+        """DELETE FROM events
+           WHERE external_source_id=?
+             AND google_calendar_id IS NULL""",
+        (source["id"],),
+    )
+
+
+def _source_row(conn, source_id: int) -> Optional[dict]:
+    row = conn.execute(
+        """SELECT s.*, a.email AS account_email, a.label AS account_label,
+                  a.provider AS account_provider, a.apple_id AS account_apple_id
+           FROM calendar_sources s
+           LEFT JOIN calendar_accounts a ON a.id = s.account_id
+           WHERE s.id=?""",
+        (source_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@router.post("/sources")
+def create_calendar_source(payload: CalendarSourceCreate):
+    kind = (payload.kind or "").strip().lower()
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if kind not in ("google", "ics", "caldav"):
+        raise HTTPException(status_code=400, detail="kind must be google, ics, or caldav")
+
+    external_id = (payload.external_id or payload.url or "").strip()
+    if kind == "ics":
+        external_id = apple_sync.normalize_ics_url(external_id)
+    if not external_id:
+        raise HTTPException(status_code=400, detail="external_id (or url for ICS) is required")
+
+    conn = get_db()
+    account_id = payload.account_id
+    if kind == "ics":
+        account_id = None
+    else:
+        if not account_id:
+            conn.close()
+            raise HTTPException(status_code=400, detail="account_id is required for google/caldav sources")
+        account = conn.execute("SELECT * FROM calendar_accounts WHERE id=?", (account_id,)).fetchone()
+        if not account:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Account not found")
+        if kind == "google" and account["provider"] != "google":
+            conn.close()
+            raise HTTPException(status_code=400, detail="Google sources require a Google account")
+        if kind == "caldav" and account["provider"] != "apple_icloud":
+            conn.close()
+            raise HTTPException(status_code=400, detail="CalDAV sources require an iCloud account")
+
+    if payload.member_id is not None:
+        member = conn.execute("SELECT id FROM members WHERE id=?", (payload.member_id,)).fetchone()
+        if not member:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Member not found")
+
+    cur = conn.execute(
+        """INSERT INTO calendar_sources
+           (account_id, kind, name, external_id, color, member_id)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (account_id, kind, name, external_id, payload.color, payload.member_id),
+    )
+    conn.commit()
+    source_id = cur.lastrowid
+    row = _source_row(conn, source_id)
+    conn.close()
+    return row
+
+
+@router.get("/sources")
+def list_calendar_sources():
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT s.*, a.email AS account_email, a.label AS account_label,
+                  a.provider AS account_provider, a.apple_id AS account_apple_id
+           FROM calendar_sources s
+           LEFT JOIN calendar_accounts a ON a.id = s.account_id
+           ORDER BY s.name, s.id"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@router.patch("/sources/{source_id}")
+def patch_calendar_source(source_id: int, payload: CalendarSourceUpdate):
+    conn = get_db()
+    existing = conn.execute("SELECT * FROM calendar_sources WHERE id=?", (source_id,)).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    data = payload.dict(exclude_unset=True)
+    updates = {}
+    if "name" in data and data["name"] is not None:
+        updates["name"] = data["name"].strip()
+    if "color" in data:
+        updates["color"] = data["color"]
+    if "enabled" in data and data["enabled"] is not None:
+        updates["enabled"] = 1 if data["enabled"] else 0
+
+    # Assignment: person XOR family XOR unassigned
+    if "is_family" in data or "member_id" in data:
+        want_family = bool(data["is_family"]) if "is_family" in data else bool(existing["is_family"])
+        new_member = data["member_id"] if "member_id" in data else existing["member_id"]
+        if "is_family" in data and data["is_family"]:
+            new_member = None
+            want_family = True
+        elif "member_id" in data and data["member_id"] is not None:
+            want_family = False
+        if want_family and new_member is not None:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Family calendars cannot also be assigned to a person")
+        if new_member is not None:
+            member = conn.execute("SELECT id FROM members WHERE id=?", (new_member,)).fetchone()
+            if not member:
+                conn.close()
+                raise HTTPException(status_code=404, detail="Member not found")
+        if new_member is None or new_member != existing["member_id"]:
+            conn.execute(
+                "UPDATE members SET write_calendar_source_id=NULL WHERE write_calendar_source_id=?",
+                (source_id,),
+            )
+        if not want_family and existing["is_family"]:
+            _clear_family_write_if_source(conn, source_id)
+        updates["member_id"] = new_member
+        updates["is_family"] = 1 if want_family else 0
+
+    if updates:
+        set_clause = ", ".join(f"{k}=?" for k in updates)
+        conn.execute(f"UPDATE calendar_sources SET {set_clause} WHERE id=?", (*updates.values(), source_id))
+        conn.commit()
+
+    row = _source_row(conn, source_id)
+    conn.close()
+    return row
+
+
+@router.delete("/sources/{source_id}")
+def delete_calendar_source(source_id: int):
+    conn = get_db()
+    src = conn.execute("SELECT * FROM calendar_sources WHERE id=?", (source_id,)).fetchone()
+    if not src:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Source not found")
+    _delete_synced_events_for_source(conn, dict(src))
+    conn.execute(
+        "UPDATE members SET write_calendar_source_id=NULL WHERE write_calendar_source_id=?",
+        (source_id,),
+    )
+    _clear_family_write_if_source(conn, source_id)
+    conn.execute("DELETE FROM calendar_sources WHERE id=?", (source_id,))
     conn.commit()
     conn.close()
-    return {"ok": True, "selected": calendar_ids}
+    return {"ok": True}
+
+
+@router.get("/family/write-calendar")
+def get_family_write_calendar():
+    conn = get_db()
+    source, _account = _get_family_write_source(conn)
+    raw = _setting(conn, "family_write_calendar_source_id")
+    conn.close()
+    return {
+        "source_id": int(raw) if raw and str(raw).isdigit() else None,
+        "source": source,
+    }
+
+
+@router.put("/family/write-calendar")
+def set_family_write_calendar(payload: dict):
+    source_id = payload.get("source_id", payload.get("write_calendar_source_id"))
+    conn = get_db()
+    if source_id is None or source_id == "":
+        _set_setting(conn, "family_write_calendar_source_id", None)
+        conn.commit()
+        conn.close()
+        return {"source_id": None, "source": None}
+    try:
+        source_id = int(source_id)
+    except (TypeError, ValueError):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Invalid source_id")
+    source = conn.execute("SELECT * FROM calendar_sources WHERE id=?", (source_id,)).fetchone()
+    if not source:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Source not found")
+    if not source["is_family"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Write calendar must be assigned to Family")
+    if source["kind"] not in ("google", "caldav"):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Write calendar must be Google or iCloud CalDAV")
+    _set_setting(conn, "family_write_calendar_source_id", str(source_id))
+    conn.commit()
+    row = _source_row(conn, source_id)
+    conn.close()
+    return {"source_id": source_id, "source": row}
+
 
 # ── Sync ──────────────────────────────────────────────────────────────────────
 
@@ -383,79 +825,170 @@ GOOGLE_COLOR_MAP = {
     "21": "#cca6ac", "22": "#f691b2", "23": "#cd74e6", "24": "#a47ae2",
 }
 
-async def _sync_calendars(access_token: str, calendar_ids: list, conn, is_family: bool, member_id: int = None) -> int:
-    synced = 0
-    # Fetch all calendar colors from calendarList (this has the user's custom colors)
-    cal_color_map = {}
+
+async def _sync_google_source(access_token: str, source: dict, conn) -> int:
+    """Sync inbound events from one Google calendar_sources row."""
+    cal_id = source["external_id"]
+    member_id = source["member_id"]
+    source_id = source["id"]
+    cal_color = source.get("color")
+    encoded_cal_id = quote(cal_id, safe="")
+
+    # Prefer calendarList backgroundColor when available
     async with httpx.AsyncClient() as client:
         cl_resp = await client.get(
             "https://www.googleapis.com/calendar/v3/users/me/calendarList",
             headers={"Authorization": f"Bearer {access_token}"},
-            params={"maxResults": "250"}
+            params={"maxResults": "250"},
         )
         if cl_resp.status_code == 200:
             for item in cl_resp.json().get("items", []):
-                # backgroundColor is the user's chosen color for this calendar
-                color = item.get("backgroundColor")
-                if color:
-                    cal_color_map[item["id"]] = color
+                if item["id"] == cal_id and item.get("backgroundColor"):
+                    cal_color = item["backgroundColor"]
+                    break
 
-    for cal_id in calendar_ids:
-        cal_color = cal_color_map.get(cal_id)
+    window_start, window_end = apple_sync.sync_window()
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://www.googleapis.com/calendar/v3/calendars/{encoded_cal_id}/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                "timeMin": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "timeMax": window_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "singleEvents": "true",
+                "orderBy": "startTime",
+                "maxResults": "2500",
+                "timeZone": get_app_tz(),
+            },
+        )
+        if resp.status_code != 200:
+            print(f"Calendar fetch failed for {cal_id}: {resp.status_code} {resp.text[:200]}")
+            return 0
+        google_events = resp.json().get("items", [])
 
-        # URL-encode the calendar ID — required for special IDs like holiday calendars
-        # which contain # characters (e.g. en.usa#holiday@group.v.calendar.google.com)
-        encoded_cal_id = quote(cal_id, safe='')
+    # Clear inbound for this source; preserve locally-written events
+    conn.execute(
+        """DELETE FROM events
+           WHERE external_source_id=? AND google_calendar_id IS NULL""",
+        (source_id,),
+    )
 
-        window_start, window_end = apple_sync.sync_window()
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"https://www.googleapis.com/calendar/v3/calendars/{encoded_cal_id}/events",
-                headers={"Authorization": f"Bearer {access_token}"},
-                params={
-                    "timeMin": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "timeMax": window_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "singleEvents": "true",
-                    "orderBy": "startTime",
-                    "maxResults": "2500",
-                    "timeZone": get_app_tz(),
-                },
-            )
-            if resp.status_code != 200:
-                print(f"Calendar fetch failed for {cal_id}: {resp.status_code} {resp.text[:200]}")
-                continue
-            google_events = resp.json().get("items", [])
-        for ge in google_events:
-            if ge.get("status") == "cancelled":
-                continue
-            gid = ge["id"]
-            title = ge.get("summary", "(No title)")
-            desc = ge.get("description", "")
-            location = ge.get("location", "")
-            start = ge["start"].get("dateTime") or ge["start"].get("date")
-            end = ge["end"].get("dateTime") or ge["end"].get("date")
-            all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
-            # Use event-level colorId first, fall back to calendar color
-            color_id = ge.get("colorId")
-            event_color = GOOGLE_COLOR_MAP.get(color_id) if color_id else cal_color
-            if is_family:
-                existing = conn.execute("SELECT id FROM events WHERE google_event_id=? AND is_family=1", (gid,)).fetchone()
-                if existing:
-                    conn.execute("UPDATE events SET title=?, description=?, location=?, start_datetime=?, end_datetime=?, all_day=?, color=? WHERE google_event_id=? AND is_family=1",
-                                 (title, desc, location, start, end, all_day, event_color, gid))
-                else:
-                    conn.execute("INSERT INTO events (title, description, location, start_datetime, end_datetime, all_day, is_family, google_event_id, color) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                                 (title, desc, location, start, end, all_day, gid, event_color))
-            else:
-                existing = conn.execute("SELECT id FROM events WHERE google_event_id=? AND member_id=?", (gid, member_id)).fetchone()
-                if existing:
-                    conn.execute("UPDATE events SET title=?, description=?, location=?, start_datetime=?, end_datetime=?, all_day=?, color=? WHERE google_event_id=? AND member_id=?",
-                                 (title, desc, location, start, end, all_day, event_color, gid, member_id))
-                else:
-                    conn.execute("INSERT INTO events (title, description, location, start_datetime, end_datetime, all_day, member_id, is_family, google_event_id, color) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
-                                 (title, desc, location, start, end, all_day, member_id, gid, event_color))
-            synced += 1
+    synced = 0
+    for ge in google_events:
+        if ge.get("status") == "cancelled":
+            continue
+        gid = ge["id"]
+        # Skip events we ourselves wrote (already stored with google_calendar_id)
+        written = conn.execute(
+            """SELECT id FROM events
+               WHERE google_event_id=? AND google_calendar_id IS NOT NULL""",
+            (gid,),
+        ).fetchone()
+        if written:
+            continue
+        title = ge.get("summary", "(No title)")
+        desc = ge.get("description", "")
+        location = ge.get("location", "")
+        start = ge["start"].get("dateTime") or ge["start"].get("date")
+        end = ge["end"].get("dateTime") or ge["end"].get("date")
+        all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
+        color_id = ge.get("colorId")
+        event_color = GOOGLE_COLOR_MAP.get(color_id) if color_id else cal_color
+        family_flag = 1 if source.get("is_family") else 0
+        conn.execute(
+            """INSERT INTO events
+               (title, description, location, start_datetime, end_datetime, all_day,
+                member_id, is_family, google_event_id, color, external_source_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (title, desc, location, start, end, all_day, member_id, family_flag, gid, event_color, source_id),
+        )
+        synced += 1
     return synced
+
+
+async def _sync_source(source: dict, account: Optional[dict], conn) -> int:
+    kind = source["kind"]
+    is_family = bool(source.get("is_family"))
+    member_id = source["member_id"]
+    if not is_family and not member_id:
+        return 0
+    if is_family:
+        member_id = None
+    color = source.get("color")
+
+    if kind == "google":
+        if not account or not account.get("access_token"):
+            print(f"Skipping Google source {source['id']}: no account tokens")
+            return 0
+        access_token = await refresh_account_token_if_needed(account)
+        return await _sync_google_source(access_token, source, conn)
+
+    if kind == "ics":
+        try:
+            events = await apple_sync.fetch_ics_events(source["external_id"], color=color)
+            return apple_sync.upsert_apple_events(
+                conn, member_id, source["id"], events, is_family=is_family
+            )
+        except Exception as exc:
+            print(f"ICS sync failed for source {source['id']}: {exc}")
+            return 0
+
+    if kind == "caldav":
+        if not account or not account.get("apple_id") or not account.get("app_password"):
+            print(f"Skipping CalDAV source {source['id']}: iCloud credentials missing")
+            return 0
+        try:
+            events = apple_sync.fetch_caldav_events(
+                account["apple_id"], account["app_password"], source["external_id"], color=color
+            )
+            return apple_sync.upsert_apple_events(
+                conn, member_id, source["id"], events, is_family=is_family
+            )
+        except Exception as exc:
+            print(f"CalDAV sync failed for source {source['id']}: {exc}")
+            return 0
+
+    return 0
+
+
+def _assigned_sources(conn, member_id: Optional[int] = None):
+    query = """
+        SELECT s.*, a.access_token, a.refresh_token, a.token_expiry,
+               a.apple_id, a.app_password, a.provider, a.email AS account_email
+        FROM calendar_sources s
+        LEFT JOIN calendar_accounts a ON a.id = s.account_id
+        WHERE s.enabled=1 AND (s.member_id IS NOT NULL OR s.is_family=1)
+    """
+    params = []
+    if member_id is not None:
+        # Member sync: that person's calendars only (family synced via sync/all)
+        query += " AND s.member_id=?"
+        params.append(member_id)
+    query += " ORDER BY s.id"
+    return [dict(r) for r in conn.execute(query, params).fetchall()]
+
+
+def _account_from_source_row(source: dict) -> Optional[dict]:
+    if not source.get("account_id") and not source.get("access_token") and not source.get("apple_id"):
+        # Need account_id from the join — sources without account (ICS) return None
+        if source.get("kind") == "ics":
+            return None
+    if source.get("kind") == "ics":
+        return None
+    # Rebuild account dict from joined columns
+    if not source.get("access_token") and not source.get("apple_id"):
+        return None
+    return {
+        "id": source.get("account_id"),
+        "access_token": source.get("access_token"),
+        "refresh_token": source.get("refresh_token"),
+        "token_expiry": source.get("token_expiry"),
+        "apple_id": source.get("apple_id"),
+        "app_password": source.get("app_password"),
+        "provider": source.get("provider"),
+        "email": source.get("account_email"),
+    }
+
 
 @router.get("/sync/status")
 async def get_sync_status():
@@ -469,332 +1002,71 @@ async def get_sync_status():
     }
 
 async def run_full_sync():
-    """Auto-sync all connected Google Calendars. Called by background loop."""
+    """Auto-sync all assigned calendar sources. Called by background loop."""
     conn = get_db()
-    family_cal = conn.execute("SELECT * FROM family_google_calendar LIMIT 1").fetchone()
-    members_list = conn.execute("SELECT id FROM members WHERE google_access_token IS NOT NULL").fetchall()
+    sources = _assigned_sources(conn)
     conn.close()
-    if family_cal:
-        try:
-            await sync_family_google_calendar()
-        except Exception:
-            pass
-    for m in members_list:
-        try:
-            await sync_member_google_calendar(m["id"])
-        except Exception:
-            pass
+    total = 0
     conn = get_db()
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('google_last_synced', ?)",
-                 (datetime.utcnow().isoformat(),))
+    for src in sources:
+        try:
+            account = _account_from_source_row(src)
+            # Re-load full account row for token refresh updates
+            if src.get("account_id"):
+                acct_row = conn.execute(
+                    "SELECT * FROM calendar_accounts WHERE id=?", (src["account_id"],)
+                ).fetchone()
+                account = dict(acct_row) if acct_row else account
+            total += await _sync_source(src, account, conn)
+            conn.commit()
+        except Exception as e:
+            print(f"Full sync source {src.get('id')} failed: {e}")
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('google_last_synced', ?)",
+        (datetime.utcnow().isoformat(),),
+    )
     conn.commit()
     conn.close()
+    return total
 
-@router.post("/sync/family")
-async def sync_family_google_calendar():
-    conn = get_db()
-    family_cal = conn.execute("SELECT * FROM family_google_calendar LIMIT 1").fetchone()
-    conn.close()
-    if not family_cal:
-        raise HTTPException(status_code=400, detail="Family Google Calendar not connected")
-    access_token = await refresh_token_if_needed(dict(family_cal), is_family=True)
-    try:
-        cal_ids = json.loads(family_cal["calendar_id"] or '["primary"]')
-        if not isinstance(cal_ids, list):
-            cal_ids = [cal_ids]
-    except Exception:
-        cal_ids = ["primary"]
-    conn = get_db()
-    # Clear events pulled from Google sync, but preserve locally-created events
-    # (those have google_calendar_id set, meaning user explicitly pushed them)
-    conn.execute("DELETE FROM events WHERE is_family=1 AND google_event_id IS NOT NULL AND google_calendar_id IS NULL")
-    conn.commit()
-    synced = await _sync_calendars(access_token, cal_ids, conn, is_family=True)
-    conn.commit()
-    conn.close()
+@router.post("/sync/all")
+async def sync_all_calendars():
+    synced = await run_full_sync()
     return {"synced": synced}
+
+
 
 @router.post("/sync/member/{member_id}")
 async def sync_member_calendars(member_id: int):
-    """Sync Google + Apple calendars for a member."""
-    conn = get_db()
-    member = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
-    if not member:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Member not found")
-
-    sources = conn.execute(
-        "SELECT * FROM apple_calendar_sources WHERE member_id=? AND enabled=1",
-        (member_id,),
-    ).fetchall()
-    has_google = bool(member["google_access_token"])
-    has_apple = bool(sources)
-    if not has_google and not has_apple:
-        conn.close()
-        raise HTTPException(status_code=400, detail="No Google or Apple calendars connected for this member")
-
-    synced = 0
-    google_synced = 0
-    apple_synced = 0
-
-    if has_google:
-        access_token = await refresh_token_if_needed(dict(member), is_family=False, member_id=member_id)
-        try:
-            cal_ids = json.loads(member["google_calendar_ids"] or '["primary"]')
-            if not isinstance(cal_ids, list):
-                cal_ids = [cal_ids]
-        except Exception:
-            cal_ids = ["primary"]
-        # Clear events pulled from Google sync, but preserve locally-created events
-        conn.execute(
-            "DELETE FROM events WHERE member_id=? AND google_event_id IS NOT NULL AND google_calendar_id IS NULL",
-            (member_id,),
-        )
-        conn.commit()
-        google_synced = await _sync_calendars(access_token, cal_ids, conn, is_family=False, member_id=member_id)
-        synced += google_synced
-
-    if has_apple:
-        apple_synced = await _sync_apple_sources(dict(member), sources, conn)
-        synced += apple_synced
-
-    conn.commit()
-    conn.close()
-    return {"synced": synced, "google": google_synced, "apple": apple_synced}
-
-
-async def _sync_apple_sources(member: dict, sources, conn) -> int:
-    total = 0
-    apple_id = member.get("apple_id")
-    app_password = member.get("apple_app_password")
-    member_id = member["id"]
-    for src in sources:
-        src = dict(src)
-        color = src.get("color") or member.get("color")
-        try:
-            if src["kind"] == "ics":
-                events = await apple_sync.fetch_ics_events(src["url"], color=color)
-            elif src["kind"] == "caldav":
-                if not apple_id or not app_password:
-                    print(f"Skipping CalDAV source {src['id']}: iCloud not connected")
-                    continue
-                events = apple_sync.fetch_caldav_events(
-                    apple_id, app_password, src["url"], color=color
-                )
-            else:
-                continue
-            total += apple_sync.upsert_apple_events(conn, member_id, src["id"], events)
-        except Exception as exc:
-            print(f"Apple sync failed for source {src.get('id')}: {exc}")
-    return total
-
-
-# ── Apple Calendar (ICS + iCloud CalDAV) ──────────────────────────────────────
-
-@router.get("/apple/member/{member_id}")
-def get_member_apple_status(member_id: int):
-    conn = get_db()
-    member = conn.execute(
-        "SELECT id, apple_id, apple_app_password FROM members WHERE id=?", (member_id,)
-    ).fetchone()
-    if not member:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Member not found")
-    sources = conn.execute(
-        "SELECT id, kind, name, url, color, enabled FROM apple_calendar_sources WHERE member_id=? ORDER BY name",
-        (member_id,),
-    ).fetchall()
-    conn.close()
-    return {
-        "icloud_connected": bool(member["apple_id"] and member["apple_app_password"]),
-        "apple_id": member["apple_id"],
-        "sources": [dict(s) for s in sources],
-    }
-
-
-@router.post("/apple/member/{member_id}/icloud")
-def connect_member_icloud(member_id: int, payload: AppleIcloudConnect):
-    apple_id = payload.apple_id.strip()
-    app_password = payload.app_password.strip().replace(" ", "")
-    if not apple_id or not app_password:
-        raise HTTPException(status_code=400, detail="Apple ID and app-specific password are required")
+    """Sync all enabled calendar_sources assigned to this member."""
     conn = get_db()
     member = conn.execute("SELECT id FROM members WHERE id=?", (member_id,)).fetchone()
     if not member:
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
-    try:
-        calendars = apple_sync.list_icloud_calendars(apple_id, app_password)
-    except Exception as exc:
+
+    sources = _assigned_sources(conn, member_id=member_id)
+    if not sources:
         conn.close()
-        raise HTTPException(status_code=400, detail=f"iCloud login failed: {exc}") from exc
-    conn.execute(
-        "UPDATE members SET apple_id=?, apple_app_password=? WHERE id=?",
-        (apple_id, app_password, member_id),
-    )
+        raise HTTPException(status_code=400, detail="No calendars assigned to this member")
+
+    synced = 0
+    by_kind = {"google": 0, "ics": 0, "caldav": 0}
+    for src in sources:
+        account = None
+        if src.get("account_id"):
+            acct_row = conn.execute(
+                "SELECT * FROM calendar_accounts WHERE id=?", (src["account_id"],)
+            ).fetchone()
+            account = dict(acct_row) if acct_row else None
+        count = await _sync_source(src, account, conn)
+        synced += count
+        by_kind[src["kind"]] = by_kind.get(src["kind"], 0) + count
+
     conn.commit()
     conn.close()
-    return {"ok": True, "apple_id": apple_id, "calendars": calendars}
-
-
-@router.delete("/apple/member/{member_id}/icloud")
-def disconnect_member_icloud(member_id: int):
-    conn = get_db()
-    # Remove CalDAV sources + their synced events; keep ICS sources
-    caldav_sources = conn.execute(
-        "SELECT id FROM apple_calendar_sources WHERE member_id=? AND kind='caldav'",
-        (member_id,),
-    ).fetchall()
-    for src in caldav_sources:
-        conn.execute(
-            "DELETE FROM events WHERE member_id=? AND external_source_id=?",
-            (member_id, src["id"]),
-        )
-        conn.execute("DELETE FROM apple_calendar_sources WHERE id=?", (src["id"],))
-    conn.execute(
-        "UPDATE members SET apple_id=NULL, apple_app_password=NULL WHERE id=?",
-        (member_id,),
-    )
-    conn.commit()
-    conn.close()
-    return {"ok": True}
-
-
-@router.get("/apple/member/{member_id}/icloud/calendars")
-def list_member_icloud_calendars(member_id: int):
-    conn = get_db()
-    member = conn.execute(
-        "SELECT apple_id, apple_app_password FROM members WHERE id=?", (member_id,)
-    ).fetchone()
-    conn.close()
-    if not member or not member["apple_id"] or not member["apple_app_password"]:
-        raise HTTPException(status_code=400, detail="iCloud not connected for this member")
-    try:
-        calendars = apple_sync.list_icloud_calendars(member["apple_id"], member["apple_app_password"])
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to list iCloud calendars: {exc}") from exc
-    return {"calendars": calendars}
-
-
-@router.post("/apple/member/{member_id}/icloud/select")
-def select_member_icloud_calendars(member_id: int, payload: AppleCaldavSelect):
-    conn = get_db()
-    member = conn.execute(
-        "SELECT id, apple_id, apple_app_password, color FROM members WHERE id=?", (member_id,)
-    ).fetchone()
-    if not member or not member["apple_id"]:
-        conn.close()
-        raise HTTPException(status_code=400, detail="iCloud not connected for this member")
-
-    # Replace existing CalDAV sources for this member
-    old = conn.execute(
-        "SELECT id FROM apple_calendar_sources WHERE member_id=? AND kind='caldav'",
-        (member_id,),
-    ).fetchall()
-    for src in old:
-        conn.execute(
-            "DELETE FROM events WHERE member_id=? AND external_source_id=?",
-            (member_id, src["id"]),
-        )
-    conn.execute(
-        "DELETE FROM apple_calendar_sources WHERE member_id=? AND kind='caldav'",
-        (member_id,),
-    )
-
-    saved = []
-    for cal in payload.calendars:
-        url = (cal.get("url") or cal.get("id") or "").strip()
-        name = (cal.get("name") or "iCloud Calendar").strip()
-        color = cal.get("color") or member["color"]
-        if not url:
-            continue
-        cur = conn.execute(
-            """INSERT INTO apple_calendar_sources (member_id, kind, name, url, color)
-               VALUES (?, 'caldav', ?, ?, ?)""",
-            (member_id, name, url, color),
-        )
-        saved.append({"id": cur.lastrowid, "name": name, "url": url, "kind": "caldav"})
-    conn.commit()
-    conn.close()
-    return {"ok": True, "sources": saved}
-
-
-@router.post("/apple/member/{member_id}/ics")
-def add_member_ics_calendar(member_id: int, payload: AppleIcsCreate):
-    name = payload.name.strip()
-    url = apple_sync.normalize_ics_url(payload.url)
-    if not name or not url:
-        raise HTTPException(status_code=400, detail="Name and calendar URL are required")
-    conn = get_db()
-    member = conn.execute("SELECT id, color FROM members WHERE id=?", (member_id,)).fetchone()
-    if not member:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Member not found")
-    color = payload.color or member["color"]
-    cur = conn.execute(
-        """INSERT INTO apple_calendar_sources (member_id, kind, name, url, color)
-           VALUES (?, 'ics', ?, ?, ?)""",
-        (member_id, name, url, color),
-    )
-    conn.commit()
-    source_id = cur.lastrowid
-    conn.close()
-    return {"ok": True, "id": source_id, "name": name, "url": url, "kind": "ics"}
-
-
-@router.delete("/apple/sources/{source_id}")
-def delete_apple_source(source_id: int):
-    conn = get_db()
-    src = conn.execute("SELECT * FROM apple_calendar_sources WHERE id=?", (source_id,)).fetchone()
-    if not src:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Source not found")
-    conn.execute(
-        "DELETE FROM events WHERE member_id=? AND external_source_id=?",
-        (src["member_id"], source_id),
-    )
-    conn.execute("DELETE FROM apple_calendar_sources WHERE id=?", (source_id,))
-    conn.commit()
-    conn.close()
-    return {"ok": True}
-
-@router.post("/push/family")
-async def push_event_to_family_calendar(event_id: int):
-    conn = get_db()
-    event = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
-    family_cal = conn.execute("SELECT * FROM family_google_calendar LIMIT 1").fetchone()
-    conn.close()
-    if not event: raise HTTPException(status_code=404, detail="Event not found")
-    if not family_cal: raise HTTPException(status_code=400, detail="Family Google Calendar not connected")
-    access_token = await refresh_token_if_needed(dict(family_cal), is_family=True)
-    try:
-        cal_ids = json.loads(family_cal["calendar_id"] or '["primary"]')
-        calendar_id = cal_ids[0] if isinstance(cal_ids, list) else cal_ids
-    except Exception:
-        calendar_id = "primary"
-    body = {
-        "summary": event["title"],
-        "description": event["description"],
-        "start": {"dateTime": event["start_datetime"], "timeZone": "UTC"},
-        "end": {"dateTime": event["end_datetime"], "timeZone": "UTC"},
+    return {
+        "synced": synced,
+        "google": by_kind.get("google", 0),
+        "apple": by_kind.get("ics", 0) + by_kind.get("caldav", 0),
     }
-    if event["all_day"]:
-        body["start"] = {"date": event["start_datetime"][:10]}
-        body["end"] = {"date": event["end_datetime"][:10]}
-    async with httpx.AsyncClient() as client:
-        if event["google_event_id"]:
-            resp = await client.put(
-                f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event['google_event_id']}",
-                headers={"Authorization": f"Bearer {access_token}"}, json=body)
-        else:
-            resp = await client.post(
-                f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events",
-                headers={"Authorization": f"Bearer {access_token}"}, json=body)
-    if resp.status_code not in (200, 201):
-        raise HTTPException(status_code=502, detail=f"Google API error: {resp.text}")
-    gid = resp.json()["id"]
-    conn = get_db()
-    conn.execute("UPDATE events SET google_event_id=?, is_family=1 WHERE id=?", (gid, event_id))
-    conn.commit()
-    conn.close()
-    return {"ok": True, "google_event_id": gid}

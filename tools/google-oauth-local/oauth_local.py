@@ -19,7 +19,7 @@ Example:
     --secret "$(grep TOKEN_IMPORT_SECRET .env | cut -d= -f2)" \\
     --client-id "$GOOGLE_CLIENT_ID" \\
     --client-secret "$GOOGLE_CLIENT_SECRET" \\
-    --target family
+    --target account
 """
 
 from __future__ import annotations
@@ -215,15 +215,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--target",
-        choices=("family", "member", "photos"),
-        default="family",
-        help="Where to store the tokens on Family Hub",
-    )
-    parser.add_argument(
-        "--member-id",
-        type=int,
-        default=None,
-        help="Required when --target member",
+        choices=("account", "photos"),
+        default="account",
+        help="Where to store tokens (default: account → calendar_accounts)",
     )
     parser.add_argument(
         "--port",
@@ -245,8 +239,6 @@ def parse_args() -> argparse.Namespace:
     ]
     if missing:
         parser.error("Missing required values: " + ", ".join(missing))
-    if args.target == "member" and args.member_id is None:
-        parser.error("--member-id is required when --target member")
     return args
 
 
@@ -268,7 +260,7 @@ def main() -> None:
         }
     )
 
-    print(f"Target: {args.target}" + (f" (member_id={args.member_id})" if args.member_id else ""))
+    print(f"Target: {args.target}")
     print(f"Hub:    {hub}")
     print(f"Add this Authorized redirect URI in Google Cloud Console if needed:")
     print(f"  {redirect_uri}")
@@ -287,11 +279,13 @@ def main() -> None:
         "refresh_token": tokens.get("refresh_token"),
         "expires_in": int(tokens.get("expires_in", 3600)),
         "email": email,
-        "member_id": args.member_id,
     }
     result = post_json(f"{hub}/api/auth/google/import", payload, args.secret)
     print("Success:", json.dumps(result, indent=2))
-    print("Open Family Hub → Settings to confirm the Google account is connected.")
+    if args.target == "account":
+        print("Open Family Hub → Settings → Family Calendar → Accounts to add calendars.")
+    else:
+        print("Open Family Hub → Settings to confirm Google Photos is connected.")
 
 
 if __name__ == "__main__":
