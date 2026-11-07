@@ -165,7 +165,7 @@ async function loadTodayEvents() {
       }
 
       return `
-        <div class="event-card" style="border-left-color:${color}">
+        <div class="event-card" style="--event:${color}">
           <div class="event-card-title">${e.title}</div>
           <div class="event-card-time">${e.all_day ? `${dateLabel} · All day` : `${dateLabel}${dateLabel ? ' · ' : ''}${formatTime(e.start_datetime)}`}</div>
           ${e.member_name ? `<div class="event-card-member" style="background:${color}22;color:${color}">${e.member_name}</div>` : ''}
@@ -267,7 +267,7 @@ async function loadUpcomingChores() {
 
 function renderDashboardChore(c, color) {
   return `
-    <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}" style="border-left:3px solid ${color};background:${color}18">
+    <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}" style="--event:${color}">
       <div class="dashboard-chore-check ${c.completed ? 'checked' : ''}"
            style="${c.completed ? `background:${color}` : `border-color:${color}`}"
            onclick="toggleDashboardChore(${c.id}, ${c.completed})">
@@ -478,19 +478,22 @@ async function loadWeather() {
     const t = data.tomorrow;
     const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
     el.innerHTML = `
-      <div class="weather-icon">${data.icon}</div>
-      <div class="weather-temp">${Math.round(data.temp)}°F</div>
-      <div class="weather-condition">${data.condition}</div>
-      <div class="weather-hilo">↑${Math.round(data.high)}° ↓${Math.round(data.low)}°</div>
-      ${data.city ? `<div class="weather-city">${data.city}</div>` : ''}
+      <div class="weather-now">
+        <div class="weather-icon">${data.icon}</div>
+        <div class="weather-now-text">
+          <div class="weather-temp-line">
+            <span class="weather-temp">${Math.round(data.temp)}°</span>
+            <span class="weather-condition">${data.condition}</span>
+          </div>
+          <div class="weather-meta">↑${Math.round(data.high)}° ↓${Math.round(data.low)}°${data.city ? ` · ${data.city}` : ''}</div>
+        </div>
+      </div>
       ${t && t.high != null ? `
         <div class="weather-tomorrow">
-          <div class="weather-tmr-label">Tomorrow</div>
-          <div class="weather-tmr-row">
-            <span class="weather-tmr-icon">${t.icon}</span>
-            <span class="weather-tmr-hilo">↑${Math.round(t.high)}° ↓${Math.round(t.low)}°</span>
-            ${precipStr}
-          </div>
+          <span class="weather-tmr-label">Tomorrow</span>
+          <span class="weather-tmr-icon">${t.icon}</span>
+          <span class="weather-tmr-hilo">↑${Math.round(t.high)}° ↓${Math.round(t.low)}°</span>
+          ${precipStr}
         </div>` : ''}
     `;
   } catch(e) {

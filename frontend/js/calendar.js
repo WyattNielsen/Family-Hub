@@ -89,9 +89,9 @@ function renderCalendar() {
       <div class="cal-events">
         ${dayEvents.slice(0, 3).map(e => {
           const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
-          return `<div class="cal-event-dot" style="background:${color}" onclick="showEventDetail(${e.id},event)">${e.title}</div>`;
+          return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${e.title}</div>`;
         }).join('')}
-        ${dayEvents.length > 3 ? `<div style="font-size:10px;color:var(--text3);font-weight:700">+${dayEvents.length - 3} more</div>` : ''}
+        ${dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : ''}
       </div>
     </div>`;
   }
@@ -134,7 +134,7 @@ function selectDay(dateStr) {
     document.getElementById('dayEventsList').innerHTML = dayEvents.map(e => {
       const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
       return `
-        <div class="event-card" style="border-left-color:${color};margin-bottom:8px">
+        <div class="event-card" style="--event:${color}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div>
               <div class="event-card-title">${e.title}</div>

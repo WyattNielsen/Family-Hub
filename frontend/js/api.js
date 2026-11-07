@@ -115,6 +115,8 @@ function _applyTheme() {
     ? (h >= _darkStart || h < _darkEnd)
     : (h >= _darkStart && h < _darkEnd);
   document.documentElement.setAttribute('data-theme', isNight ? 'dark' : 'light');
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = isNight ? '#1a1a1a' : '#F6F7F9';
 }
 
 function _resetDim() {
