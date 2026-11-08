@@ -39,7 +39,9 @@ const TOD_CONFIG = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  await initAppTimezone();
   members = await API.get('/api/members/');
+  await mountPersonFilter(() => renderChores());
   populateMemberSelect();
   loadChores();
   loadLeaderboard();
@@ -136,8 +138,10 @@ function missedDateLabel(dateStr) {
 function renderChores() {
   const el = document.getElementById('choresList');
   const chores = showingAll ? allChores : allChores.filter(isTodayChore);
+  const person = getPersonFilter();
+  const viewMembers = person === 'all' ? members : members.filter(m => String(m.id) === String(person));
 
-  if (!chores.length) {
+  if (!chores.length && person === 'all') {
     el.innerHTML = showingAll
       ? '<div class="empty-state">No chores yet — add one!</div>'
       : '<div class="empty-state">🎉 No chores due today!</div>';
@@ -145,21 +149,20 @@ function renderChores() {
   }
 
   if (showingAll) {
-    // Simple grouped-by-person list for All view
     el.innerHTML = buildAllView(chores);
     return;
   }
 
   // TODAY VIEW: columns per person, each with time-of-day sections
   const missed = allChores.filter(isOverdueChore);
-  const memberCols = members.map(m => ({
+  const memberCols = viewMembers.map(m => ({
     member: m,
     chores: chores.filter(c => c.assigned_to == m.id),
     missed: missed.filter(c => c.assigned_to == m.id),
-  })).filter(b => b.chores.length || b.missed.length);
+  })).filter(b => person !== 'all' || b.chores.length || b.missed.length);
 
   const unassigned = chores.filter(c => !c.assigned_to);
-  if (unassigned.length) {
+  if (person === 'all' && unassigned.length) {
     memberCols.push({ member: { id: null, name: 'Unassigned', avatar: '📋', color: '#9AA0B8' }, chores: unassigned, missed: [] });
   }
 
@@ -234,7 +237,7 @@ function buildPersonColumn(member, chores, missed = []) {
           ${overallRing}
         </div>
         <div style="flex:1;min-width:0">
-          <div class="chore-column-name" style="color:${member.color}">${member.avatar || '👤'} ${member.name}</div>
+          <div class="chore-column-name" style="color:${member.color};display:flex;align-items:center;gap:8px">${memberAvatarHtml(member, 'avatar-sm')} <span>${escapeHtml(member.name)}</span></div>
           <div class="tod-summary-row">${todSummary}</div>
         </div>
       </div>
@@ -283,19 +286,21 @@ function buildAllView(chores) {
       byMember[c.assigned_to].push(c);
     } else unassigned.push(c);
   }
+  const person = getPersonFilter();
+  const viewMembers = person === 'all' ? members : members.filter(m => String(m.id) === String(person));
   let cols = '';
-  for (const m of members) {
+  for (const m of viewMembers) {
     if (!byMember[m.id]?.length) continue;
     cols += `
       <div class="chore-column">
         <div class="chore-column-header" style="border-bottom:3px solid ${m.color}">
-          <span style="font-size:24px">${m.avatar||'👤'}</span>
+          ${memberAvatarHtml(m)}
           <div class="chore-column-name" style="color:${m.color}">${m.name}</div>
         </div>
         <div class="chore-column-body">${byMember[m.id].map(c => renderChoreItemFull(c)).join('')}</div>
       </div>`;
   }
-  if (unassigned.length) {
+  if (person === 'all' && unassigned.length) {
     cols += `
       <div class="chore-column">
         <div class="chore-column-header" style="border-bottom:3px solid #9AA0B8">
@@ -486,7 +491,7 @@ async function loadLeaderboard() {
     el.innerHTML = data.map((m, i) => `
       <div class="leaderboard-item">
         <div class="leaderboard-rank ${rankClass[i] || ''}">${medals[i] || (i + 1)}</div>
-        <div class="member-avatar" style="background:${m.color}22;font-size:22px;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;">${m.avatar || '👤'}</div>
+        ${memberAvatarHtml(m, 'avatar-lg')}
         <div class="leaderboard-info">
           <div class="leaderboard-name">${m.name}</div>
           <div class="leaderboard-sub">${m.completed_chores || 0} chores done</div>

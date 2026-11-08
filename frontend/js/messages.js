@@ -12,12 +12,11 @@ function timeAgo(isoStr) {
 
 function renderMessage(msg) {
   const color   = msg.color || '#C5CAD3';
-  const avatar  = msg.avatar || '👤';
   const name    = msg.name  || 'Anonymous';
   return `
     <div class="msg-card" style="--event:${color}" id="msg-${msg.id}">
       <div class="msg-card-header">
-        <span class="msg-avatar">${avatar}</span>
+        ${memberAvatarHtml({ avatar: msg.avatar, avatar_photo: msg.avatar_photo, color }, 'avatar-sm')}
         <span class="msg-author">${name}</span>
         <span class="msg-time">${timeAgo(msg.created_at)}</span>
         <button class="msg-delete" onclick="deleteMessage(${msg.id})" title="Dismiss">✕</button>

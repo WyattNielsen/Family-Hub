@@ -20,7 +20,7 @@ def get_messages():
     conn.commit()
     rows = conn.execute("""
         SELECT msg.id, msg.body, msg.created_at,
-               m.id as member_id, m.name, m.color, m.avatar
+               m.id as member_id, m.name, m.color, m.avatar, m.avatar_photo
         FROM messages msg
         LEFT JOIN members m ON m.id = msg.author_id
         ORDER BY msg.created_at DESC

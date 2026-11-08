@@ -77,7 +77,8 @@ def get_events(
 ):
     conn = get_db()
     query = """
-        SELECT e.*, m.name as member_name, m.color as member_color
+        SELECT e.*, m.name as member_name, m.color as member_color,
+               m.avatar as member_avatar, m.avatar_photo as member_avatar_photo
         FROM events e
         LEFT JOIN members m ON e.member_id = m.id
         WHERE 1=1

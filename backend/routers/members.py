@@ -1,21 +1,54 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
-import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import sys, os, uuid, shutil
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
 
 router = APIRouter()
 
 MEMBER_SELECT = (
-    "SELECT id, name, color, avatar, is_admin, write_calendar_source_id "
-    "FROM members"
+    "SELECT id, name, color, avatar, avatar_photo, is_admin, write_calendar_source_id, "
+    "school_id, school_name FROM members"
 )
+
+ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+ALLOWED_AVATAR_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+MAX_AVATAR_BYTES = 8 * 1024 * 1024
+
+
+def _avatars_dir():
+    data_dir = os.environ.get("DATA_DIR")
+    if data_dir:
+        root = data_dir
+    else:
+        db = os.environ.get("DB_PATH") or ""
+        parent = os.path.dirname(db)
+        root = parent if parent else os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+    path = os.path.join(root, "avatars")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _remove_avatar_file(name):
+    if not name:
+        return
+    path = os.path.join(_avatars_dir(), os.path.basename(name))
+    if os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
 
 class MemberCreate(BaseModel):
     name: str
     color: str = "#4A90D9"
     avatar: Optional[str] = None
     is_admin: bool = False
+    school_id: Optional[str] = None
+    school_name: Optional[str] = None
 
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
@@ -23,6 +56,8 @@ class MemberUpdate(BaseModel):
     avatar: Optional[str] = None
     is_admin: Optional[bool] = None
     write_calendar_source_id: Optional[int] = None
+    school_id: Optional[str] = None
+    school_name: Optional[str] = None
 
 def _validate_write_source(conn, member_id: int, source_id: Optional[int]):
     if source_id is None:
@@ -53,9 +88,13 @@ def get_members():
 @router.post("/")
 def create_member(member: MemberCreate):
     conn = get_db()
+    school_id = (member.school_id or "").strip() or None
+    school_name = (member.school_name or "").strip() or None
+    if not school_id:
+        school_name = None
     cur = conn.execute(
-        "INSERT INTO members (name, color, avatar, is_admin) VALUES (?, ?, ?, ?)",
-        (member.name, member.color, member.avatar, 1 if member.is_admin else 0)
+        "INSERT INTO members (name, color, avatar, is_admin, school_id, school_name) VALUES (?, ?, ?, ?, ?, ?)",
+        (member.name, member.color, member.avatar, 1 if member.is_admin else 0, school_id, school_name)
     )
     conn.commit()
     new_id = cur.lastrowid
@@ -83,6 +122,15 @@ def _apply_member_update(member_id: int, member: MemberUpdate):
     if "write_calendar_source_id" in data:
         _validate_write_source(conn, member_id, data["write_calendar_source_id"])
         updates["write_calendar_source_id"] = data["write_calendar_source_id"]
+    if "school_id" in data:
+        school_id = (data.get("school_id") or "").strip() or None
+        updates["school_id"] = school_id
+        if school_id:
+            updates["school_name"] = (data.get("school_name") or "").strip() or None
+        else:
+            updates["school_name"] = None
+    elif "school_name" in data:
+        updates["school_name"] = (data.get("school_name") or "").strip() or None
 
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
@@ -103,9 +151,71 @@ def patch_member(member_id: int, member: MemberUpdate):
 @router.delete("/{member_id}")
 def delete_member(member_id: int):
     conn = get_db()
+    row = conn.execute("SELECT avatar_photo FROM members WHERE id=?", (member_id,)).fetchone()
     conn.execute("DELETE FROM members WHERE id=?", (member_id,))
     conn.commit()
     conn.close()
+    if row:
+        _remove_avatar_file(row["avatar_photo"])
+    return {"ok": True}
+
+
+@router.get("/avatar/{filename}")
+def serve_avatar(filename: str):
+    filename = os.path.basename(filename)
+    path = os.path.join(_avatars_dir(), filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    return FileResponse(path)
+
+
+@router.post("/{member_id}/avatar")
+async def upload_avatar(member_id: int, file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if file.content_type not in ALLOWED_AVATAR_TYPES and ext not in ALLOWED_AVATAR_EXT:
+        raise HTTPException(status_code=400, detail="Use a JPEG, PNG, GIF, or WebP image")
+    if ext not in ALLOWED_AVATAR_EXT:
+        ext = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+        }.get(file.content_type, ".jpg")
+    conn = get_db()
+    row = conn.execute("SELECT avatar_photo FROM members WHERE id=?", (member_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Member not found")
+    filename = f"{uuid.uuid4().hex}{ext}"
+    dest = os.path.join(_avatars_dir(), filename)
+    try:
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(file.file, out)
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=str(e))
+    if os.path.getsize(dest) > MAX_AVATAR_BYTES:
+        os.remove(dest)
+        conn.close()
+        raise HTTPException(status_code=400, detail="Image must be under 8 MB")
+    conn.execute("UPDATE members SET avatar_photo=? WHERE id=?", (filename, member_id))
+    conn.commit()
+    conn.close()
+    _remove_avatar_file(row["avatar_photo"])
+    return {"ok": True, "avatar_photo": filename}
+
+
+@router.delete("/{member_id}/avatar")
+def delete_avatar(member_id: int):
+    conn = get_db()
+    row = conn.execute("SELECT avatar_photo FROM members WHERE id=?", (member_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Member not found")
+    conn.execute("UPDATE members SET avatar_photo=NULL WHERE id=?", (member_id,))
+    conn.commit()
+    conn.close()
+    _remove_avatar_file(row["avatar_photo"])
     return {"ok": True}
 
 @router.get("/{member_id}/chore-stats")

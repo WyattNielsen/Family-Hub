@@ -158,7 +158,7 @@ def reset_chores(mode: str = Query("points")):
 def get_leaderboard():
     conn = get_db()
     rows = conn.execute("""
-        SELECT m.id, m.name, m.color, m.avatar,
+        SELECT m.id, m.name, m.color, m.avatar, m.avatar_photo,
                SUM(CASE WHEN c.completed=1 THEN c.points ELSE 0 END) as points
         FROM members m
         LEFT JOIN chores c ON c.assigned_to = m.id

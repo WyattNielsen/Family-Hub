@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Family Hub">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/css/style.css?v=58">
+<link rel="stylesheet" href="/css/style.css?v=61">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
@@ -36,6 +36,10 @@
       <li><a href="/chores.html" class="nav-link">
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
         <span>Chores</span>
+      </a></li>
+      <li><a href="/shopping.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg></span>
+        <span>Shopping</span>
       </a></li>
       <li><a href="/security.html" class="nav-link">
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
@@ -286,29 +290,21 @@
         </div>
       </section>
 
-      <!-- School Lunch Menu -->
+      <!-- SchoolCafe -->
       <section class="dashboard-section">
         <div class="section-header">
-          <h2 class="section-title">🍽️ School Lunch Menu</h2>
+          <h2 class="section-title">🍽️ SchoolCafe Menus</h2>
         </div>
         <div class="settings-card" style="flex-direction:column;align-items:stretch;gap:16px">
-          <p class="settings-desc">Powered by Nutrislice. Find these values in your school district's menu URL, e.g. <code>https://<strong>bcps</strong>.nutrislice.com/menu/<strong>bcps-weekly-menus</strong>/<strong>weekly-menus</strong></code>. Leave District blank to hide the menu widget.</p>
-          <div style="display:flex;flex-direction:column;gap:12px">
-            <div>
-              <label class="form-label">District</label>
-              <input type="text" id="lunchDistrict" class="form-input" placeholder="bcps" style="max-width:200px">
-              <div style="font-size:12px;color:var(--text2);margin-top:4px">The subdomain before <code>.nutrislice.com</code></div>
+          <p class="settings-desc">Breakfast and lunch come from SchoolCafe. Search your district here, then edit each family member and pick their school. Kids at different schools each get their own menu.</p>
+          <div>
+            <label class="form-label">Find your district</label>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <input type="text" id="districtSearch" class="form-input" placeholder="e.g. Austin ISD" style="max-width:280px" onkeydown="if (event.key === 'Enter') searchSchoolDistricts()">
+              <button class="btn btn-secondary" type="button" onclick="searchSchoolDistricts()">Search</button>
             </div>
-            <div>
-              <label class="form-label">School Slug</label>
-              <input type="text" id="lunchSchoolSlug" class="form-input" placeholder="bcps-weekly-menus" style="max-width:320px">
-              <div style="font-size:12px;color:var(--text2);margin-top:4px">First path segment after <code>/menu/</code></div>
-            </div>
-            <div>
-              <label class="form-label">Menu Type</label>
-              <input type="text" id="lunchMenuType" class="form-input" placeholder="weekly-menus" style="max-width:200px">
-              <div style="font-size:12px;color:var(--text2);margin-top:4px">Second path segment after <code>/menu/</code></div>
-            </div>
+            <div id="districtResults" class="district-results"></div>
+            <div id="districtCurrent" style="margin-top:8px;font-weight:800"></div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;width:fit-content">
             <label class="toggle-switch">
@@ -316,13 +312,12 @@
               <span class="toggle-slider"></span>
             </label>
             <div>
-              <div style="font-weight:700;font-size:14px">Hide during summer</div>
-              <div style="font-size:12px;color:var(--text2)">Removes the lunch column from the dashboard</div>
+              <div style="font-weight:700;font-size:14px">Hide school menus during summer</div>
+              <div style="font-size:12px;color:var(--text2)">Dinner stays on the dashboard. School breakfast and lunch are hidden.</div>
             </div>
           </div>
-          <div style="display:flex;gap:10px;align-items:center">
-            <button class="btn btn-primary" onclick="saveLunchSettings()">💾 Save</button>
-            <span id="lunchSaveStatus" style="font-size:13px;color:var(--text2)"></span>
+          <div>
+            <button class="btn btn-primary" type="button" onclick="saveSchoolMenuVisibility()">💾 Save</button>
           </div>
         </div>
       </section>
@@ -511,9 +506,36 @@
         </div>
       </div>
       <div class="form-group">
-        <label>Avatar Emoji</label>
+        <label>Photo</label>
+        <div class="avatar-photo-row">
+          <div id="memberPhotoPreview"></div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <input type="file" id="memberPhoto" accept="image/jpeg,image/png,image/gif,image/webp">
+            <button type="button" class="btn btn-ghost" id="clearMemberPhoto">Remove photo</button>
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Icon</label>
+        <div class="emoji-tabs" id="emojiTabs"></div>
         <div class="emoji-picker" id="emojiPicker"></div>
+        <input type="text" id="memberEmojiCustom" class="form-input" placeholder="Or paste any emoji" style="max-width:220px;margin-top:8px">
         <input type="hidden" id="memberAvatar" value="👤">
+      </div>
+      <div class="form-group">
+        <label>School</label>
+        <select id="memberSchool" class="form-input"><option value="">No school</option></select>
+        <div id="memberLines" style="display:none;margin-top:10px">
+          <div id="breakfastLineWrap">
+            <label>Breakfast line</label>
+            <select id="memberBreakfastLine" class="form-input"></select>
+          </div>
+          <div id="lunchLineWrap" style="margin-top:8px">
+            <label>Lunch line</label>
+            <select id="memberLunchLine" class="form-input"></select>
+          </div>
+          <div style="font-size:12px;color:var(--text2);margin-top:6px">Used for everyone at this school.</div>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -523,9 +545,9 @@
   </div>
 </div>
 
-<script src="/js/api.js?v=58"></script>
-<script src="/js/settings.js?v=58"></script>
-<script src="/js/slideshow.js?v=58"></script>
+<script src="/js/api.js?v=61"></script>
+<script src="/js/settings.js?v=61"></script>
+<script src="/js/slideshow.js?v=61"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 <script>if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script>
 </body>

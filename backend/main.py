@@ -6,7 +6,7 @@ import asyncio
 import os
 
 from database import init_db, get_db
-from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages
+from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
 import json
 
 async def _reminder_loop():
@@ -94,6 +94,9 @@ app.include_router(homeassistant.router, prefix="/api/homeassistant", tags=["hom
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
 app.include_router(security.router, prefix="/api/security", tags=["security"])
 app.include_router(messages.router, prefix="/api/messages", tags=["messages"])
+app.include_router(meals.router, prefix="/api/meals", tags=["meals"])
+app.include_router(schoolcafe.router, prefix="/api/schoolcafe", tags=["schoolcafe"])
+app.include_router(shopping.router, prefix="/api/shopping", tags=["shopping"])
 
 # Serve frontend static files (configurable for LXC/native installs)
 FRONTEND_DIR = os.environ.get("FRONTEND_DIR", "/app/frontend")

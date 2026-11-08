@@ -24,6 +24,7 @@ let editingEventId = null;
 document.addEventListener('DOMContentLoaded', async () => {
   await initAppTimezone();
   members = await API.get('/api/members/');
+  await mountPersonFilter(() => loadEvents());
   populateMemberSelect();
   renderCalendar();
   loadEvents();
@@ -46,6 +47,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.target.id === 'eventModal') closeEventModal();
   };
 });
+
+function eventPersonTag(e, color) {
+  let html = '';
+  if (e.member_name) {
+    html += `<div class="event-card-member" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></div>`;
+  }
+  if (e.is_family) html += '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>';
+  return html;
+}
 
 function populateMemberSelect() {
   const sel = document.getElementById('eventMember');
@@ -111,7 +121,10 @@ async function loadEvents() {
   const start = `${year}-${String(month+1).padStart(2,'0')}-01T00:00:00`;
   const end = `${year}-${String(month+1).padStart(2,'0')}-31T23:59:59`;
   try {
-    allEvents = await API.get(`/api/calendar/events?start=${start}&end=${end}`);
+    let url = `/api/calendar/events?start=${start}&end=${end}`;
+    const person = getPersonFilter();
+    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
+    allEvents = await API.get(url);
     renderCalendar();
   } catch(e) {
     showToast('Failed to load events', 'error');
@@ -143,8 +156,7 @@ function selectDay(dateStr) {
             </div>
             <button onclick="deleteEvent(${e.id})" class="chore-action-btn delete" style="opacity:1">🗑</button>
           </div>
-          ${e.member_name ? `<div class="event-card-member" style="background:${color}22;color:${color}">${e.member_name}</div>` : ''}
-          ${e.is_family ? '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>' : ''}
+          ${eventPersonTag(e, color)}
         </div>`;
     }).join('');
   }
@@ -274,7 +286,7 @@ function showEventDetail(eventId, domEvent) {
   const tagsEl = document.getElementById('eventDetailTags');
   let tags = '';
   if (e.member_name) {
-    tags += `<span class="event-detail-tag" style="background:${color}22;color:${color}">${e.member_name}</span>`;
+    tags += `<span class="event-detail-tag" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></span>`;
   } else if (e.is_family) {
     tags += `<span class="event-detail-tag" style="background:#F6BF2622;color:#c49a00">🏠 Family</span>`;
   }

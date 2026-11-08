@@ -126,6 +126,22 @@ def init_db():
             FOREIGN KEY (account_id) REFERENCES calendar_accounts(id) ON DELETE CASCADE,
             FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE SET NULL
         );
+
+        CREATE TABLE IF NOT EXISTS family_meals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meal_date TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS shopping_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            quantity TEXT DEFAULT '',
+            checked INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
     """)
 
     conn.commit()
@@ -148,6 +164,9 @@ def init_db():
         "ALTER TABLE events ADD COLUMN external_source_id INTEGER DEFAULT NULL",
         "ALTER TABLE chores ADD COLUMN recurrence_days TEXT DEFAULT NULL",
         "ALTER TABLE chores ADD COLUMN time_of_day TEXT DEFAULT NULL",
+        "ALTER TABLE members ADD COLUMN school_id TEXT DEFAULT NULL",
+        "ALTER TABLE members ADD COLUMN school_name TEXT DEFAULT NULL",
+        "ALTER TABLE members ADD COLUMN avatar_photo TEXT DEFAULT NULL",
     ):
         try:
             conn.execute(stmt)

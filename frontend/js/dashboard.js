@@ -35,9 +35,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     history.replaceState({}, '', '/');
   }
 
+  await mountPersonFilter(() => {
+    loadTodayEvents();
+    loadUpcomingChores();
+    loadMeals();
+  });
+  const planBtn = document.getElementById('planWeekBtn');
+  if (planBtn) planBtn.onclick = openWeekPlanner;
+
   loadTodayEvents();
   loadUpcomingChores();
-  loadLunchMenu();
+  loadMeals();
+  loadShoppingStrip();
   loadWeather();
   loadHAStatus();
   loadStocks();
@@ -55,7 +64,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     loadTodayEvents();
     loadUpcomingChores();
-    loadLunchMenu();
+    loadMeals();
+    loadShoppingStrip();
     loadWeather();
     loadMessagePreview();
     loadMessageBadge();
@@ -73,12 +83,12 @@ async function loadMessagePreview() {
     }
     const m = msgs[0];
     const color  = m.color  || 'var(--text2)';
-    const avatar = m.avatar || '💬';
     const name   = m.name   || 'Someone';
     const extra  = msgs.length > 1 ? `+${msgs.length - 1} more` : '';
+    const av = memberAvatarHtml({ avatar: m.avatar, avatar_photo: m.avatar_photo, color: m.color }, 'avatar-sm');
     content.innerHTML = `
       <span class="msg-preview-icon">💬</span>
-      <span class="msg-preview-from" style="color:${color}">${avatar} ${name}</span>
+      <span class="msg-preview-from" style="color:${color}">${av} ${escapeHtml(name)}</span>
       <span class="msg-preview-divider">·</span>
       <span class="msg-preview-text">"${m.body}"</span>
       ${extra ? `<span class="msg-preview-more">${extra} →</span>` : '<span class="msg-preview-more">→</span>'}
@@ -128,7 +138,10 @@ async function loadTodayEvents() {
     const start = now.toISOString().replace('.000', '');
     const end48 = new Date(now.getTime() + 48 * 60 * 60 * 1000);
     const end = end48.toISOString().replace('.000', '');
-    const allFetched = await API.get(`/api/calendar/events?start=${start}&end=${end}`);
+    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+    const person = getPersonFilter();
+    if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
+    const allFetched = await API.get(eventsUrl);
     const events = allFetched.filter(e => {
       const endTime = e.end_datetime ? new Date(e.end_datetime) : new Date(e.start_datetime);
       return endTime > now;
@@ -168,7 +181,7 @@ async function loadTodayEvents() {
         <div class="event-card" style="--event:${color}">
           <div class="event-card-title">${e.title}</div>
           <div class="event-card-time">${e.all_day ? `${dateLabel} · All day` : `${dateLabel}${dateLabel ? ' · ' : ''}${formatTime(e.start_datetime)}`}</div>
-          ${e.member_name ? `<div class="event-card-member" style="background:${color}22;color:${color}">${e.member_name}</div>` : ''}
+          ${e.member_name ? `<div class="event-card-member" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></div>` : ''}
           ${e.is_family ? '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>' : ''}
         </div>`;
     }).join('');
@@ -202,8 +215,15 @@ async function loadUpcomingChores() {
       API.get('/api/chores/?hide_future=true&completed=false&since_days=0'),
       API.get('/api/members/')
     ]);
+    const person = getPersonFilter();
+    const visibleMembers = person === 'all' ? members : members.filter(m => String(m.id) === String(person));
+    const visibleChores = person === 'all' ? chores : chores.filter(c => String(c.assigned_to) === String(person));
 
-    if (!chores.length) {
+    if (!visibleChores.length) {
+      if (person !== 'all') {
+        el.innerHTML = '<div class="empty-state">🙌 All done today!</div>';
+        return;
+      }
       // Show mini leaderboard instead of blank state
       try {
         const lb = await API.get('/api/chores/leaderboard');
@@ -216,7 +236,7 @@ async function loadUpcomingChores() {
                 ${lb.slice(0, 3).map((p, i) => `
                   <div class="dash-mini-lb-row">
                     <span class="dash-mini-lb-medal">${medals[i] || ''}</span>
-                    <span class="dash-mini-lb-avatar">${p.avatar || '👤'}</span>
+                    <span class="dash-mini-lb-avatar">${memberAvatarHtml(p, 'avatar-sm')}</span>
                     <span class="dash-mini-lb-name" style="color:${p.color}">${p.name}</span>
                     <span class="dash-mini-lb-pts" style="color:${p.color}">${p.streak > 0 ? `🔥 ${p.streak}` : '—'}<small> day streak</small></span>
                   </div>`).join('')}
@@ -232,7 +252,7 @@ async function loadUpcomingChores() {
     // Group by member
     const byMember = {};
     const unassigned = [];
-    for (const c of chores) {
+    for (const c of visibleChores) {
       if (c.assigned_to) {
         if (!byMember[c.assigned_to]) byMember[c.assigned_to] = [];
         byMember[c.assigned_to].push(c);
@@ -242,18 +262,18 @@ async function loadUpcomingChores() {
     }
 
     let html = '';
-    for (const m of members) {
+    for (const m of visibleMembers) {
       const mChores = (byMember[m.id] || []).slice(0, 10);
       if (!mChores.length) continue;
       html += `<div class="person-chores-section">
         <div class="person-chores-header">
-          <span style="font-size:20px">${m.avatar || '👤'}</span>
-          <span style="color:${m.color}">${m.name}</span>
+          ${memberAvatarHtml(m, 'avatar-sm')}
+          <span style="color:${m.color}">${escapeHtml(m.name)}</span>
         </div>
         ${renderChoresByTOD(mChores, m.color)}
       </div>`;
     }
-    if (unassigned.length) {
+    if (person === 'all' && unassigned.length) {
       html += `<div class="person-chores-section">
         <div class="person-chores-header">📋 Unassigned</div>
         ${renderChoresByTOD(unassigned.slice(0, 5), '#9AA0B8')}
@@ -524,74 +544,172 @@ async function loadStocks() {
   }
 }
 
-async function loadLunchMenu() {
-  const el = document.getElementById('lunchMenu');
+function appHour() {
+  const raw = new Date().toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
+  const hour = parseInt(raw, 10);
+  return hour === 24 ? 0 : hour;
+}
+
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+function weekdayLabel(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function menuItemsText(items) {
+  if (!items || !items.length) return '';
+  const shown = items.slice(0, 8).map(i =>
+    i.is_entree ? `<span class="menu-entree">${escapeHtml(i.name)}</span>` : escapeHtml(i.name)
+  ).join(' · ');
+  return shown + (items.length > 8 ? ` · +${items.length - 8}` : '');
+}
+
+async function saveDinner(date, title) {
+  await API.put('/api/meals/dinner', { meal_date: date, title });
+}
+
+async function loadMeals() {
+  const el = document.getElementById('mealsBody');
   if (!el) return;
-
+  const dinnerDate = toETDateStr(new Date());
+  const schoolDate = appHour() >= 17 ? addDays(dinnerDate, 1) : dinnerDate;
+  const person = getPersonFilter();
+  let url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
+  if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
   try {
-    const s = await API.get('/api/settings/lunch_hidden');
-    if (s.value === 'true') {
-      const section = document.getElementById('lunchSection');
-      if (section) section.style.display = 'none';
-      return;
+    const data = await API.get(url);
+    const dinnerTitle = (data.dinner && data.dinner.title) || '';
+    const schoolWhen = schoolDate === dinnerDate ? 'Today' : 'Tomorrow';
+    let schoolsHtml = '';
+    if (data.school_menus_hidden) {
+      schoolsHtml = '';
+    } else if (!data.configured) {
+      schoolsHtml = '<div class="meals-note">Connect SchoolCafe in Settings to see school menus.</div>';
+    } else if (!data.schools.length) {
+      schoolsHtml = person === 'all'
+        ? '<div class="meals-note">Assign a school to each student in Settings.</div>'
+        : '<div class="meals-note">No school menu for this person.</div>';
+    } else {
+      schoolsHtml = `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + data.schools.map(s => {
+        const breakfast = menuItemsText(s.breakfast);
+        const lunch = menuItemsText(s.lunch);
+        const body = s.error
+          ? `<div class="meals-note">${escapeHtml(s.error)}</div>`
+          : `${breakfast ? `<div class="menu-row"><span class="menu-row-label">🌅 Breakfast</span><span class="menu-row-items">${breakfast}</span></div>` : ''}
+             ${lunch ? `<div class="menu-row"><span class="menu-row-label">🍕 Lunch</span><span class="menu-row-items">${lunch}</span></div>` : ''}
+             ${!breakfast && !lunch ? '<div class="meals-note">No menu posted</div>' : ''}`;
+        return `<div class="school-block" style="--event:${s.member_color || '#4A90D9'}">
+          <div class="school-block-head">
+            ${memberAvatarHtml({ avatar: s.avatar, avatar_photo: s.avatar_photo, color: s.member_color }, 'avatar-sm')}
+            <div>
+              <div class="school-block-name" style="color:${s.member_color || 'inherit'}">${escapeHtml(s.member_name)}</div>
+              <div class="school-block-school">${escapeHtml(s.school_name || '')}</div>
+            </div>
+          </div>
+          ${body}
+        </div>`;
+      }).join('');
     }
-  } catch(e) {}
+    const editing = document.activeElement && document.activeElement.id === 'dinnerTitleInput';
+    const draft = editing ? document.activeElement.value : null;
+    el.innerHTML = `
+      <div class="dinner-card">
+        <div class="dinner-kicker">Tonight</div>
+        <input id="dinnerTitleInput" class="dinner-input" placeholder="What's for dinner?" value="${escapeHtml(draft !== null ? draft : dinnerTitle)}" autocomplete="off">
+      </div>
+      ${schoolsHtml}`;
+    const input = document.getElementById('dinnerTitleInput');
+    if (input) {
+      input.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      });
+      input.addEventListener('blur', async () => {
+        const next = input.value.trim();
+        if (next === dinnerTitle) return;
+        try {
+          await saveDinner(dinnerDate, next);
+        } catch (e) {
+          showToast('Could not save dinner', 'error');
+        }
+      });
+      if (editing) input.focus();
+    }
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
+  }
+}
 
-  // After 5pm show tomorrow's menu
-  const now = new Date();
-  const isAfter5pm = now.getHours() >= 17;
-  const target = new Date(now);
-  if (isAfter5pm) target.setDate(target.getDate() + 1);
-  const dateKey = target.getFullYear() + '-' +
-    String(target.getMonth() + 1).padStart(2, '0') + '-' +
-    String(target.getDate()).padStart(2, '0');
-  const displayDate = target.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-
-  const titleEl = document.getElementById('lunchMenuTitle');
-  if (titleEl) titleEl.textContent = '🍽️ ' + (isAfter5pm ? 'Tomorrow · ' : 'Today · ') + displayDate;
-
+async function openWeekPlanner() {
+  const modal = document.getElementById('weekModal');
+  const list = document.getElementById('weekDays');
+  if (!modal || !list) return;
+  modal.style.display = 'flex';
+  list.innerHTML = '<div class="empty-state">Loading…</div>';
   try {
-    const data = await API.get(`/api/lunch/today?date=${dateKey}`);
+    const start = toETDateStr(new Date());
+    const data = await API.get('/api/meals/week?start=' + start);
+    list.innerHTML = data.days.map(day => `
+      <label class="week-day">
+        <span>${weekdayLabel(day.date)}</span>
+        <input class="form-input" data-date="${day.date}" value="${escapeHtml(day.title)}" placeholder="Dinner" autocomplete="off">
+      </label>`).join('');
+    list.querySelectorAll('input').forEach(input => {
+      input.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      });
+      input.addEventListener('blur', async () => {
+        const original = (data.days.find(d => d.date === input.dataset.date) || {}).title || '';
+        if (input.value.trim() === original) return;
+        try {
+          await saveDinner(input.dataset.date, input.value.trim());
+          const row = data.days.find(d => d.date === input.dataset.date);
+          if (row) row.title = input.value.trim();
+          loadMeals();
+        } catch (e) {
+          showToast('Could not save dinner', 'error');
+        }
+      });
+    });
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state">Could not load the week</div>';
+  }
+}
 
-    // Hide section entirely if lunch menu is not configured in Settings
-    if (data.not_configured) {
-      const section = document.getElementById('lunchSection');
-      if (section) section.style.display = 'none';
-      return;
-    }
+function closeWeekPlanner() {
+  const modal = document.getElementById('weekModal');
+  if (modal) modal.style.display = 'none';
+}
 
-    // Update the "Full menu →" link using values returned from backend
-    const link = document.getElementById('lunchFullMenuLink');
-    if (link && data.district && data.school_slug && data.menu_type) {
-      link.href = `https://${data.district}.nutrislice.com/menu/${data.school_slug}/${data.menu_type}`;
-      link.style.display = '';
-    }
+async function loadShoppingStrip() {
+  const el = document.getElementById('shoppingStrip');
+  if (!el) return;
+  try {
+    const items = await API.get('/api/shopping/');
+    const open = items.filter(i => !i.checked);
+    const shown = open.slice(0, 6);
+    el.style.display = 'flex';
+    el.innerHTML = `
+      <a href="/shopping.html" class="shopping-strip-link">🛒 Shopping</a>
+      ${shown.map(i => `<button type="button" class="shopping-chip" onclick="checkShoppingItem(${i.id})">${escapeHtml(i.name)}${i.quantity ? ' · ' + escapeHtml(i.quantity) : ''}</button>`).join('')}
+      ${open.length > 6 ? `<a href="/shopping.html" class="shopping-strip-more">+${open.length - 6}</a>` : ''}
+      ${!open.length ? '<span class="shopping-strip-empty">Nothing to buy</span>' : ''}`;
+  } catch (e) {
+    el.style.display = 'none';
+  }
+}
 
-    const { breakfast, lunch, sides = [] } = data;
-
-    if (!breakfast.length && !lunch.length) {
-      el.innerHTML = '<div class="empty-state">No menu available' + (isAfter5pm ? ' tomorrow' : ' today') + '</div>';
-      return;
-    }
-
-    const renderRow = (emoji, label, items) => {
-      if (!items.length) return '';
-      const text = items.slice(0, 6).map(i =>
-        i.is_entree ? `<span class="menu-entree">${i.name}</span>` : i.name
-      ).join(' · ');
-      return `<div class="menu-row">
-        <span class="menu-row-label">${emoji} ${label}</span>
-        <span class="menu-row-items">${text}</span>
-      </div>`;
-    };
-
-    el.innerHTML = `<div class="menu-compact">
-      ${renderRow('🌅', 'Breakfast', breakfast)}
-      ${renderRow('🍕', 'Lunch', lunch)}
-      ${renderRow('🥗', 'Sides', sides)}
-    </div>`;
-  } catch(e) {
-    el.innerHTML = '<div class="empty-state">Menu unavailable today</div>';
+async function checkShoppingItem(id) {
+  try {
+    await API.patch('/api/shopping/' + id, { checked: true });
+    loadShoppingStrip();
+  } catch (e) {
+    showToast('Could not update the list', 'error');
   }
 }
 

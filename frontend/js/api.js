@@ -25,6 +25,14 @@ const API = {
     const r = await fetch(path, { method: 'DELETE' });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
+  },
+  async patch(path, body) {
+    const r = await fetch(path, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
   }
 };
 
@@ -37,16 +45,97 @@ function showToast(msg, type = '') {
   setTimeout(() => t.remove(), 3000);
 }
 
+function escapeHtml(str) {
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function memberAvatarHtml(member, className) {
+  const color = (member && member.color) || '#9AA0B8';
+  const cls = 'member-avatar' + (className ? ' ' + className : '');
+  if (member && member.avatar_photo) {
+    const src = '/api/members/avatar/' + encodeURIComponent(member.avatar_photo);
+    return `<span class="${cls} has-photo" style="background:${color}22"><img src="${src}" alt=""></span>`;
+  }
+  const emoji = (member && member.avatar) || '👤';
+  return `<span class="${cls}" style="background:${color}22">${emoji}</span>`;
+}
+
+const PERSON_KEY = 'fh_person';
+
+function getPersonFilter() {
+  const value = localStorage.getItem(PERSON_KEY);
+  return value && value !== 'all' ? value : 'all';
+}
+
+function setPersonFilter(id) {
+  localStorage.setItem(PERSON_KEY, !id || id === 'all' ? 'all' : String(id));
+  armPersonIdle();
+}
+
+const PERSON_IDLE_MS = 5 * 60 * 1000;
+let _personIdleTimer = null;
+
+function armPersonIdle() {
+  clearTimeout(_personIdleTimer);
+  _personIdleTimer = null;
+  if (getPersonFilter() === 'all') return;
+  _personIdleTimer = setTimeout(revertPersonView, PERSON_IDLE_MS);
+}
+
+function revertPersonView() {
+  if (getPersonFilter() === 'all') return;
+  setPersonFilter('all');
+  const path = location.pathname;
+  if (path === '/' || path.endsWith('/index.html')) location.reload();
+  else location.replace('/');
+}
+
+function _onPersonActivity() {
+  armPersonIdle();
+}
+
+async function mountPersonFilter(onChange) {
+  const el = document.getElementById('personFilter');
+  if (!el) return [];
+  let members = [];
+  try {
+    members = await API.get('/api/members/');
+  } catch (e) {
+    el.innerHTML = '';
+    return [];
+  }
+  let current = getPersonFilter();
+  if (current !== 'all' && !members.some(m => String(m.id) === String(current))) {
+    current = 'all';
+    setPersonFilter('all');
+  }
+  const everyone = `<button type="button" class="person-chip${current === 'all' ? ' active' : ''}" data-person="all">Everyone</button>`;
+  const chips = members.map(m => `
+    <button type="button" class="person-chip${String(current) === String(m.id) ? ' active' : ''}" data-person="${m.id}" style="--chip:${m.color}">
+      ${memberAvatarHtml(m, 'avatar-sm')}
+      <span>${escapeHtml(m.name)}</span>
+    </button>`).join('');
+  el.innerHTML = everyone + chips;
+  el.querySelectorAll('.person-chip').forEach(btn => {
+    btn.onclick = () => {
+      setPersonFilter(btn.dataset.person);
+      el.querySelectorAll('.person-chip').forEach(b => b.classList.toggle('active', b === btn));
+      if (onChange) onChange(getPersonFilter());
+    };
+  });
+  return members;
+}
+
 // ── Sidebar Members ───────────────────────────────────────────
 async function loadSidebarMembers() {
   const el = document.getElementById('sidebarMembers');
   if (!el) return;
   try {
-    const members = await API.get('/members/');
+    const members = await API.get('/api/members/');
     el.innerHTML = members.map(m => `
       <div class="sidebar-member-chip">
-        <div class="member-avatar" style="background:${m.color}22">${m.avatar || '👤'}</div>
-        <span>${m.name}</span>
+        ${memberAvatarHtml(m)}
+        <span>${escapeHtml(m.name)}</span>
       </div>
     `).join('');
   } catch(e) {}
@@ -212,4 +301,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   _updateFullscreenBtn();
   loadMessageBadge();
+  ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
+    document.addEventListener(ev, _onPersonActivity, { passive: true })
+  );
+  armPersonIdle();
 });

@@ -1,7 +1,17 @@
 const COLORS = ['#4F6EF7','#FF6B6B','#FFB347','#34C759','#AF52DE','#FF2D55','#5AC8FA','#FF9500','#30D158','#64D2FF'];
-const EMOJIS = ['👤','👨','👩','👧','👦','👶','🧑','👴','👵','🧔','👸','🤴','🦸','🧙','🧝','🐱','🐶','🦊','🐼','🦁'];
+const EMOJI_GROUPS = [
+  { id: 'people', label: 'People', emojis: ['👤','👨','👩','👧','👦','👶','🧑','👴','👵','🧔','👱','🧕','👸','🤴','🦸','🦹','🧙','🧝','🧛','🧚','🧜','👮','👷','🧑‍🎓','👨‍🍳','👩‍⚕️'] },
+  { id: 'animals', label: 'Animals', emojis: ['🐱','🐶','🦊','🐼','🦁','🐯','🐻','🐨','🐸','🐵','🦄','🐷','🐮','🐔','🐧','🐦','🦉','🐺','🦝','🐹','🐰','🐢','🐬','🦋','🐝','🐴'] },
+  { id: 'sports', label: 'Sports', emojis: ['⚽','🏀','🏈','⚾','🎾','🏐','🏉','🥏','🎳','🏓','🏸','🏒','⛳','🏹','🥊','🥋','🛹','🎿','🏊','🚴','🏇','🤸','🏄','🧗','🥅','🏆'] },
+  { id: 'activities', label: 'Activities', emojis: ['🎨','🎭','🎬','🎤','🎧','🎸','🎹','🥁','📚','✏️','💻','🎮','🧩','♟️','🎯','🎲','📷','✈️','🚀','🚗','🚲','⛺','🔬','🧪','🔭','🧵'] },
+  { id: 'food', label: 'Food', emojis: ['🍕','🍔','🌮','🍣','🍜','🍩','🍪','🍰','🧁','🍦','🍎','🍓','🥑','🌽','🥨','🥐','☕','🥤','🧃','🍿','🥗','🍝'] },
+  { id: 'nature', label: 'Nature', emojis: ['🌸','🌻','🌹','🌷','🍀','🌿','🍁','🌙','⭐','☀️','🌈','🔥','💧','❄️','🌊','🏔️','🌵','🌴','🐝','🐚'] },
+];
 let members = [];
 let editingMemberId = null;
+let pendingAvatarFile = null;
+let removeAvatar = false;
+let activeEmojiGroup = 'people';
 let calendarAccounts = [];
 let calendarSources = [];
 
@@ -24,7 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadHASettings();
   loadTimezone();
   loadNightMode();
-  loadLunchSettings();
+  loadSchoolcafeSettings();
   loadStockSettings();
   loadCameraSettings();
   loadReminders();
@@ -39,9 +49,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     `<div class="color-preset" style="background:${c}" data-color="${c}" onclick="selectColor('${c}')"></div>`
   ).join('');
 
-  document.getElementById('emojiPicker').innerHTML = EMOJIS.map(e =>
-    `<div class="emoji-opt" data-emoji="${e}" onclick="selectEmoji('${e}')">${e}</div>`
-  ).join('');
+  renderEmojiGroups();
+  const emojiCustom = document.getElementById('memberEmojiCustom');
+  if (emojiCustom) {
+    emojiCustom.addEventListener('input', () => {
+      const grapheme = firstGrapheme(emojiCustom.value);
+      if (grapheme) selectEmoji(grapheme, true);
+    });
+  }
+  const photoInput = document.getElementById('memberPhoto');
+  if (photoInput) {
+    photoInput.addEventListener('change', () => {
+      pendingAvatarFile = photoInput.files && photoInput.files[0] ? photoInput.files[0] : null;
+      removeAvatar = false;
+      renderPhotoPreview();
+    });
+  }
+  const clearPhoto = document.getElementById('clearMemberPhoto');
+  if (clearPhoto) {
+    clearPhoto.addEventListener('click', () => {
+      pendingAvatarFile = null;
+      removeAvatar = true;
+      if (photoInput) photoInput.value = '';
+      renderPhotoPreview();
+    });
+  }
+  const schoolSel = document.getElementById('memberSchool');
+  if (schoolSel) schoolSel.addEventListener('change', () => loadMemberLines());
 
   document.getElementById('memberColor').oninput = e => selectColor(e.target.value);
 
@@ -62,13 +96,13 @@ async function loadMembers() {
   }
   el.innerHTML = members.map(m => `
     <div class="member-item">
-      <div class="member-item-avatar">${m.avatar || '👤'}</div>
+      <div class="member-item-avatar">${memberAvatarHtml(m, 'avatar-lg')}</div>
       <div class="member-item-info">
         <div class="member-item-name">
           <span class="member-color-swatch" style="background:${m.color}"></span>
-          ${m.name}
+          ${_escapeHtml(m.name)}
         </div>
-        <div class="member-item-sub">Assign calendars in Family Calendar below</div>
+        <div class="member-item-sub">${m.school_name ? _escapeHtml(m.school_name) : 'No school assigned'}</div>
       </div>
       <div style="display:flex;gap:8px">
         <button class="chore-action-btn" onclick="openMemberModal(${m.id})">✏️ Edit</button>
@@ -281,7 +315,7 @@ function renderWriteCalendars() {
     else if (assignedAny) emptyLabel = 'ICS feeds are sync-in only';
     return `
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border)">
-        <div style="min-width:120px;font-weight:700">${m.avatar || '👤'} ${_escapeHtml(m.name)}</div>
+        <div style="min-width:140px;font-weight:700;display:flex;align-items:center;gap:8px">${memberAvatarHtml(m, 'avatar-sm')} ${_escapeHtml(m.name)}</div>
         <select id="writeCal_${m.id}" class="form-input" style="flex:1;min-width:200px;max-width:360px"
           ${writable.length ? '' : 'disabled'}>
           <option value="">${emptyLabel}</option>
@@ -504,23 +538,123 @@ function toggleCalOption(el, _containerId) {
   if (check) check.style.opacity = el.classList.contains('selected') ? '1' : '0';
 }
 
-function openMemberModal(memberId) {
+function firstGrapheme(value) {
+  const text = (value || '').trim();
+  if (!text) return '';
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    return [...seg.segment(text)][0].segment;
+  }
+  return [...text][0];
+}
+
+function renderEmojiGroups() {
+  const tabs = document.getElementById('emojiTabs');
+  const picker = document.getElementById('emojiPicker');
+  if (!tabs || !picker) return;
+  tabs.innerHTML = EMOJI_GROUPS.map(g =>
+    `<button type="button" class="emoji-tab${g.id === activeEmojiGroup ? ' active' : ''}" onclick="showEmojiGroup('${g.id}')">${g.label}</button>`
+  ).join('');
+  const group = EMOJI_GROUPS.find(g => g.id === activeEmojiGroup) || EMOJI_GROUPS[0];
+  const current = document.getElementById('memberAvatar')?.value;
+  picker.innerHTML = group.emojis.map(e =>
+    `<div class="emoji-opt${e === current ? ' selected' : ''}" data-emoji="${e}" onclick="selectEmoji('${e}')">${e}</div>`
+  ).join('');
+}
+
+function showEmojiGroup(id) {
+  activeEmojiGroup = id;
+  renderEmojiGroups();
+}
+
+function editingMember() {
+  return editingMemberId ? members.find(m => m.id === editingMemberId) : null;
+}
+
+function renderPhotoPreview() {
+  const el = document.getElementById('memberPhotoPreview');
+  if (!el) return;
+  if (pendingAvatarFile) {
+    el.innerHTML = `<img src="${URL.createObjectURL(pendingAvatarFile)}" alt="">`;
+    return;
+  }
+  const m = editingMember();
+  if (m && m.avatar_photo && !removeAvatar) {
+    el.innerHTML = memberAvatarHtml(m, 'avatar-lg');
+    return;
+  }
+  el.innerHTML = memberAvatarHtml({ avatar: document.getElementById('memberAvatar')?.value || '👤', color: document.getElementById('memberColor')?.value }, 'avatar-lg');
+}
+
+async function fillSchoolSelect(selectedId) {
+  const sel = document.getElementById('memberSchool');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">No school</option>';
+  try {
+    const data = await API.get('/api/schoolcafe/schools');
+    if (!data.configured) {
+      sel.innerHTML = '<option value="">Set a SchoolCafe district first</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="">No school</option>' + data.schools.map(s =>
+      `<option value="${s.id}"${s.id === selectedId ? ' selected' : ''}>${_escapeHtml(s.name)}</option>`
+    ).join('');
+    if (selectedId) sel.value = selectedId;
+  } catch (e) {
+    sel.innerHTML = '<option value="">Could not load schools</option>';
+  }
+}
+
+async function loadMemberLines() {
+  const box = document.getElementById('memberLines');
+  const schoolId = document.getElementById('memberSchool')?.value || '';
+  if (!box) return;
+  if (!schoolId) { box.style.display = 'none'; return; }
+  try {
+    const data = await API.get('/api/schoolcafe/lines?school_id=' + encodeURIComponent(schoolId));
+    const fill = (selectId, lines, selected) => {
+      const sel = document.getElementById(selectId);
+      if (!sel) return;
+      sel.innerHTML = lines.map(line => `<option value="${_escapeHtml(line)}"${line === selected ? ' selected' : ''}>${_escapeHtml(line)}</option>`).join('');
+      if (selected) sel.value = selected;
+    };
+    fill('memberBreakfastLine', data.breakfast || [], (data.selected || {}).Breakfast || '');
+    fill('memberLunchLine', data.lunch || [], (data.selected || {}).Lunch || '');
+    const show = (data.breakfast || []).length > 1 || (data.lunch || []).length > 1;
+    box.style.display = show ? 'block' : 'none';
+    document.getElementById('breakfastLineWrap').style.display = (data.breakfast || []).length > 1 ? 'block' : 'none';
+    document.getElementById('lunchLineWrap').style.display = (data.lunch || []).length > 1 ? 'block' : 'none';
+  } catch (e) {
+    box.style.display = 'none';
+  }
+}
+
+async function openMemberModal(memberId) {
   editingMemberId = memberId || null;
+  pendingAvatarFile = null;
+  removeAvatar = false;
+  const photoInput = document.getElementById('memberPhoto');
+  if (photoInput) photoInput.value = '';
   document.getElementById('memberModalTitle').textContent = memberId ? 'Edit Member' : 'Add Family Member';
+  let schoolId = '';
   if (memberId) {
     const m = members.find(m => m.id === memberId);
     if (m) {
       document.getElementById('memberName').value = m.name;
       selectColor(m.color);
       selectEmoji(m.avatar || '👤');
+      schoolId = m.school_id || '';
     }
   } else {
     document.getElementById('memberName').value = '';
     selectColor(COLORS[0]);
     selectEmoji('👤');
   }
+  renderPhotoPreview();
   document.getElementById('memberModal').style.display = 'flex';
   document.getElementById('memberName').focus();
+  await fillSchoolSelect(schoolId);
+  await loadMemberLines();
 }
 
 function closeMemberModal() {
@@ -534,35 +668,66 @@ function selectColor(color) {
   });
 }
 
-function selectEmoji(emoji) {
-  document.getElementById('memberAvatar').value = emoji;
-  document.querySelectorAll('.emoji-opt').forEach(el => {
-    el.classList.toggle('selected', el.dataset.emoji === emoji);
-  });
+function selectEmoji(emoji, fromCustom) {
+  const value = emoji || '👤';
+  document.getElementById('memberAvatar').value = value;
+  const custom = document.getElementById('memberEmojiCustom');
+  if (custom && !fromCustom && document.activeElement !== custom) custom.value = value;
+  const group = EMOJI_GROUPS.find(g => g.emojis.includes(value));
+  if (group && group.id !== activeEmojiGroup) {
+    activeEmojiGroup = group.id;
+    renderEmojiGroups();
+  } else {
+    document.querySelectorAll('.emoji-opt').forEach(el => {
+      el.classList.toggle('selected', el.dataset.emoji === value);
+    });
+  }
+  if (!pendingAvatarFile) renderPhotoPreview();
 }
 
 async function saveMember() {
   const name = document.getElementById('memberName').value.trim();
   if (!name) { showToast('Please enter a name', 'error'); return; }
+  const schoolSel = document.getElementById('memberSchool');
+  const schoolId = schoolSel && !schoolSel.value.startsWith('Set ') && !schoolSel.value.startsWith('Could ')
+    ? schoolSel.value : '';
+  const schoolName = schoolId ? (schoolSel.selectedOptions[0]?.textContent || '').trim() : '';
   const payload = {
     name,
     color: document.getElementById('memberColor').value,
     avatar: document.getElementById('memberAvatar').value,
+    school_id: schoolId,
+    school_name: schoolName,
   };
   try {
-    if (editingMemberId) {
-      await API.put(`/api/members/${editingMemberId}`, payload);
-      showToast('✅ Member updated!', 'success');
-    } else {
-      await API.post('/api/members/', payload);
-      showToast('✅ Member added!', 'success');
+    const saved = editingMemberId
+      ? await API.put(`/api/members/${editingMemberId}`, payload)
+      : await API.post('/api/members/', payload);
+    const id = saved.id;
+    const lines = document.getElementById('memberLines');
+    if (schoolId && lines && lines.style.display !== 'none') {
+      await API.put('/api/schoolcafe/lines', {
+        school_id: schoolId,
+        breakfast: document.getElementById('memberBreakfastLine')?.value || '',
+        lunch: document.getElementById('memberLunchLine')?.value || '',
+      });
     }
+    if (removeAvatar && !pendingAvatarFile) {
+      await API.delete(`/api/members/${id}/avatar`);
+    }
+    if (pendingAvatarFile) {
+      const body = new FormData();
+      body.append('file', pendingAvatarFile);
+      const res = await fetch(`/api/members/${id}/avatar`, { method: 'POST', body });
+      if (!res.ok) throw new Error(await res.text());
+    }
+    showToast(editingMemberId ? '✅ Member updated!' : '✅ Member added!', 'success');
     closeMemberModal();
     await loadMembers();
     loadSidebarMembers();
     await loadFamilyCalendar();
   } catch(e) {
-    showToast('Failed to save member', 'error');
+    showToast(e.message || 'Failed to save member', 'error');
   }
 }
 
@@ -820,34 +985,66 @@ async function saveHASettings() {
   }
 }
 
-async function loadLunchSettings() {
+async function loadSchoolcafeSettings() {
   try {
     const s = await API.get('/api/settings/');
-    const district = document.getElementById('lunchDistrict');
-    const slug = document.getElementById('lunchSchoolSlug');
-    const menuType = document.getElementById('lunchMenuType');
     const hidden = document.getElementById('lunchHidden');
-    if (district) district.value = s.lunch_district || 'bcps';
-    if (slug) slug.value = s.lunch_school_slug || 'bcps-weekly-menus';
-    if (menuType) menuType.value = s.lunch_menu_type || 'weekly-menus';
     if (hidden) hidden.checked = s.lunch_hidden === 'true';
+    const current = document.getElementById('districtCurrent');
+    if (current) {
+      current.textContent = s.schoolcafe_district_name
+        ? 'Connected: ' + s.schoolcafe_district_name
+        : 'No district selected';
+    }
   } catch(e) {}
 }
 
-async function saveLunchSettings() {
-  const district = (document.getElementById('lunchDistrict')?.value || '').trim();
-  const slug = (document.getElementById('lunchSchoolSlug')?.value || '').trim();
-  const menuType = (document.getElementById('lunchMenuType')?.value || '').trim();
-  const hidden = document.getElementById('lunchHidden')?.checked ?? false;
+async function searchSchoolDistricts() {
+  const q = (document.getElementById('districtSearch')?.value || '').trim();
+  const el = document.getElementById('districtResults');
+  if (!el) return;
+  if (q.length < 2) { showToast('Type at least 2 letters', 'error'); return; }
+  el.innerHTML = '<div class="meals-note">Searching…</div>';
+  try {
+    const rows = await API.get('/api/schoolcafe/districts?q=' + encodeURIComponent(q));
+    if (!rows.length) {
+      el.innerHTML = '<div class="meals-note">No districts found</div>';
+      return;
+    }
+    el.innerHTML = rows.slice(0, 12).map(d =>
+      `<button type="button" class="district-result" data-id="${d.id}" data-name="${_escapeHtml(d.name)}">${_escapeHtml(d.name)}${d.published ? '' : ' <span style="color:var(--text2)">(menu not published)</span>'}</button>`
+    ).join('');
+    el.querySelectorAll('.district-result').forEach(btn => {
+      btn.onclick = () => selectSchoolDistrict(btn.dataset.id, btn.dataset.name);
+    });
+  } catch (e) {
+    el.innerHTML = '';
+    showToast('SchoolCafe search failed', 'error');
+  }
+}
+
+async function selectSchoolDistrict(id, name) {
   try {
     await API.post('/api/settings/', {
-      lunch_district: district,
-      lunch_school_slug: slug,
-      lunch_menu_type: menuType,
-      lunch_hidden: String(hidden),
+      schoolcafe_district_id: String(id),
+      schoolcafe_district_name: name,
     });
-    showToast('✅ Lunch menu settings saved!', 'success');
-  } catch(e) {
+    const current = document.getElementById('districtCurrent');
+    if (current) current.textContent = 'Connected: ' + name;
+    const results = document.getElementById('districtResults');
+    if (results) results.innerHTML = '';
+    showToast('✅ District saved', 'success');
+  } catch (e) {
+    showToast('Failed to save district', 'error');
+  }
+}
+
+async function saveSchoolMenuVisibility() {
+  const hidden = document.getElementById('lunchHidden')?.checked ?? false;
+  try {
+    await API.post('/api/settings/', { lunch_hidden: String(hidden) });
+    showToast('✅ School menu visibility saved', 'success');
+  } catch (e) {
     showToast('Failed to save', 'error');
   }
 }
