@@ -94,7 +94,13 @@ function _onPersonActivity() {
   armPersonIdle();
 }
 
+let _personFilterChange = null;
+function onPersonFilterChange(fn) {
+  _personFilterChange = fn;
+}
+
 async function mountPersonFilter(onChange) {
+  if (onChange) _personFilterChange = onChange;
   const el = document.getElementById('personFilter');
   if (!el) return [];
   let members = [];
@@ -120,7 +126,8 @@ async function mountPersonFilter(onChange) {
     btn.onclick = () => {
       setPersonFilter(btn.dataset.person);
       el.querySelectorAll('.person-chip').forEach(b => b.classList.toggle('active', b === btn));
-      if (onChange) onChange(getPersonFilter());
+      if (_personFilterChange) _personFilterChange(getPersonFilter());
+      loadMessageBadge();
     };
   });
   return members;
@@ -239,18 +246,16 @@ async function initTheme() {
 async function loadMessageBadge() {
   const badge = document.getElementById('msgNavBadge');
   if (!badge) return;
-  // If on messages page, mark as seen and hide badge
   if (window.location.pathname === '/messages.html') {
-    localStorage.setItem('msg_last_seen', new Date().toISOString());
     badge.style.display = 'none';
     return;
   }
   try {
     const msgs = await API.get('/api/messages/');
-    const lastSeen = localStorage.getItem('msg_last_seen') || '1970-01-01T00:00:00Z';
-    const unread = msgs.filter(m => new Date(m.created_at + 'Z') > new Date(lastSeen));
-    if (unread.length > 0) {
-      badge.textContent = unread.length > 9 ? '9+' : unread.length;
+    const person = getPersonFilter();
+    const open = person === 'all' ? msgs : msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person));
+    if (open.length > 0) {
+      badge.textContent = open.length > 9 ? '9+' : open.length;
       badge.style.display = 'inline-block';
     } else {
       badge.style.display = 'none';
@@ -295,12 +300,42 @@ function _updateFullscreenBtn() {
 }
 document.addEventListener('fullscreenchange', _updateFullscreenBtn);
 
+async function loadWeather() {
+  const el = document.getElementById('weatherWidget');
+  if (!el) return;
+  try {
+    const data = await API.get('/api/weather/');
+    if (!data || data.error) { el.innerHTML = ''; return; }
+    const t = data.tomorrow;
+    const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
+    el.innerHTML = `
+      <div class="weather-now">
+        <div class="weather-icon">${data.icon}</div>
+        <span class="weather-temp">${Math.round(data.temp)}°</span>
+        <span class="weather-condition">${escapeHtml(data.condition)}</span>
+        <span class="weather-meta">↑${Math.round(data.high)}° ↓${Math.round(data.low)}°</span>
+      </div>
+      ${t && t.high != null ? `
+        <div class="weather-tomorrow">
+          <span class="weather-tmr-label">Tomorrow</span>
+          <span class="weather-tmr-icon">${t.icon}</span>
+          <span class="weather-tmr-hilo">↑${Math.round(t.high)}° ↓${Math.round(t.low)}°</span>
+          ${precipStr}
+        </div>` : ''}
+    `;
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
 // Init sidebar + theme on all pages
 document.addEventListener('DOMContentLoaded', () => {
   loadSidebarMembers();
   initTheme();
   _updateFullscreenBtn();
   loadMessageBadge();
+  mountPersonFilter();
+  loadWeather();
   ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
     document.addEventListener(ev, _onPersonActivity, { passive: true })
   );

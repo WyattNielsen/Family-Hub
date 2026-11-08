@@ -135,6 +135,14 @@ def init_db():
             updated_at TEXT DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS meal_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS shopping_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -167,6 +175,7 @@ def init_db():
         "ALTER TABLE members ADD COLUMN school_id TEXT DEFAULT NULL",
         "ALTER TABLE members ADD COLUMN school_name TEXT DEFAULT NULL",
         "ALTER TABLE members ADD COLUMN avatar_photo TEXT DEFAULT NULL",
+        "ALTER TABLE messages ADD COLUMN recipient_id INTEGER DEFAULT NULL",
     ):
         try:
             conn.execute(stmt)

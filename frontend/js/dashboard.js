@@ -1,33 +1,20 @@
-const QUOTES = [
-  { text: "Family is not an important thing. It's everything.", author: "Michael J. Fox" },
-  { text: "In family life, love is the oil that eases friction.", author: "Friedrich Nietzsche" },
-  { text: "The love of a family is life's greatest blessing.", author: "" },
-  { text: "A happy family is but an earlier heaven.", author: "George Bernard Shaw" },
-  { text: "Family means nobody gets left behind or forgotten.", author: "Lilo & Stitch" },
-  { text: "The most important thing in the world is family and love.", author: "" },
-  { text: "Home is where love resides, memories are created, friends always belong.", author: "" },
-  { text: "Families are the compass that guides us.", author: "" },
-  { text: "Every day is a gift — unwrap it together.", author: "" },
-  { text: "Small moments make big memories.", author: "" },
-  { text: "Together is our favorite place to be.", author: "" },
-  { text: "Be the reason someone smiles today.", author: "" },
-];
+function setDashboardDate() {
+  const el = document.getElementById('todayDate');
+  if (!el) return;
+  el.textContent = new Date().toLocaleDateString('en-US', {
+    timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric'
+  });
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
-  await initAppTimezone();
-  const hour = new Date().getHours();
-  const greet = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
-  document.getElementById('timeGreeting').textContent = greet;
-  document.getElementById('todayDate').textContent = new Date().toLocaleDateString('en-US', { timeZone: TZ,
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  onPersonFilterChange(() => {
+    loadTodayEvents();
+    loadUpcomingChores();
+    loadMeals();
+    loadMessagePreview();
   });
-
-  // Daily quote — rotate by day of year
-  const q = QUOTES[Math.floor(Date.now() / 86400000) % QUOTES.length];
-  const qEl = document.getElementById('dailyQuote');
-  if (qEl) {
-    qEl.innerHTML = `"${q.text}"${q.author ? `<span class="quote-author"> — ${q.author}</span>` : ''}`;
-  }
+  await initAppTimezone();
+  setDashboardDate();
 
   const params = new URLSearchParams(window.location.search);
   if (params.get('connected') === 'family') {
@@ -35,19 +22,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     history.replaceState({}, '', '/');
   }
 
-  await mountPersonFilter(() => {
-    loadTodayEvents();
-    loadUpcomingChores();
-    loadMeals();
-  });
-  const planBtn = document.getElementById('planWeekBtn');
-  if (planBtn) planBtn.onclick = openWeekPlanner;
-
   loadTodayEvents();
   loadUpcomingChores();
   loadMeals();
   loadShoppingStrip();
-  loadWeather();
   loadHAStatus();
   loadStocks();
   loadMessagePreview();
@@ -57,11 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Auto-refresh all dashboard data every 5 minutes
   setInterval(() => {
-    const h = new Date().getHours();
-    document.getElementById('timeGreeting').textContent = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
-    document.getElementById('todayDate').textContent = new Date().toLocaleDateString('en-US', { timeZone: TZ,
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-    });
+    setDashboardDate();
     loadTodayEvents();
     loadUpcomingChores();
     loadMeals();
@@ -72,40 +46,73 @@ document.addEventListener('DOMContentLoaded', async () => {
   }, 5 * 60 * 1000);
 });
 
+function visibleMessages(msgs) {
+  const person = getPersonFilter();
+  if (person === 'all') return msgs;
+  return msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person));
+}
+
 async function loadMessagePreview() {
   const content = document.getElementById('msgPreviewContent');
+  const ack = document.getElementById('msgPreviewAck');
   if (!content) return;
   try {
-    const msgs = await API.get('/api/messages/');
+    const msgs = visibleMessages(await API.get('/api/messages/'));
     if (!msgs.length) {
-      content.innerHTML = `<span class="msg-preview-icon">💬</span><span class="msg-preview-text" style="color:var(--text3)">No messages yet — tap ✏️ to leave a note</span>`;
+      content.innerHTML = `<span class="msg-preview-text" style="color:var(--text3)">No messages yet — tap ✏️ to leave a note</span>`;
+      if (ack) ack.style.display = 'none';
       return;
     }
     const m = msgs[0];
-    const color  = m.color  || 'var(--text2)';
-    const name   = m.name   || 'Someone';
-    const extra  = msgs.length > 1 ? `+${msgs.length - 1} more` : '';
-    const av = memberAvatarHtml({ avatar: m.avatar, avatar_photo: m.avatar_photo, color: m.color }, 'avatar-sm');
+    const to = m.recipient_id ? {
+      name: m.recipient_name || 'Someone',
+      color: m.recipient_color || '#9AA0B8',
+      avatar: m.recipient_avatar,
+      avatar_photo: m.recipient_avatar_photo,
+    } : { name: 'Everyone', color: '#9AA0B8', avatar: '👨‍👩‍👧‍👦' };
+    const extra = msgs.length > 1 ? `+${msgs.length - 1}` : '';
     content.innerHTML = `
-      <span class="msg-preview-icon">💬</span>
-      <span class="msg-preview-from" style="color:${color}">${av} ${escapeHtml(name)}</span>
-      <span class="msg-preview-divider">·</span>
-      <span class="msg-preview-text">"${m.body}"</span>
-      ${extra ? `<span class="msg-preview-more">${extra} →</span>` : '<span class="msg-preview-more">→</span>'}
+      <span class="msg-preview-from" style="color:${to.color}">${memberAvatarHtml(to, 'avatar-sm')} ${escapeHtml(to.name)}</span>
+      <span class="msg-preview-text">${escapeHtml(m.body)}</span>
+      <span class="msg-preview-by">— ${escapeHtml(m.name || 'Someone')}</span>
+      ${extra ? `<span class="msg-preview-more">${extra} →</span>` : ''}
     `;
+    if (ack) {
+      ack.style.display = '';
+      ack.dataset.id = m.id;
+    }
   } catch(e) { /* silently fail */ }
+}
+
+async function ackPreviewMessage(e) {
+  e.preventDefault();
+  const id = document.getElementById('msgPreviewAck')?.dataset.id;
+  if (!id) return;
+  try {
+    await API.delete('/api/messages/' + id);
+    loadMessagePreview();
+    loadMessageBadge();
+  } catch (err) {
+    showToast('Could not clear that message', 'error');
+  }
 }
 
 async function openComposeModal(e) {
   e.preventDefault();
   // Populate author dropdown
-  const sel = document.getElementById('composeAuthor');
-  sel.innerHTML = '<option value="">— Anonymous —</option>';
+  const author = document.getElementById('composeAuthor');
+  const recipient = document.getElementById('composeRecipient');
+  author.innerHTML = '<option value="">Who\'s posting?</option>';
+  recipient.innerHTML = '<option value="">Everyone</option>';
   try {
     const members = await API.get('/api/members/');
+    const person = getPersonFilter();
     members.forEach(m => {
-      sel.innerHTML += `<option value="${m.id}">${m.avatar || '👤'} ${m.name}</option>`;
+      const opt = `<option value="${m.id}">${m.avatar || '👤'} ${escapeHtml(m.name)}</option>`;
+      author.innerHTML += opt;
+      recipient.innerHTML += opt;
     });
+    if (person !== 'all') recipient.value = person;
   } catch(_) {}
   document.getElementById('composeBody').value = '';
   document.getElementById('composeModal').style.display = 'flex';
@@ -120,8 +127,13 @@ async function postQuickMessage() {
   const body = document.getElementById('composeBody').value.trim();
   if (!body) return;
   const author_id = document.getElementById('composeAuthor').value || null;
+  const recipient_id = document.getElementById('composeRecipient').value || null;
   try {
-    await API.post('/api/messages/', { body, author_id: author_id ? parseInt(author_id) : null });
+    await API.post('/api/messages/', {
+      body,
+      author_id: author_id ? parseInt(author_id) : null,
+      recipient_id: recipient_id ? parseInt(recipient_id) : null,
+    });
     closeComposeModal();
     showToast('Message posted!', 'success');
     loadMessagePreview();
@@ -488,39 +500,6 @@ async function popoverAlarmAction(action, entityId) {
   }
 }
 
-async function loadWeather() {
-  const el = document.getElementById('weatherWidget');
-  if (!el) return;
-  try {
-    const data = await API.get('/api/weather/');
-    if (data.error === 'no_location') { el.innerHTML = ''; return; }
-    if (data.error) { el.innerHTML = ''; return; }
-    const t = data.tomorrow;
-    const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
-    el.innerHTML = `
-      <div class="weather-now">
-        <div class="weather-icon">${data.icon}</div>
-        <div class="weather-now-text">
-          <div class="weather-temp-line">
-            <span class="weather-temp">${Math.round(data.temp)}°</span>
-            <span class="weather-condition">${data.condition}</span>
-          </div>
-          <div class="weather-meta">↑${Math.round(data.high)}° ↓${Math.round(data.low)}°${data.city ? ` · ${data.city}` : ''}</div>
-        </div>
-      </div>
-      ${t && t.high != null ? `
-        <div class="weather-tomorrow">
-          <span class="weather-tmr-label">Tomorrow</span>
-          <span class="weather-tmr-icon">${t.icon}</span>
-          <span class="weather-tmr-hilo">↑${Math.round(t.high)}° ↓${Math.round(t.low)}°</span>
-          ${precipStr}
-        </div>` : ''}
-    `;
-  } catch(e) {
-    el.innerHTML = '';
-  }
-}
-
 async function loadStocks() {
   const el = document.getElementById('stockTicker');
   if (!el) return;
@@ -557,11 +536,6 @@ function addDays(dateStr, n) {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
-function weekdayLabel(iso) {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-}
-
 function menuItemsText(items) {
   if (!items || !items.length) return '';
   const shown = items.slice(0, 8).map(i =>
@@ -584,6 +558,10 @@ async function loadMeals() {
   if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
   try {
     const data = await API.get(url);
+    const reqUrl = person === 'all'
+      ? '/api/meals/requests'
+      : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
+    const requests = await API.get(reqUrl).catch(() => []);
     const dinnerTitle = (data.dinner && data.dinner.title) || '';
     const schoolWhen = schoolDate === dinnerDate ? 'Today' : 'Tomorrow';
     let schoolsHtml = '';
@@ -618,11 +596,18 @@ async function loadMeals() {
     }
     const editing = document.activeElement && document.activeElement.id === 'dinnerTitleInput';
     const draft = editing ? document.activeElement.value : null;
+    const shownAsks = (requests || []).slice(0, 3);
+    const asksHtml = shownAsks.length ? `<div class="meal-ask-list">${shownAsks.map(r => `
+      <a class="meal-ask" href="/meals.html">
+        ${memberAvatarHtml(r, 'avatar-sm')}
+        <span><strong style="color:${r.color || 'inherit'}">${escapeHtml(r.name)}</strong> wants ${escapeHtml(r.title)}</span>
+      </a>`).join('')}${requests.length > 3 ? `<a href="/meals.html" class="meals-note">+${requests.length - 3} more</a>` : ''}</div>` : '';
     el.innerHTML = `
       <div class="dinner-card">
         <div class="dinner-kicker">Tonight</div>
         <input id="dinnerTitleInput" class="dinner-input" placeholder="What's for dinner?" value="${escapeHtml(draft !== null ? draft : dinnerTitle)}" autocomplete="off">
       </div>
+      ${asksHtml}
       ${schoolsHtml}`;
     const input = document.getElementById('dinnerTitleInput');
     if (input) {
@@ -643,47 +628,6 @@ async function loadMeals() {
   } catch (e) {
     el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
   }
-}
-
-async function openWeekPlanner() {
-  const modal = document.getElementById('weekModal');
-  const list = document.getElementById('weekDays');
-  if (!modal || !list) return;
-  modal.style.display = 'flex';
-  list.innerHTML = '<div class="empty-state">Loading…</div>';
-  try {
-    const start = toETDateStr(new Date());
-    const data = await API.get('/api/meals/week?start=' + start);
-    list.innerHTML = data.days.map(day => `
-      <label class="week-day">
-        <span>${weekdayLabel(day.date)}</span>
-        <input class="form-input" data-date="${day.date}" value="${escapeHtml(day.title)}" placeholder="Dinner" autocomplete="off">
-      </label>`).join('');
-    list.querySelectorAll('input').forEach(input => {
-      input.addEventListener('keydown', ev => {
-        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-      });
-      input.addEventListener('blur', async () => {
-        const original = (data.days.find(d => d.date === input.dataset.date) || {}).title || '';
-        if (input.value.trim() === original) return;
-        try {
-          await saveDinner(input.dataset.date, input.value.trim());
-          const row = data.days.find(d => d.date === input.dataset.date);
-          if (row) row.title = input.value.trim();
-          loadMeals();
-        } catch (e) {
-          showToast('Could not save dinner', 'error');
-        }
-      });
-    });
-  } catch (e) {
-    list.innerHTML = '<div class="empty-state">Could not load the week</div>';
-  }
-}
-
-function closeWeekPlanner() {
-  const modal = document.getElementById('weekModal');
-  if (modal) modal.style.display = 'none';
 }
 
 async function loadShoppingStrip() {

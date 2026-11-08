@@ -10,86 +10,121 @@ function timeAgo(isoStr) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function renderMessage(msg) {
-  const color   = msg.color || '#C5CAD3';
-  const name    = msg.name  || 'Anonymous';
-  return `
-    <div class="msg-card" style="--event:${color}" id="msg-${msg.id}">
-      <div class="msg-card-header">
-        ${memberAvatarHtml({ avatar: msg.avatar, avatar_photo: msg.avatar_photo, color }, 'avatar-sm')}
-        <span class="msg-author">${name}</span>
-        <span class="msg-time">${timeAgo(msg.created_at)}</span>
-        <button class="msg-delete" onclick="deleteMessage(${msg.id})" title="Dismiss">✕</button>
-      </div>
-      <div class="msg-body">${escapeHtml(msg.body)}</div>
-    </div>`;
+function messageHtmlEscape(str) {
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\n/g,'<br>');
 }
 
-function escapeHtml(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+function messagesForPerson(msgs) {
+  const person = getPersonFilter();
+  if (person === 'all') return msgs;
+  return msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person));
+}
+
+function renderMessage(msg) {
+  const to = msg.recipient_id ? {
+    name: msg.recipient_name || 'Someone',
+    color: msg.recipient_color || '#9AA0B8',
+    avatar: msg.recipient_avatar,
+    avatar_photo: msg.recipient_avatar_photo,
+  } : { name: 'Everyone', color: '#9AA0B8', avatar: '👨‍👩‍👧‍👦' };
+  const from = msg.name || 'Someone';
+  return `
+    <div class="msg-card" style="--event:${to.color}" id="msg-${msg.id}">
+      <div class="msg-card-top">
+        <div class="msg-to">
+          ${memberAvatarHtml(to, 'avatar-lg')}
+          <span class="msg-to-name" style="color:${to.color}">${messageHtmlEscape(to.name)}</span>
+        </div>
+        <button class="msg-ack" onclick="ackMessage(${msg.id})">Got it</button>
+      </div>
+      <div class="msg-body">${messageHtmlEscape(msg.body)}</div>
+      <div class="msg-by">— ${messageHtmlEscape(from)} · ${timeAgo(msg.created_at)}</div>
+    </div>`;
 }
 
 async function loadMessages() {
   try {
-    const msgs = await API.get('/api/messages/');
+    const msgs = messagesForPerson(await API.get('/api/messages/'));
     const board = document.getElementById('msgBoard');
     const empty = document.getElementById('msgEmpty');
     if (!msgs.length) {
       board.innerHTML = '';
       empty.style.display = 'block';
+      empty.textContent = getPersonFilter() === 'all'
+        ? 'No messages yet. Leave a note for someone.'
+        : 'No messages for this person.';
       return;
     }
     empty.style.display = 'none';
     board.innerHTML = msgs.map(renderMessage).join('');
-  } catch(e) {
+  } catch (e) {
     console.error('Failed to load messages', e);
   }
 }
 
+function fillPersonSelect(sel, placeholder, selected) {
+  if (!sel) return;
+  sel.innerHTML = `<option value="">${placeholder}</option>` +
+    _members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${messageHtmlEscape(m.name)}</option>`).join('');
+  if (selected) sel.value = String(selected);
+}
+
 async function postMessage() {
-  const body   = document.getElementById('msgBody').value.trim();
+  const body = document.getElementById('msgBody').value.trim();
   const author = document.getElementById('msgAuthor').value;
+  const recipient = document.getElementById('msgRecipient').value;
   if (!body) { showToast('Write a message first', 'error'); return; }
   try {
     await API.post('/api/messages/', {
       body,
-      author_id: author ? parseInt(author) : null
+      author_id: author ? parseInt(author) : null,
+      recipient_id: recipient ? parseInt(recipient) : null,
     });
     document.getElementById('msgBody').value = '';
     await loadMessages();
+    loadMessageBadge();
     showToast('Message posted!', 'success');
-  } catch(e) {
+  } catch (e) {
     showToast('Failed to post message', 'error');
   }
 }
 
-async function deleteMessage(id) {
+async function ackMessage(id) {
   try {
     await API.delete(`/api/messages/${id}`);
     document.getElementById(`msg-${id}`)?.remove();
     const board = document.getElementById('msgBoard');
     if (!board.children.length) {
-      document.getElementById('msgEmpty').style.display = 'block';
+      const empty = document.getElementById('msgEmpty');
+      empty.style.display = 'block';
+      empty.textContent = getPersonFilter() === 'all'
+        ? 'No messages yet. Leave a note for someone.'
+        : 'No messages for this person.';
     }
-  } catch(e) {
-    showToast('Failed to remove message', 'error');
+    loadMessageBadge();
+  } catch (e) {
+    showToast('Could not clear that message', 'error');
   }
 }
 
 async function loadMemberOptions() {
   try {
     _members = await API.get('/api/members/');
-    const sel = document.getElementById('msgAuthor');
-    sel.innerHTML = '<option value="">— Who\'s posting? —</option>' +
-      _members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${m.name}</option>`).join('');
-  } catch(e) {}
+    const person = getPersonFilter();
+    fillPersonSelect(document.getElementById('msgRecipient'), 'Everyone', person === 'all' ? '' : person);
+    fillPersonSelect(document.getElementById('msgAuthor'), "Who's posting?");
+  } catch (e) {}
 }
 
-// Send on Ctrl/Cmd+Enter
 document.addEventListener('DOMContentLoaded', async () => {
+  onPersonFilterChange(() => {
+    const person = getPersonFilter();
+    const sel = document.getElementById('msgRecipient');
+    if (sel) sel.value = person === 'all' ? '' : person;
+    loadMessages();
+  });
   await loadMemberOptions();
   await loadMessages();
-  // Refresh times every minute
   setInterval(loadMessages, 60000);
 
   document.getElementById('msgBody').addEventListener('keydown', e => {

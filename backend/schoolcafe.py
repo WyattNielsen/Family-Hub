@@ -144,7 +144,7 @@ def items_for_date(payload, iso_date: str):
             if not isinstance(row, dict):
                 continue
             name = _clean_name(row.get("MenuItemDescription") or "")
-            if not name:
+            if not name or "has not been published" in name.lower():
                 continue
             marker = name.lower()
             if marker in seen:
@@ -261,10 +261,16 @@ async def weekly_menu(school_id: str, meal_type: str, serving_line: str, iso_dat
     return _cache_set(cache_key, data)
 
 
-async def menu_items(school_id: str, meal_type: str, iso_date: str, preferred_line: str = ""):
+async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = ""):
+    """Whole SchoolCafe week for one meal, keyed the way the API returns it."""
     lines = await serving_lines(school_id, meal_type, iso_date)
     if not lines:
-        return [], ""
+        return {}, ""
     line = preferred_line if preferred_line in lines else lines[0]
     payload = await weekly_menu(school_id, meal_type, line, iso_date)
+    return payload if isinstance(payload, dict) else {}, line
+
+
+async def menu_items(school_id: str, meal_type: str, iso_date: str, preferred_line: str = ""):
+    payload, line = await menu_week(school_id, meal_type, iso_date, preferred_line)
     return items_for_date(payload, iso_date), line

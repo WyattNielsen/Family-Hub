@@ -39,9 +39,9 @@ const TOD_CONFIG = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  onPersonFilterChange(() => renderChores());
   await initAppTimezone();
   members = await API.get('/api/members/');
-  await mountPersonFilter(() => renderChores());
   populateMemberSelect();
   loadChores();
   loadLeaderboard();

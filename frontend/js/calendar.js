@@ -22,9 +22,9 @@ let selectedDay = null;
 let editingEventId = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
+  onPersonFilterChange(() => loadEvents());
   await initAppTimezone();
   members = await API.get('/api/members/');
-  await mountPersonFilter(() => loadEvents());
   populateMemberSelect();
   renderCalendar();
   loadEvents();
