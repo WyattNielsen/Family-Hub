@@ -163,7 +163,7 @@ def get_leaderboard():
         FROM members m
         LEFT JOIN chores c ON c.assigned_to = m.id
         GROUP BY m.id
-        ORDER BY points DESC
+        ORDER BY points DESC, m.sort_order, m.name
     """).fetchall()
 
     # Compute streak per member: consecutive days (back from today) with >= 1 completed chore

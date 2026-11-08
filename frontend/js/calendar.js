@@ -21,6 +21,53 @@ let members = [];
 let selectedDay = null;
 let editingEventId = null;
 
+// Calendar text comes from Google/Apple and can contain HTML, including
+// links to file:/// paths. Firefox refuses those from an http page and logs
+// "may not load or link to file:///". Turn the text into safe HTML instead
+// of inserting it raw: keep http(s) links, drop every other tag.
+function eventBodyHtml(raw) {
+  let text = String(raw ?? '').replace(/\r\n|\r/g, '\n');
+  text = text.replace(/<a\b[^>]*\bhref\s*=\s*(?:"(https?:\/\/[^"]+)"|'(https?:\/\/[^']+)')[^>]*>([\s\S]*?)<\/a>/gi,
+    (_, href1, href2, label) => {
+      const href = href1 || href2;
+      const visible = label.replace(/<[^>]+>/g, '').trim();
+      return visible && visible !== href ? `${visible} (${href})` : href;
+    });
+  text = text.replace(/<\s*br\s*\/?\s*>/gi, '\n');
+  text = text.replace(/<\s*\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, '\n');
+  text = text.replace(/<[^>]+>/g, '');
+  text = text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'");
+
+  const re = /https?:\/\/[^\s]+/g;
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    out += escapeHtml(text.slice(last, m.index)).replace(/\n/g, '<br>');
+    let url = m[0];
+    let trail = '';
+    while (url && /[),.;:!?\]"']$/.test(url)) {
+      trail = url.slice(-1) + trail;
+      url = url.slice(0, -1);
+    }
+    if (/^https?:\/\//i.test(url)) {
+      const safe = escapeHtml(url);
+      out += `<a href="${safe}" target="_blank" rel="noopener">${safe}</a>`;
+    } else {
+      out += escapeHtml(url);
+    }
+    out += escapeHtml(trail);
+    last = m.index + m[0].length;
+  }
+  out += escapeHtml(text.slice(last)).replace(/\n/g, '<br>');
+  return out;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   onPersonFilterChange(() => loadEvents());
   await initAppTimezone();
@@ -43,6 +90,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
   document.getElementById('syncBtn').onclick = syncGoogle;
 
+  // Dropping a local file on this page makes Firefox try to open it and log
+  // the same file:/// security error. This page has no file drop target.
+  document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+  });
+  document.addEventListener('drop', (e) => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+  });
+
   document.getElementById('eventModal').onclick = (e) => {
     if (e.target.id === 'eventModal') closeEventModal();
   };
@@ -61,7 +117,7 @@ function populateMemberSelect() {
   const sel = document.getElementById('eventMember');
   sel.innerHTML = '<option value="">Select who…</option>' +
     '<option value="family">🏠 Family</option>' +
-    members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${m.name}</option>`).join('');
+    members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${escapeHtml(m.name)}</option>`).join('');
 }
 
 function renderCalendar() {
@@ -99,7 +155,7 @@ function renderCalendar() {
       <div class="cal-events">
         ${dayEvents.slice(0, 3).map(e => {
           const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
-          return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${e.title}</div>`;
+          return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${escapeHtml(e.title)}</div>`;
         }).join('')}
         ${dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : ''}
       </div>
@@ -146,13 +202,17 @@ function selectDay(dateStr) {
   } else {
     document.getElementById('dayEventsList').innerHTML = dayEvents.map(e => {
       const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
+      const descHtml = e.description ? eventBodyHtml(e.description) : '';
+      const descBlock = descHtml.replace(/<br>/g, '').trim()
+        ? `<div style="font-size:13px;color:var(--text2);margin-top:4px">${descHtml}</div>`
+        : '';
       return `
         <div class="event-card" style="--event:${color}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div>
-              <div class="event-card-title">${e.title}</div>
+              <div class="event-card-title">${escapeHtml(e.title)}</div>
               <div class="event-card-time">${e.all_day ? 'All day' : formatTime(e.start_datetime) + ' – ' + formatTime(e.end_datetime)}</div>
-              ${e.description ? `<div style="font-size:13px;color:var(--text2);margin-top:4px">${e.description}</div>` : ''}
+              ${descBlock}
             </div>
             <button onclick="deleteEvent(${e.id})" class="chore-action-btn delete" style="opacity:1">🗑</button>
           </div>
@@ -267,7 +327,7 @@ function showEventDetail(eventId, domEvent) {
   const locEl = document.getElementById('eventDetailLocation');
   if (e.location && e.location.trim()) {
     const mapsUrl = `https://maps.google.com/?q=${encodeURIComponent(e.location)}`;
-    locEl.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">📍 ${e.location}</a>`;
+    locEl.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">📍 ${escapeHtml(e.location)}</a>`;
     locEl.style.display = 'block';
   } else {
     locEl.style.display = 'none';
@@ -275,10 +335,12 @@ function showEventDetail(eventId, domEvent) {
 
   // Description
   const descEl = document.getElementById('eventDetailDesc');
-  if (e.description && e.description.trim()) {
-    descEl.textContent = e.description;
+  const descHtml = e.description ? eventBodyHtml(e.description) : '';
+  if (descHtml.replace(/<br>/g, '').trim()) {
+    descEl.innerHTML = descHtml;
     descEl.style.display = 'block';
   } else {
+    descEl.innerHTML = '';
     descEl.style.display = 'none';
   }
 

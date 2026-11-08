@@ -10,8 +10,9 @@ router = APIRouter()
 
 MEMBER_SELECT = (
     "SELECT id, name, color, avatar, avatar_photo, is_admin, write_calendar_source_id, "
-    "school_id, school_name FROM members"
+    "school_id, school_name, sort_order FROM members"
 )
+MEMBER_ORDER = "ORDER BY sort_order, name, id"
 
 ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 ALLOWED_AVATAR_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -50,6 +51,9 @@ class MemberCreate(BaseModel):
     school_id: Optional[str] = None
     school_name: Optional[str] = None
 
+class MemberOrder(BaseModel):
+    ids: list[int]
+
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None
@@ -81,9 +85,22 @@ def _validate_write_source(conn, member_id: int, source_id: Optional[int]):
 @router.get("/")
 def get_members():
     conn = get_db()
-    members = conn.execute(f"{MEMBER_SELECT} ORDER BY name").fetchall()
+    members = conn.execute(f"{MEMBER_SELECT} {MEMBER_ORDER}").fetchall()
     conn.close()
     return [dict(m) for m in members]
+
+@router.put("/order")
+def set_member_order(body: MemberOrder):
+    conn = get_db()
+    existing = {row["id"] for row in conn.execute("SELECT id FROM members").fetchall()}
+    if len(body.ids) != len(set(body.ids)) or set(body.ids) != existing:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Order must include every family member once")
+    for index, member_id in enumerate(body.ids):
+        conn.execute("UPDATE members SET sort_order=? WHERE id=?", (index, member_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 @router.post("/")
 def create_member(member: MemberCreate):
@@ -92,9 +109,10 @@ def create_member(member: MemberCreate):
     school_name = (member.school_name or "").strip() or None
     if not school_id:
         school_name = None
+    next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM members").fetchone()[0]
     cur = conn.execute(
-        "INSERT INTO members (name, color, avatar, is_admin, school_id, school_name) VALUES (?, ?, ?, ?, ?, ?)",
-        (member.name, member.color, member.avatar, 1 if member.is_admin else 0, school_id, school_name)
+        "INSERT INTO members (name, color, avatar, is_admin, school_id, school_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (member.name, member.color, member.avatar, 1 if member.is_admin else 0, school_id, school_name, next_order)
     )
     conn.commit()
     new_id = cur.lastrowid

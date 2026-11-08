@@ -175,6 +175,7 @@ def init_db():
         "ALTER TABLE members ADD COLUMN school_id TEXT DEFAULT NULL",
         "ALTER TABLE members ADD COLUMN school_name TEXT DEFAULT NULL",
         "ALTER TABLE members ADD COLUMN avatar_photo TEXT DEFAULT NULL",
+        "ALTER TABLE members ADD COLUMN sort_order INTEGER DEFAULT 0",
         "ALTER TABLE messages ADD COLUMN recipient_id INTEGER DEFAULT NULL",
     ):
         try:
@@ -182,6 +183,17 @@ def init_db():
             conn.commit()
         except Exception:
             pass
+
+    # First time the column exists, keep the previous alphabetical order.
+    total = conn.execute("SELECT COUNT(*) FROM members").fetchone()[0]
+    unordered = conn.execute(
+        "SELECT COUNT(*) FROM members WHERE sort_order IS NULL OR sort_order = 0"
+    ).fetchone()[0]
+    if total and unordered == total:
+        rows = conn.execute("SELECT id FROM members ORDER BY name, id").fetchall()
+        for i, row in enumerate(rows):
+            conn.execute("UPDATE members SET sort_order=? WHERE id=?", (i, row["id"]))
+        conn.commit()
 
     defaults = [
         ('slideshow_timeout', '120'),

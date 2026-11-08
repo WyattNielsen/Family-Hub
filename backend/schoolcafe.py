@@ -20,6 +20,23 @@ _CACHE = {}
 _TTL = 6 * 3600
 
 
+class SchoolCafeError(Exception):
+    pass
+
+
+def _client(timeout: float = 20.0) -> httpx.AsyncClient:
+    # LXC containers often have a broken IPv6 route. Pinning the local address
+    # to IPv4 avoids a hang that would otherwise look like an empty menu.
+    # trust_env is off so a stray proxy in the service environment is ignored.
+    return httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        trust_env=False,
+        headers=HEADERS,
+        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+    )
+
+
 def _cache_get(key):
     hit = _CACHE.get(key)
     if not hit:
@@ -97,6 +114,14 @@ def monday_of(iso_date: str) -> str:
     return monday.isoformat()
 
 
+def next_school_day(iso_date: str) -> str:
+    """Saturday and Sunday have no published menu. Use the following Monday."""
+    day = datetime.strptime(iso_date, "%Y-%m-%d").date()
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day.isoformat()
+
+
 def _mdy(iso_date: str) -> str:
     y, m, d = iso_date.split("-")
     return f"{int(m):02d}/{int(d):02d}/{y}"
@@ -156,20 +181,26 @@ def items_for_date(payload, iso_date: str):
 
 async def _get_json(client: httpx.AsyncClient, path: str, params=None):
     url = path if path.startswith("http") else f"{BASE}/{path.lstrip('/')}"
-    resp = await client.get(url, params=params, headers=HEADERS)
+    try:
+        resp = await client.get(url, params=params)
+    except Exception as exc:
+        print(f"SchoolCafe request failed: {url}: {exc}")
+        raise SchoolCafeError(str(exc)) from exc
     if resp.status_code != 200:
-        return None
+        print(f"SchoolCafe HTTP {resp.status_code} for {url}")
+        raise SchoolCafeError(f"HTTP {resp.status_code}")
     try:
         return resp.json()
-    except Exception:
-        return None
+    except Exception as exc:
+        print(f"SchoolCafe returned invalid JSON for {url}")
+        raise SchoolCafeError("invalid JSON") from exc
 
 
 async def search_districts(query: str):
     q = (query or "").strip()
     if len(q) < 2:
         return []
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with _client() as client:
         data = await _get_json(client, f"GetISDBySearch/{quote(q, safe='')}/1")
     if not isinstance(data, list):
         return []
@@ -192,7 +223,7 @@ async def list_schools(district_id: str):
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with _client() as client:
         data = await _get_json(client, "GetSchoolsList", {"districtId": district_id})
     if not isinstance(data, list):
         return None
@@ -228,7 +259,7 @@ async def serving_lines(school_id: str, meal_type: str, iso_date: str):
         "enddate": _mdy(sunday),
         "mealtype": meal_type,
     }
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with _client() as client:
         data = await _get_json(client, "GetServiceLine", params)
     lines = []
     if isinstance(data, list):
@@ -238,6 +269,8 @@ async def serving_lines(school_id: str, meal_type: str, iso_date: str):
             name = (row.get("ServingLineDescription") or "").strip()
             if name and name not in lines:
                 lines.append(name)
+    if not lines:
+        return []
     return _cache_set(cache_key, lines)
 
 
@@ -254,10 +287,10 @@ async def weekly_menu(school_id: str, meal_type: str, serving_line: str, iso_dat
         "MealType": meal_type,
         "enabledWeekendMenus": "true",
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with _client() as client:
         data = await _get_json(client, "CalendarView/GetWeeklyMenuitems", params)
-    if not isinstance(data, dict):
-        data = {}
+    if not isinstance(data, dict) or not data:
+        return {}
     return _cache_set(cache_key, data)
 
 

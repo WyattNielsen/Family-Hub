@@ -89,13 +89,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadMembers() {
   members = await API.get('/api/members/');
+  loadMembersFromCache();
+}
+
+async function moveMember(id, dir) {
+  const index = members.findIndex(m => m.id === id);
+  const next = index + dir;
+  if (index < 0 || next < 0 || next >= members.length) return;
+  const reordered = members.slice();
+  const [moved] = reordered.splice(index, 1);
+  reordered.splice(next, 0, moved);
+  members = reordered;
+  loadMembersFromCache();
+  try {
+    await API.put('/api/members/order', { ids: members.map(m => m.id) });
+  } catch (e) {
+    showToast('Could not save member order', 'error');
+    await loadMembers();
+  }
+}
+
+function loadMembersFromCache() {
   const el = document.getElementById('membersList');
+  if (!el) return;
   if (!members.length) {
     el.innerHTML = '<div class="empty-state">No family members yet — add your first one!</div>';
     return;
   }
-  el.innerHTML = members.map(m => `
+  el.innerHTML = members.map((m, i) => `
     <div class="member-item">
+      <div class="member-order">
+        <button class="member-order-btn" title="Move up" aria-label="Move ${_escapeHtml(m.name)} up" onclick="moveMember(${m.id}, -1)" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="member-order-btn" title="Move down" aria-label="Move ${_escapeHtml(m.name)} down" onclick="moveMember(${m.id}, 1)" ${i === members.length - 1 ? 'disabled' : ''}>↓</button>
+      </div>
       <div class="member-item-avatar">${memberAvatarHtml(m, 'avatar-lg')}</div>
       <div class="member-item-info">
         <div class="member-item-name">
@@ -924,12 +950,35 @@ async function saveTimezone() {
   }
 }
 
+function setSecretStatus(statusId, clearId, isSet, savedText, emptyText) {
+  const status = document.getElementById(statusId);
+  const clearBtn = document.getElementById(clearId);
+  if (status) status.textContent = isSet ? savedText : emptyText;
+  if (clearBtn) clearBtn.style.display = isSet ? '' : 'none';
+}
+
 async function loadHASettings() {
   try {
     const s = await API.get('/api/settings/');
     if (s.ha_url) document.getElementById('haUrl').value = s.ha_url;
-    if (s.ha_token) document.getElementById('haToken').value = s.ha_token;
-    if (s.ha_alarm_code) document.getElementById('haAlarmCode').value = s.ha_alarm_code;
+    const tokenEl = document.getElementById('haToken');
+    const codeEl = document.getElementById('haAlarmCode');
+    if (tokenEl) tokenEl.value = '';
+    if (codeEl) codeEl.value = '';
+    setSecretStatus(
+      'haTokenStatus',
+      'haTokenClear',
+      !!s.ha_token_set,
+      'A token is saved. Paste a new one to replace it.',
+      'No token saved yet.'
+    );
+    setSecretStatus(
+      'haAlarmStatus',
+      'haAlarmClear',
+      !!s.ha_alarm_code_set,
+      'A code is saved. Paste a new one to replace it.',
+      'No alarm code saved.'
+    );
     const entities = s.ha_entities ? JSON.parse(s.ha_entities) : [];
     const list = document.getElementById('haEntityList');
     list.innerHTML = '';
@@ -961,6 +1010,18 @@ function toggleAlarmCodeVisibility() {
   el.type = el.type === 'password' ? 'text' : 'password';
 }
 
+async function clearStoredSecret(key) {
+  const label = key === 'ha_token' ? 'Home Assistant token' : 'alarm code';
+  if (!confirm(`Remove the saved ${label}?`)) return;
+  try {
+    await API.post('/api/settings/', { [key]: null });
+    showToast('Removed', '');
+    await loadHASettings();
+  } catch (e) {
+    showToast('Failed to remove', 'error');
+  }
+}
+
 async function saveHASettings() {
   const url = document.getElementById('haUrl')?.value.trim() || '';
   const token = document.getElementById('haToken')?.value.trim() || '';
@@ -973,13 +1034,19 @@ async function saveHASettings() {
   });
   try {
     const alarmCode = document.getElementById('haAlarmCode')?.value.trim() || '';
-    await API.post('/api/settings/', {
+    const body = {
       ha_url: url,
-      ha_token: token,
       ha_entities: JSON.stringify(entities),
-      ha_alarm_code: alarmCode,
-    });
+    };
+    if (token) body.ha_token = token;
+    if (alarmCode) body.ha_alarm_code = alarmCode;
+    await API.post('/api/settings/', body);
+    const tokenEl = document.getElementById('haToken');
+    const codeEl = document.getElementById('haAlarmCode');
+    if (tokenEl) tokenEl.value = '';
+    if (codeEl) codeEl.value = '';
     showToast('✅ Home Assistant settings saved!', 'success');
+    await loadHASettings();
   } catch(e) {
     showToast('Failed to save', 'error');
   }

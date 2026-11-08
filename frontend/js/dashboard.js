@@ -529,6 +529,22 @@ function appHour() {
   return hour === 24 ? 0 : hour;
 }
 
+function schoolMenuDate(dinnerDate) {
+  let iso = appHour() >= 17 ? addDays(dinnerDate, 1) : dinnerDate;
+  const [y, m, d] = iso.split('-').map(Number);
+  const dow = new Date(y, m - 1, d).getDay();
+  if (dow === 6) iso = addDays(iso, 2);
+  else if (dow === 0) iso = addDays(iso, 1);
+  return iso;
+}
+
+function schoolWhenLabel(dinnerDate, schoolDate) {
+  if (schoolDate === dinnerDate) return 'Today';
+  if (schoolDate === addDays(dinnerDate, 1)) return 'Tomorrow';
+  const [y, m, d] = schoolDate.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+}
+
 function addDays(dateStr, n) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
@@ -552,7 +568,7 @@ async function loadMeals() {
   const el = document.getElementById('mealsBody');
   if (!el) return;
   const dinnerDate = toETDateStr(new Date());
-  const schoolDate = appHour() >= 17 ? addDays(dinnerDate, 1) : dinnerDate;
+  const schoolDate = schoolMenuDate(dinnerDate);
   const person = getPersonFilter();
   let url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
   if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
@@ -563,7 +579,8 @@ async function loadMeals() {
       : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
     const requests = await API.get(reqUrl).catch(() => []);
     const dinnerTitle = (data.dinner && data.dinner.title) || '';
-    const schoolWhen = schoolDate === dinnerDate ? 'Today' : 'Tomorrow';
+    const servedDate = data.school_date || schoolDate;
+    const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
     let schoolsHtml = '';
     if (data.school_menus_hidden) {
       schoolsHtml = '';

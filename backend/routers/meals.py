@@ -48,7 +48,7 @@ def _members(member_id: Optional[int]):
     if member_id:
         query += " AND id = ?"
         params.append(member_id)
-    query += " ORDER BY name"
+    query += " ORDER BY sort_order, name, id"
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -90,6 +90,7 @@ async def day_menu(
     today, _hour = schoolcafe.app_today()
     dinner_date = _valid_date(date) if date else today
     menu_date = _valid_date(school_date) if school_date else dinner_date
+    menu_date = schoolcafe.next_school_day(menu_date)
     hidden = schoolcafe.setting("lunch_hidden", "false") == "true"
     district_id = (schoolcafe.setting("schoolcafe_district_id") or "").strip()
 

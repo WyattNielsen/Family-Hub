@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Family Hub">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/css/style.css?v=72">
+<link rel="stylesheet" href="/css/style.css?v=76">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
@@ -87,6 +87,7 @@
           <h2 class="section-title">👨‍👩‍👧‍👦 Family Members</h2>
           <button class="btn btn-primary" id="addMemberBtn">+ Add Member</button>
         </div>
+        <p class="settings-desc">Use the arrows to set the order used on the dashboard, chores, meals, and filters.</p>
         <div class="members-list" id="membersList"></div>
       </section>
 
@@ -212,20 +213,24 @@
             <div>
               <label class="form-label">Long-Lived Access Token</label>
               <div style="display:flex;gap:8px">
-                <input type="password" id="haToken" class="form-input" placeholder="Paste your HA token here">
-                <button class="btn btn-ghost btn-icon" onclick="toggleHATokenVisibility()" title="Show/hide token">👁</button>
+                <input type="password" id="haToken" class="form-input" placeholder="Paste a new token to save" autocomplete="new-password">
+                <button type="button" class="btn btn-ghost btn-icon" onclick="toggleHATokenVisibility()" title="Show/hide token">👁</button>
               </div>
-              <p class="settings-desc" style="margin-top:4px">In Home Assistant: Profile → Security → Long-Lived Access Tokens → Create Token</p>
+              <p class="settings-desc" id="haTokenStatus" style="margin-top:4px"></p>
+              <p class="settings-desc" style="margin-top:4px">In Home Assistant: Profile → Security → Long-Lived Access Tokens → Create Token. Leave blank to keep the saved token.</p>
+              <button type="button" class="btn btn-danger-ghost" id="haTokenClear" style="display:none;margin-top:8px" onclick="clearStoredSecret('ha_token')">Remove saved token</button>
             </div>
           </div>
           <hr style="border:none;border-top:1px solid var(--border);margin:0">
           <div>
             <h3 style="margin:0 0 4px">🔑 Alarm Code</h3>
-            <p class="settings-desc" style="margin-bottom:8px">PIN used to arm/disarm alarm control panel entities. Leave blank if no code is required.</p>
+            <p class="settings-desc" style="margin-bottom:8px">PIN used to arm/disarm alarm control panel entities. Leave blank to keep the saved code.</p>
             <div style="display:flex;gap:8px;align-items:center">
-              <input type="password" id="haAlarmCode" class="form-input" placeholder="e.g. 1234" maxlength="10" style="max-width:160px">
-              <button class="btn btn-ghost btn-icon" onclick="toggleAlarmCodeVisibility()" title="Show/hide code">👁</button>
+              <input type="password" id="haAlarmCode" class="form-input" placeholder="New code" maxlength="10" style="max-width:160px" autocomplete="new-password">
+              <button type="button" class="btn btn-ghost btn-icon" onclick="toggleAlarmCodeVisibility()" title="Show/hide code">👁</button>
             </div>
+            <p class="settings-desc" id="haAlarmStatus" style="margin-top:4px"></p>
+            <button type="button" class="btn btn-danger-ghost" id="haAlarmClear" style="display:none;margin-top:8px" onclick="clearStoredSecret('ha_alarm_code')">Remove saved code</button>
           </div>
           <hr style="border:none;border-top:1px solid var(--border);margin:0">
           <div>
@@ -550,9 +555,9 @@
   </div>
 </div>
 
-<script src="/js/api.js?v=72"></script>
-<script src="/js/settings.js?v=72"></script>
-<script src="/js/slideshow.js?v=72"></script>
+<script src="/js/api.js?v=76"></script>
+<script src="/js/settings.js?v=76"></script>
+<script src="/js/slideshow.js?v=76"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 <script>if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script>
 </body>

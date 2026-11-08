@@ -596,6 +596,19 @@ input, select, textarea { font-family: var(--font); }
 
 /* ── Settings ──────────────────────────────────────────────── */
 .members-list { display: flex; flex-direction: column; gap: 10px; }
+.member-order { display: flex; flex-direction: column; gap: 4px; }
+.member-order-btn {
+  width: 28px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+}
+.member-order-btn:disabled { opacity: 0.3; }
+.member-order-btn:hover:not(:disabled) { background: var(--border); }
 .member-item {
   display: flex;
   align-items: center;
