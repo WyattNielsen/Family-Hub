@@ -1,5 +1,5 @@
 (function () {
-  const COLORS = ['#4F6EF7','#FF6B6B','#FFB347','#34C759','#AF52DE','#FF2D55','#5AC8FA','#FF9500','#30D158','#64D2FF'];
+  const COLORS = ['#2F6FED','#FF6B6B','#FFB347','#34C759','#AF52DE','#FF2D55','#5AC8FA','#FF9500','#30D158','#64D2FF'];
   const EMOJI_GROUPS = [
     { id: 'people', label: 'People', emojis: ['👤','👨','👩','👧','👦','👶','🧑','👴','👵','🧔','👱','🧕','👸','🤴','🦸','🦹','🧙','🧝','🧛','🧚','🧜','👮','👷','🧑‍🎓','👨‍🍳','👩‍⚕️'] },
     { id: 'animals', label: 'Animals', emojis: ['🐱','🐶','🦊','🐼','🦁','🐯','🐻','🐨','🐸','🐵','🦄','🐷','🐮','🐔','🐧','🐦','🦉','🐺','🦝','🐹','🐰','🐢','🐬','🦋','🐝','🐴'] },
@@ -166,7 +166,8 @@
         ${calendarSources.map(s => {
           const acct = calendarAccounts.find(a => a.id === s.account_id);
           const acctHint = acct ? ` · ${_escapeHtml(_accountLabel(acct))}` : '';
-          const color = s.color || '#4F6EF7';
+          const rawColor = String(s.color || '');
+          const color = (/^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : '#4F6EF7').toLowerCase();
           const isFamily = !!Number(s.is_family);
           const memberOpts = members.map(m => {
             const sel = !isFamily && s.member_id != null && String(s.member_id) === String(m.id) ? ' selected' : '';
@@ -175,7 +176,9 @@
           const assignVal = isFamily ? 'family' : (s.member_id == null ? '' : String(s.member_id));
           return `
             <div class="cal-option selected" style="cursor:default;flex-wrap:wrap;gap:8px">
-              <div class="cal-option-dot" style="background:${_escapeHtml(color)}"></div>
+              <input type="color" value="${color}" aria-label="${_escapeHtml(s.name || 'Calendar')} color" title="Calendar color"
+                style="width:28px;height:28px;padding:0;border:none;border-radius:50%;background:transparent;cursor:pointer;flex-shrink:0"
+                onchange="saveCalendarSourceColor(${s.id}, this.value)">
               <div class="cal-option-name" style="flex:1;min-width:120px">
                 ${_escapeHtml(s.name || 'Calendar')}
                 <div style="font-size:11px;font-weight:600;color:var(--text2)">${_sourceKindLabel(s)}${acctHint}${isFamily ? ' · Family' : ''}</div>
@@ -421,14 +424,30 @@
       showToast('Enter a name and calendar URL', 'error');
       return;
     }
+    const color = document.getElementById('icsSourceColor')?.value.trim() || '#5B8DEF';
     try {
-      await API.post('/api/calendar/sources', { kind: 'ics', url, name });
+      await API.post('/api/calendar/sources', { kind: 'ics', url, name, color });
       showToast('✅ ICS calendar added', 'success');
       document.getElementById('icsSourceName').value = '';
       document.getElementById('icsSourceUrl').value = '';
+      const colorInput = document.getElementById('icsSourceColor');
+      if (colorInput) colorInput.value = '#5B8DEF';
       await loadFamilyCalendar();
     } catch (e) {
       showToast(e.message || 'Failed to add calendar', 'error');
+    }
+  }
+
+  async function saveCalendarSourceColor(sourceId, color) {
+    const value = (color || '').trim();
+    if (!/^#[0-9a-fA-F]{6}$/.test(value)) return;
+    try {
+      await API.patch(`/api/calendar/sources/${sourceId}`, { color: value });
+      showToast('✅ Calendar color saved', 'success');
+      await loadFamilyCalendar();
+    } catch (e) {
+      showToast(e.message || 'Failed to save color', 'error');
+      _renderCalendarSources();
     }
   }
 
@@ -750,6 +769,8 @@
 
     const haUrlEl = document.getElementById('haUrl');
     if (haUrlEl && s.ha_url) haUrlEl.value = s.ha_url;
+    const haPathEl = document.getElementById('haDashboardPath');
+    if (haPathEl) haPathEl.value = s.ha_dashboard_path || '';
     const tokenEl = document.getElementById('haToken');
     const codeEl = document.getElementById('haAlarmCode');
     if (tokenEl) tokenEl.value = '';
@@ -778,6 +799,7 @@
 
     const hidden = document.getElementById('lunchHidden');
     if (hidden) hidden.checked = s.lunch_hidden === 'true';
+    applySchoolMealTypeSetting(s.school_meal_types);
     const current = document.getElementById('districtCurrent');
     if (current) {
       current.textContent = s.schoolcafe_district_name
@@ -1016,10 +1038,12 @@
     });
     try {
       const alarmCode = document.getElementById('haAlarmCode')?.value.trim() || '';
+      const pathEl = document.getElementById('haDashboardPath');
       const body = {
         ha_url: url,
         ha_entities: JSON.stringify(entities),
       };
+      if (pathEl) body.ha_dashboard_path = pathEl.value.trim() || '/lovelace';
       if (token) body.ha_token = token;
       if (alarmCode) body.ha_alarm_code = alarmCode;
       await API.post('/api/settings/', body);
@@ -1072,10 +1096,60 @@
     }
   }
 
+  function normalizeMealType(value) {
+    const v = String(value || '').trim().toLowerCase();
+    return v === 'breakfast' || v === 'lunch' ? v : 'both';
+  }
+
+  function paintSchoolMealType(value) {
+    const type = normalizeMealType(value);
+    window.__fhSchoolMealType = type;
+    const root = document.getElementById('settingsMealType');
+    if (!root) return;
+    root.dataset.loaded = '1';
+    root.querySelectorAll('[data-meal]').forEach(btn => {
+      btn.setAttribute('aria-pressed', btn.dataset.meal === type ? 'true' : 'false');
+    });
+  }
+
+  function applySchoolMealTypeSetting(value) {
+    const root = document.getElementById('settingsMealType');
+    if (root && root.dataset.touched === '1') return;
+    paintSchoolMealType(value);
+  }
+
+  function currentSchoolMealType() {
+    const root = document.getElementById('settingsMealType');
+    const pressed = root && root.querySelector('[aria-pressed="true"]');
+    return normalizeMealType(pressed && pressed.dataset.meal);
+  }
+
+  async function setSchoolMealType(value) {
+    const type = normalizeMealType(value);
+    const prev = currentSchoolMealType();
+    if (type === prev) return;
+    const root = document.getElementById('settingsMealType');
+    if (root) root.dataset.touched = '1';
+    paintSchoolMealType(type);
+    try {
+      await API.post('/api/settings/', { school_meal_types: type });
+      if (FHRouter.currentRoute() === '/settings.html') showToast('✅ School meals saved', 'success');
+    } catch (e) {
+      if (FHRouter.currentRoute() !== '/settings.html') return;
+      paintSchoolMealType(prev);
+      showToast('Failed to save', 'error');
+    }
+  }
+
   async function saveSchoolMenuVisibility() {
     const hidden = document.getElementById('lunchHidden')?.checked ?? false;
+    const body = { lunch_hidden: String(hidden) };
+    const root = document.getElementById('settingsMealType');
+    if (root && (root.dataset.loaded === '1' || root.dataset.touched === '1')) {
+      body.school_meal_types = currentSchoolMealType();
+    }
     try {
-      await API.post('/api/settings/', { lunch_hidden: String(hidden) });
+      await API.post('/api/settings/', body);
       showToast('✅ School menu visibility saved', 'success');
     } catch (e) {
       showToast('Failed to save', 'error');
@@ -1269,12 +1343,13 @@
     moveMember, openMemberModal, deleteMember,
     disconnectCalendarAccount, connectIcloudAccount, toggleGoogleAccountOAuthHelp,
     loadAvailableCalendars, addSelectedAccountCalendars, addIcsSource,
-    assignCalendarSource, saveFamilyWriteCalendar, removeCalendarSource,
+    saveCalendarSourceColor, assignCalendarSource, saveFamilyWriteCalendar, removeCalendarSource,
     saveWriteCalendar, toggleCalOption, showEmojiGroup, selectEmoji, selectColor,
     saveSyncInterval, handleDragOver, handleDragLeave, handleDrop, handleFileSelect,
     deletePhoto, clearAllPhotos, saveWeatherZip, saveTimezone,
     addHAEntityRow, toggleHATokenVisibility, toggleAlarmCodeVisibility,
     clearStoredSecret, saveHASettings, searchSchoolDistricts, saveSchoolMenuVisibility,
+    setSchoolMealType,
     saveStockSettings, addCameraRow, saveCameraSettings, addReminderRow,
     saveReminders, testReminder, saveSlideShowSettings, saveNightMode,
     resetChorePoints, resetAllChores,

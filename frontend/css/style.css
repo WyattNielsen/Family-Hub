@@ -171,6 +171,58 @@ input, select, textarea { font-family: var(--font); }
   height: 100vh;
 }
 
+/* Calendar only — month grid and agenda fill the viewport and scroll internally */
+.main-content.calendar-layout {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.main-content.calendar-layout .calendar-nav {
+  flex-shrink: 0;
+}
+.main-content.calendar-layout .calendar-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.main-content.calendar-layout .calendar-wrapper[hidden] {
+  display: none;
+}
+.main-content.calendar-layout .calendar-grid {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: auto repeat(6, 1fr);
+}
+.main-content.calendar-layout .cal-day {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.main-content.calendar-layout .cal-date {
+  flex-shrink: 0;
+}
+.main-content.calendar-layout .cal-events {
+  min-height: 0;
+  overflow: auto;
+}
+.main-content.calendar-layout #agendaView {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.main-content.calendar-layout #agendaView[hidden] {
+  display: none;
+}
+.main-content.calendar-layout .agenda-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .page-header {
   display: flex;
   align-items: center;
@@ -213,6 +265,19 @@ input, select, textarea { font-family: var(--font); }
   gap: 18px;
   flex: 1;
   min-height: 0;
+}
+@media (max-width: 1400px) {
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  .dashboard-col { min-width: 0; }
+}
+@media (max-width: 1100px) {
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+  }
 }
 .dashboard-col {
   display: flex;
@@ -314,10 +379,11 @@ input, select, textarea { font-family: var(--font); }
 
 /* ── Event Cards ───────────────────────────────────────────── */
 .event-card {
-  background: color-mix(in srgb, var(--event, var(--border)) 42%, var(--surface));
+  background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
   border-radius: 14px;
   padding: 12px 14px;
   border: none;
+  border-left: 3px solid var(--event);
   box-shadow: none;
 }
 .event-card-title { font-weight: 700; font-size: 15px; margin-bottom: 2px; letter-spacing: -0.2px; }
@@ -418,7 +484,8 @@ input, select, textarea { font-family: var(--font); }
   padding: 2px 6px;
   border-radius: 7px;
   color: var(--text);
-  background: color-mix(in srgb, var(--event, var(--border)) 42%, var(--surface));
+  background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
+  border-left: 3px solid var(--event);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -543,10 +610,11 @@ input, select, textarea { font-family: var(--font); }
   padding: 4px 10px;
   border-radius: 8px;
   border: none;
+  border-left: 3px solid var(--event);
   cursor: pointer;
   font-family: inherit;
   color: var(--text);
-  background: color-mix(in srgb, var(--event, var(--border)) 42%, var(--surface));
+  background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
 }
 .agenda-empty { margin: 12px 12px 0; }
 .agenda-add-link { color: var(--primary); font-weight: 800; }
@@ -576,6 +644,7 @@ input, select, textarea { font-family: var(--font); }
 .agenda-block {
   position: absolute;
   border: none;
+  border-left: 3px solid var(--event);
   border-radius: 10px;
   padding: 4px 8px;
   overflow: hidden;
@@ -583,7 +652,7 @@ input, select, textarea { font-family: var(--font); }
   cursor: pointer;
   font-family: inherit;
   color: var(--text);
-  background: color-mix(in srgb, var(--event, var(--border)) 42%, var(--surface));
+  background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
 }
 .agenda-block strong {
   display: block;
@@ -986,7 +1055,9 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   padding: 6px;
   border: 1.5px solid var(--border);
   width: fit-content;
-  flex-wrap: wrap;
+  max-width: 100%;
+  overflow-x: auto;
+  flex-wrap: nowrap;
 }
 .settings-tab {
   padding: 9px 20px;
@@ -1066,7 +1137,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 .sec-row-badge.disarmed { background: var(--primary-light); color: var(--primary); }
 .sec-row-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .sec-section  { display: flex; flex-direction: column; }
-.sec-section-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0 16px; }
+.sec-section-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 16px; }
 
 /* ── Alarm Card ─────────────────────────────────────────────── */
 .alarm-card {
@@ -1662,7 +1733,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 .sec-btn { font-size: 13px; padding: 8px 14px; }
 
 /* ── Camera Feeds ──────────────────────────────────────────── */
-.camera-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.camera-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
 .camera-feed-card { background: var(--surface); border-radius: 16px; overflow: hidden; border: 1px solid var(--border); cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
 .camera-feed-card:hover { transform: scale(1.01); box-shadow: var(--shadow-lg); }
 .camera-feed-label { padding: 10px 14px; font-weight: 700; font-size: 14px; border-bottom: 1px solid var(--border); }
@@ -1807,7 +1878,21 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 @media (max-width: 900px) {
   .weather-tomorrow { display: none; }
 }
-@media (max-width: 600px) { .weather-widget { display: none; } }
+@media (max-width: 600px) {
+  .page-header { flex-wrap: wrap; }
+  .page-header .weather-widget,
+  .page-header .ha-status-badge {
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .weather-condition {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
 
 /* ── Header Right (weather + HA badge group) ────────────────── */
 .header-right {
@@ -1914,7 +1999,6 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 .ha-state-open .ha-device-state { color: #e07800; }
 .ha-state-closed .ha-device-state { color: #28a745; }
 .ha-state-unknown .ha-device-state { color: var(--text2); }
-@media (max-width: 600px) { .ha-status-badge { display: none; } }
 
 /* ── Alarm Card ─────────────────────────────────────────────── */
 .ha-alarm-card {
@@ -2047,7 +2131,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 [data-theme="dark"] .cal-event-dot,
 [data-theme="dark"] .agenda-block,
 [data-theme="dark"] .agenda-pill {
-  background: color-mix(in srgb, var(--event, var(--border)) 52%, #161616);
+  background: color-mix(in srgb, var(--event, var(--border)) 72%, #161616);
   color: #f2f2f2;
 }
 [data-theme="dark"] .event-card-time,
@@ -2427,3 +2511,407 @@ button.section-link { background: none; border: none; cursor: pointer; font-fami
 }
 .district-result:hover { border-color: var(--primary); }
 #memberModal .modal { max-height: 86vh; overflow: auto; }
+
+/* ── Home Assistant dashboard embed ────────────────────────── */
+.ha-dash {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+.ha-dash .page-header {
+  padding: 10px 16px 8px;
+  margin-bottom: 0;
+}
+.ha-dash-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
+}
+.ha-dash-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--text2);
+  font-weight: 600;
+  font-size: 15px;
+}
+.ha-dash-empty p { margin: 0; max-width: 420px; }
+.ha-dash-empty a {
+  color: var(--primary);
+  font-weight: 700;
+}
+.ha-dash-note {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--text2);
+  background: var(--surface2);
+  border-top: 1px solid var(--border);
+}
+.ha-dash-note a {
+  color: var(--primary);
+  font-weight: 700;
+  margin-left: 8px;
+}
+.ha-dash-note code {
+  font-size: 11px;
+  font-weight: 700;
+}
+.ha-dash-note.is-blocked {
+  color: var(--text);
+  background: var(--today-soft);
+}
+.ha-dash [hidden] {
+  display: none !important;
+}
+
+.meals-note a { color: var(--primary); font-weight: 800; text-decoration: underline; }
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 26px;
+  flex-shrink: 0;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+  margin: 0;
+}
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--text3);
+  border-radius: 26px;
+  transition: background 0.2s;
+}
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.2);
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--primary); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+.toggle-switch input:focus-visible + .toggle-slider { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ── Weather detail modal ───────────────────────────────────── */
+.weather-modal {
+  max-width: 500px;
+}
+.weather-modal .weather-modal-list {
+  display: flex;
+  flex-direction: column;
+}
+.weather-modal .weather-modal-day {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.weather-modal .weather-modal-day:last-child {
+  border-bottom: none;
+}
+.weather-modal .weather-modal-day.is-today {
+  background: var(--surface2);
+  border-radius: 12px;
+  padding: 10px 8px;
+  border-bottom-color: transparent;
+}
+.weather-modal .weather-modal-icon {
+  font-size: 24px;
+  line-height: 1;
+  text-align: center;
+}
+.weather-modal .weather-modal-when {
+  min-width: 0;
+}
+.weather-modal .weather-modal-label {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.weather-modal .weather-modal-cond {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.weather-modal .weather-modal-temps {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text);
+  white-space: nowrap;
+}
+.weather-modal .weather-modal-low {
+  color: var(--text2);
+  font-weight: 700;
+  margin-left: 6px;
+}
+.weather-modal .weather-modal-extra {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 58px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text2);
+  white-space: nowrap;
+}
+.weather-modal .weather-modal-precip {
+  color: var(--primary);
+}
+
+/* School week grid and full-menu modal */
+.school-week { min-width: 0; }
+.school-week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px 4px;
+  margin-top: 10px;
+  min-width: 0;
+}
+.school-week-dow {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text3);
+  padding-bottom: 2px;
+}
+.school-week-dow.is-today { color: var(--primary); }
+.school-week-dow.is-dim { opacity: 0.55; }
+.school-day-cell {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 6px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--event, var(--primary));
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-height: 108px;
+  overflow: hidden;
+}
+.school-day-cell:hover { background: var(--surface2); }
+.school-day-cell:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.school-day-cell.is-today {
+  background: var(--primary-light);
+  border-color: var(--primary);
+}
+.school-day-cell.is-today:hover { background: var(--primary-light); }
+.school-day-cell.is-dim {
+  opacity: 0.55;
+  background: var(--surface2);
+  box-shadow: none;
+}
+.school-day-cell.is-dim:hover,
+.school-day-cell.is-dim:focus-visible { opacity: 0.9; }
+.school-day-num {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text2);
+  line-height: 1;
+  align-self: flex-start;
+}
+.school-day-cell.is-today .school-day-num {
+  background: var(--primary);
+  color: #fff;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.school-day-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.school-day-name {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.school-day-name.is-entree { font-weight: 800; }
+.school-day-tag {
+  display: inline-block;
+  min-width: 12px;
+  margin-right: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--text3);
+}
+.school-day-more {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--primary);
+  line-height: 1.2;
+}
+.school-day-empty {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text3);
+  line-height: 1.3;
+}
+.meal-plan-modal {
+  max-width: 480px;
+  padding: 0;
+  overflow: hidden;
+}
+.meal-plan-bar { height: 6px; width: 100%; }
+.meal-plan-modal .modal-header { align-items: flex-start; gap: 12px; }
+.meal-plan-heading { flex: 1; min-width: 0; }
+.meal-plan-modal .modal-header h3 {
+  font-size: 18px;
+  line-height: 1.3;
+  margin: 0;
+}
+.meal-plan-school {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text2);
+}
+.meal-plan-section + .meal-plan-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.meal-plan-section h4 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+.meal-plan-cat { margin-bottom: 10px; }
+.meal-plan-cat-name {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.meal-plan-items {
+  list-style: disc;
+  margin: 0;
+  padding-left: 18px;
+}
+.meal-plan-items li {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 2px 0;
+}
+.meal-plan-items li.is-entree { font-weight: 800; }
+.meal-plan-empty {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+}
+@media (max-width: 720px) {
+  .school-week-grid { gap: 4px 3px; }
+  .school-day-cell { min-height: 84px; padding: 6px 3px; border-radius: 10px; }
+  .school-day-name,
+  .school-day-empty { font-size: 10px; }
+  .school-week-dow { font-size: 10px; }
+}
+
+/* School meal type: breakfast / lunch / both */
+.school-menus-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  flex-wrap: wrap;
+  margin: 22px 0 8px;
+}
+.school-menus-head .school-week-title { margin: 0; }
+.meal-type-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--surface2);
+  padding: 4px;
+  border-radius: 999px;
+  width: fit-content;
+}
+.meal-type-toggle button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text2);
+  min-height: 32px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+.meal-type-toggle button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
+}
+.meal-type-toggle button:hover:not([aria-pressed="true"]) { color: var(--text); }
+.meal-type-toggle button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+[data-theme="dark"] .meal-type-toggle { background: #141414; }
+[data-theme="dark"] .meal-type-toggle button[aria-pressed="true"] {
+  background: #2e2e2e;
+  color: var(--text);
+  box-shadow: none;
+}

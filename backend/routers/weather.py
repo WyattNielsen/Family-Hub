@@ -97,30 +97,60 @@ async def get_weather():
     return await _forecast(lat, lon, city)
 
 
+def _at(seq, i):
+    if isinstance(seq, list) and 0 <= i < len(seq):
+        return seq[i]
+    return None
+
+
 def _forecast_payload(data: dict, city: str) -> dict:
     current = data.get("current", {})
     daily = data.get("daily", {})
     code = current.get("weather_code", 0)
     condition, icon = get_condition(code)
 
-    tmr_code = (daily.get("weather_code") or [0, 0])[1]
-    tmr_condition, tmr_icon = get_condition(tmr_code)
-    tmr_precip = (daily.get("precipitation_probability_max") or [None, None])[1]
+    dates = daily.get("time") or []
+    highs = daily.get("temperature_2m_max") or []
+    lows = daily.get("temperature_2m_min") or []
+    codes = daily.get("weather_code") or []
+    precips = daily.get("precipitation_probability_max") or []
+    winds = daily.get("wind_speed_10m_max")
+    has_wind = isinstance(winds, list)
+
+    days = []
+    for i, date in enumerate(dates):
+        d_code = _at(codes, i)
+        d_condition, d_icon = get_condition(0 if d_code is None else d_code)
+        day = {
+            "date": date,
+            "icon": d_icon,
+            "condition": d_condition,
+            "high": _at(highs, i),
+            "low": _at(lows, i),
+            "precip": _at(precips, i),
+        }
+        if has_wind and i < len(winds):
+            day["wind"] = winds[i]
+        days.append(day)
+
+    tmr_code = _at(codes, 1)
+    tmr_condition, tmr_icon = get_condition(0 if tmr_code is None else tmr_code)
 
     return {
         "temp": current.get("temperature_2m"),
-        "high": daily.get("temperature_2m_max", [None])[0],
-        "low": daily.get("temperature_2m_min", [None])[0],
+        "high": _at(highs, 0),
+        "low": _at(lows, 0),
         "condition": condition,
         "icon": icon,
         "city": city,
         "tomorrow": {
-            "high": (daily.get("temperature_2m_max") or [None, None])[1],
-            "low": (daily.get("temperature_2m_min") or [None, None])[1],
+            "high": _at(highs, 1),
+            "low": _at(lows, 1),
             "condition": tmr_condition,
             "icon": tmr_icon,
-            "precip": tmr_precip,
-        }
+            "precip": _at(precips, 1),
+        },
+        "days": days,
     }
 
 
@@ -132,12 +162,12 @@ async def _do_fetch_forecast(lat, lon, city: str, key: tuple) -> dict:
                 params={
                     "latitude": lat,
                     "longitude": lon,
-                    "current": "temperature_2m,weather_code",
-                    "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max",
+                    "current": "temperature_2m,weather_code,wind_speed_10m",
+                    "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,wind_speed_10m_max",
                     "temperature_unit": "fahrenheit",
                     "wind_speed_unit": "mph",
                     "timezone": "auto",
-                    "forecast_days": 2,
+                    "forecast_days": 7,
                 }
             )
             if resp.status_code != 200:

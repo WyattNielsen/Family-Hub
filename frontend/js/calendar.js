@@ -96,7 +96,10 @@
     if (e.member_name) {
       html += `<div class="event-card-member" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></div>`;
     }
-    if (e.is_family) html += '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>';
+    if (e.is_family) {
+      const familyColor = eventDisplayColor(e);
+      html += `<div class="event-card-member" style="background:${familyColor}22;color:${familyColor}">🏠 Family</div>`;
+    }
     return html;
   }
 
@@ -151,7 +154,7 @@
       </div>`;
     }
 
-    const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
+    const totalCells = 42;
     for (let d = 1; d <= totalCells - firstDay - daysInMonth; d++) {
       html += `<div class="cal-day other-month"><div class="cal-date">${d}</div></div>`;
     }
@@ -311,7 +314,7 @@
     if (e.member_name) {
       tags += `<span class="event-detail-tag" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></span>`;
     } else if (e.is_family) {
-      tags += `<span class="event-detail-tag" style="background:#F6BF2622;color:#c49a00">🏠 Family</span>`;
+      tags += `<span class="event-detail-tag" style="background:${color}22;color:${color}">🏠 Family</span>`;
     }
     tagsEl.innerHTML = tags;
 

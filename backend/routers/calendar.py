@@ -857,6 +857,16 @@ def patch_calendar_source(source_id: int, payload: CalendarSourceUpdate):
                     source_id,
                 ),
             )
+        if updates.get("color"):
+            # Family and unassigned events pick up the source color now.
+            # Person events (member_id set and is_family=0) keep their row
+            # color; the events API still displays members.color for those.
+            conn.execute(
+                """UPDATE events SET color=?
+                   WHERE external_source_id=?
+                     AND (is_family=1 OR member_id IS NULL)""",
+                (updates["color"], source_id),
+            )
         conn.commit()
 
     row = _source_row(conn, source_id)
@@ -1010,16 +1020,19 @@ async def _sync_google_source(access_token: str, source: dict) -> int:
     headers = {"Authorization": f"Bearer {access_token}"}
 
     async with outbound.client(timeout=20.0) as client:
-        cl_resp = await client.get(
-            "https://www.googleapis.com/calendar/v3/users/me/calendarList",
-            headers=headers,
-            params={"maxResults": "250"},
-        )
-        if cl_resp.status_code == 200:
-            for item in cl_resp.json().get("items", []):
-                if item["id"] == cal_id and item.get("backgroundColor"):
-                    cal_color = item["backgroundColor"]
-                    break
+        # A color saved on the source is the display color. Google's calendar
+        # color only fills in when this source has none.
+        if not cal_color:
+            cl_resp = await client.get(
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+                headers=headers,
+                params={"maxResults": "250"},
+            )
+            if cl_resp.status_code == 200:
+                for item in cl_resp.json().get("items", []):
+                    if item["id"] == cal_id and item.get("backgroundColor"):
+                        cal_color = item["backgroundColor"]
+                        break
 
         window_start, window_end = apple_sync.sync_window()
         google_events = []

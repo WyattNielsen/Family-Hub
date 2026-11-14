@@ -32,6 +32,7 @@ const API = {
   },
   async get(path, opts) {
     const force = opts && opts.force;
+    const timeoutMs = (opts && opts.timeout) || FETCH_TIMEOUT_MS;
     if (!force) {
       const hit = _getCache.get(path);
       if (hit && Date.now() - hit.at < GET_CACHE_MS) return hit.data;
@@ -40,7 +41,7 @@ const API = {
     if (pending) return pending;
     const gen = _getCacheGen;
     const request = (async () => {
-      const r = await _fetchWithTimeout(path);
+      const r = await _fetchWithTimeout(path, {}, timeoutMs);
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
       if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
@@ -689,12 +690,119 @@ function afterPagePaint(fn) {
   requestAnimationFrame(() => setTimeout(fn, 0));
 }
 
+let _weatherForecast = null;
+
+function _wxRound(n) {
+  if (n == null || n === '') return null;
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.round(v) : null;
+}
+
+function _weatherDayLabel(dateStr, index) {
+  if (index === 0) return 'Today';
+  if (index === 1) return 'Tomorrow';
+  const parts = String(dateStr || '').slice(0, 10).split('-').map(Number);
+  if (parts.length < 3 || parts.some(n => !n)) return dateStr || '';
+  const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+  if (Number.isNaN(dt.getTime())) return dateStr || '';
+  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function _onWeatherKey(e) {
+  if (e.key === 'Escape') closeWeatherModal();
+}
+
+function ensureWeatherModal() {
+  let overlay = document.getElementById('weatherModal');
+  if (overlay) return overlay;
+  overlay = document.createElement('div');
+  overlay.id = 'weatherModal';
+  overlay.className = 'modal-overlay';
+  overlay.style.display = 'none';
+  overlay.innerHTML = `
+    <div class="modal weather-modal">
+      <div class="modal-header">
+        <h3 id="weatherModalCity"></h3>
+        <button class="btn-close" type="button" id="weatherModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="weather-modal-list" id="weatherModalList"></div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeWeatherModal();
+  });
+  overlay.querySelector('.weather-modal').addEventListener('click', (e) => e.stopPropagation());
+  overlay.querySelector('#weatherModalClose').addEventListener('click', closeWeatherModal);
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function openWeatherModal() {
+  const data = _weatherForecast;
+  if (!data || !Array.isArray(data.days) || !data.days.length) return;
+  const overlay = ensureWeatherModal();
+  const cityEl = document.getElementById('weatherModalCity');
+  const listEl = document.getElementById('weatherModalList');
+  if (cityEl) cityEl.textContent = data.city || 'Weather';
+  if (listEl) {
+    listEl.innerHTML = data.days.map((day, i) => {
+      const high = _wxRound(day.high);
+      const low = _wxRound(day.low);
+      const precipN = _wxRound(day.precip);
+      const windN = _wxRound(day.wind);
+      const precip = precipN == null ? '' : `<span class="weather-modal-precip">💧${precipN}%</span>`;
+      const wind = windN == null ? '' : `<span class="weather-modal-wind">${windN} mph</span>`;
+      const hi = high == null ? '' : `<span class="weather-modal-high">↑${high}°</span>`;
+      const lo = low == null ? '' : `<span class="weather-modal-low">↓${low}°</span>`;
+      return `
+        <div class="weather-modal-day${i === 0 ? ' is-today' : ''}">
+          <div class="weather-modal-icon">${day.icon || ''}</div>
+          <div class="weather-modal-when">
+            <div class="weather-modal-label">${escapeHtml(_weatherDayLabel(day.date, i))}</div>
+            <div class="weather-modal-cond">${escapeHtml(day.condition || '')}</div>
+          </div>
+          <div class="weather-modal-temps">${hi}${lo}</div>
+          <div class="weather-modal-extra">${precip}${wind}</div>
+        </div>`;
+    }).join('');
+  }
+  const wasOpen = overlay.style.display === 'flex';
+  overlay.style.display = 'flex';
+  if (!wasOpen) document.addEventListener('keydown', _onWeatherKey);
+}
+
+function closeWeatherModal() {
+  const el = document.getElementById('weatherModal');
+  if (el) el.style.display = 'none';
+  document.removeEventListener('keydown', _onWeatherKey);
+}
+
+function _bindWeatherClick(el, data) {
+  const days = data && Array.isArray(data.days) ? data.days : null;
+  if (days && days.length) {
+    _weatherForecast = data;
+    el.style.cursor = 'pointer';
+    el.title = 'Weather forecast';
+    el.onclick = openWeatherModal;
+  } else {
+    _weatherForecast = null;
+    el.style.cursor = '';
+    el.removeAttribute('title');
+    el.onclick = null;
+  }
+}
+
 async function loadWeather(force) {
   const el = document.getElementById('weatherWidget');
   if (!el) return;
   try {
     const data = await API.get('/api/weather/', force ? { force: true } : undefined);
-    if (!data || data.error) { el.innerHTML = ''; return; }
+    if (!data || data.error) {
+      el.innerHTML = '';
+      _bindWeatherClick(el, null);
+      return;
+    }
     const t = data.tomorrow;
     const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
     el.innerHTML = `
@@ -712,8 +820,10 @@ async function loadWeather(force) {
           ${precipStr}
         </div>` : ''}
     `;
+    _bindWeatherClick(el, data);
   } catch (e) {
     el.innerHTML = '';
+    _bindWeatherClick(el, null);
   }
 }
 
@@ -726,6 +836,7 @@ const FHRouter = (() => {
     '/meals.html':    { html: '/meals.html',    script: '/js/meals.js' },
     '/shopping.html': { html: '/shopping.html', script: '/js/shopping.js' },
     '/security.html': { html: '/security.html', script: '/js/security.js' },
+    '/home.html':     { html: '/home.html',     script: '/js/home.js' },
     '/messages.html': { html: '/messages.html', script: '/js/messages.js' },
     '/settings.html': { html: '/settings.html', script: '/js/settings.js' },
   };

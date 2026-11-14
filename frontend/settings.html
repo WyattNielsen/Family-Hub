@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Family Hub">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/css/style.css?v=90">
+<link rel="stylesheet" href="/css/style.css?v=91">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
 <script>(function(){try{var s=+(localStorage.getItem('fh_dark_start')??21),e=+(localStorage.getItem('fh_dark_end')??7),h=new Date().getHours();document.documentElement.setAttribute('data-theme',(s>e?(h>=s||h<e):(h>=s&&h<e))?'dark':'light');}catch(_){}})();</script>
@@ -49,6 +49,10 @@
       <li><a href="/security.html" class="nav-link">
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
         <span>Security</span>
+      </a></li>
+      <li><a href="/home.html" class="nav-link">
+        <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span>
+        <span>Home</span>
       </a></li>
       <li><a href="/messages.html" class="nav-link">
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span>
@@ -169,6 +173,10 @@ TOKEN_IMPORT_SECRET=a-long-random-string</code>
             <div style="font-weight:800;font-size:13px">Add ICS / webcal URL</div>
             <input id="icsSourceName" class="form-input" placeholder="Name (e.g. School sports)">
             <input id="icsSourceUrl" class="form-input" placeholder="webcal://… or https://…/*.ics">
+            <label style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;justify-self:start">
+              Color
+              <input id="icsSourceColor" type="color" value="#5B8DEF" class="color-input" aria-label="ICS calendar color" title="Calendar color">
+            </label>
             <button class="btn btn-primary" onclick="addIcsSource()" style="justify-self:start">Add ICS calendar</button>
           </div>
           <div id="calendarSourcesList"></div>
@@ -225,9 +233,16 @@ TOKEN_IMPORT_SECRET=a-long-random-string</code>
             <p class="settings-desc">Connect to your local Home Assistant server to display device states.</p>
           </div>
           <div style="display:flex;flex-direction:column;gap:12px">
-            <div>
-              <label class="form-label">Home Assistant URL</label>
-              <input type="text" id="haUrl" class="form-input" placeholder="http://192.168.1.100:8123">
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
+              <div style="flex:1;min-width:220px">
+                <label class="form-label">Home Assistant URL</label>
+                <input type="text" id="haUrl" class="form-input" placeholder="http://192.168.1.100:8123">
+              </div>
+              <div style="flex:1;min-width:180px;max-width:320px">
+                <label class="form-label">Dashboard path</label>
+                <input type="text" id="haDashboardPath" class="form-input" placeholder="/lovelace">
+                <p class="settings-desc" style="margin-top:4px">Opened on the Home page. Leave blank for /lovelace.</p>
+              </div>
             </div>
             <div>
               <label class="form-label">Long-Lived Access Token</label>
@@ -334,6 +349,15 @@ TOKEN_IMPORT_SECRET=a-long-random-string</code>
             </div>
             <div id="districtResults" class="district-results"></div>
             <div id="districtCurrent" style="margin-top:8px;font-weight:800"></div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:8px">Meals to show</div>
+            <div class="meal-type-toggle" id="settingsMealType" role="group" aria-label="School meals to show">
+              <button type="button" data-meal="breakfast" aria-pressed="false" onclick="setSchoolMealType('breakfast')">Breakfast</button>
+              <button type="button" data-meal="lunch" aria-pressed="false" onclick="setSchoolMealType('lunch')">Lunch</button>
+              <button type="button" data-meal="both" aria-pressed="true" onclick="setSchoolMealType('both')">Both</button>
+            </div>
+            <div style="font-size:12px;color:var(--text2);margin-top:6px">Dashboard and the Meals page use this choice.</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;width:fit-content">
             <label class="toggle-switch">
@@ -574,9 +598,9 @@ TOKEN_IMPORT_SECRET=a-long-random-string</code>
   </div>
 </div>
 
-<script src="/js/api.js?v=90"></script>
-<script src="/js/settings.js?v=90"></script>
-<script src="/js/slideshow.js?v=90"></script>
+<script src="/js/api.js?v=91"></script>
+<script src="/js/settings.js?v=91"></script>
+<script src="/js/slideshow.js?v=91"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 <script>if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script>
 </body>

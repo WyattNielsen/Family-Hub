@@ -1,5 +1,7 @@
 (function () {
   let _mealsGen = 0;
+  let _schoolPaint = null;
+  let schoolMealTypes = 'both';
   let _stocksTimer = null;
   let _refreshTimer = null;
   let _cachedStocks = null;
@@ -136,7 +138,7 @@
       return `${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color: e.member_color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span>`;
     }
     if (e.is_family) {
-      return `${memberAvatarHtml({avatar:'🏠', color:'#F6BF26'}, 'avatar-sm')}<span>Family</span>`;
+      return `${memberAvatarHtml({avatar:'🏠', color: eventDisplayColor(e)}, 'avatar-sm')}<span>Family</span>`;
     }
     return '';
   }
@@ -482,8 +484,16 @@
     await API.put('/api/meals/dinner', { meal_date: date, title });
   }
 
+  function normalizeMealType(value) {
+    const v = String(value || '').trim().toLowerCase();
+    return v === 'breakfast' || v === 'lunch' ? v : 'both';
+  }
+
   function mealsSchoolHtml(data, person, dinnerDate, loading) {
-    if (data.school_menus_hidden) return '';
+    _schoolPaint = { gen: _mealsGen, data, person, dinnerDate, loading };
+    if (data.school_menus_hidden) {
+      return '<div class="meals-note">School menus are hidden. <a href="/settings.html">Change this in Settings</a></div>';
+    }
     if (!data.configured) {
       return '<div class="meals-note">Connect SchoolCafe in Settings to see school menus.</div>';
     }
@@ -495,9 +505,10 @@
     }
     const servedDate = data.school_date || schoolMenuDate(dinnerDate);
     const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
+    const mealType = schoolMealTypes;
     return `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + data.schools.map(s => {
-      const breakfast = menuItemsText(s.breakfast);
-      const lunch = menuItemsText(s.lunch);
+      const breakfast = mealType === 'lunch' ? '' : menuItemsText(s.breakfast);
+      const lunch = mealType === 'breakfast' ? '' : menuItemsText(s.lunch);
       const body = s.error
         ? `<div class="meals-note">${escapeHtml(s.error)}</div>`
         : `${breakfast ? `<div class="menu-row"><span class="menu-row-label">🌅 Breakfast</span><span class="menu-row-items">${breakfast}</span></div>` : ''}
@@ -556,6 +567,24 @@
     if (!el) return;
     const gen = ++_mealsGen;
     const dinnerDate = toETDateStr(new Date());
+    if (typeof window.__fhSchoolMealType === 'string') {
+      schoolMealTypes = normalizeMealType(window.__fhSchoolMealType);
+    }
+    const cachedSettings = API.peek('/api/settings/');
+    if (cachedSettings) schoolMealTypes = normalizeMealType(cachedSettings.school_meal_types);
+    window.__fhSchoolMealType = schoolMealTypes;
+    API.get('/api/settings/').then(s => {
+      if (gen !== _mealsGen) return;
+      const next = normalizeMealType(s && s.school_meal_types);
+      if (next === schoolMealTypes) return;
+      schoolMealTypes = next;
+      window.__fhSchoolMealType = next;
+      const slot = document.getElementById('mealsSchool');
+      if (!slot || !_schoolPaint || _schoolPaint.gen !== gen) return;
+      if (document.getElementById('mealsBody') !== el) return;
+      const p = _schoolPaint;
+      slot.innerHTML = mealsSchoolHtml(p.data, p.person, p.dinnerDate, p.loading);
+    }).catch(() => {});
     const schoolDate = schoolMenuDate(dinnerDate);
     const person = getPersonFilter();
     let url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
@@ -576,7 +605,7 @@
 
     try {
       const [data, requests] = await Promise.all([
-        API.get(url + '&include_school=false'),
+        API.get(url + '&include_school=false', { timeout: 45000 }),
         API.get(reqUrl).catch(() => []),
       ]);
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
@@ -589,13 +618,16 @@
       }
       if (!wantsSchool) return;
       try {
-        const menus = await API.get(url);
+        const menus = await API.get(url, { timeout: 45000 });
         if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
         const slot = document.getElementById('mealsSchool');
         if (slot) slot.innerHTML = mealsSchoolHtml(menus, person, dinnerDate, false);
       } catch (e) {
         const slot = document.getElementById('mealsSchool');
-        if (slot && gen === _mealsGen) slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+        if (slot && gen === _mealsGen) {
+          _schoolPaint = null;
+          slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+        }
       }
     } catch (e) {
       if (!cachedFast && gen === _mealsGen && document.getElementById('mealsBody') === el) {

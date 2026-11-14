@@ -1,7 +1,7 @@
 // App shell cache. Versioned JS/CSS (?v=N) are served cache-first.
 // HTML pages are pre-cached on install and served immediately from cache.
 // API calls skip the worker completely.
-const CACHE = 'familyhub-v4';
+const CACHE = 'familyhub-v5';
 const SHELL_HTML = [
   '/',
   '/calendar.html',
@@ -9,6 +9,7 @@ const SHELL_HTML = [
   '/meals.html',
   '/shopping.html',
   '/security.html',
+  '/home.html',
   '/messages.html',
   '/settings.html',
 ];
