@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import httpx
 import asyncio
 import json
+import outbound
 from database import get_db
 
 router = APIRouter()
@@ -112,7 +113,7 @@ async def get_ha_states():
     if not entities:
         return {"error": "not_configured"}
 
-    async with httpx.AsyncClient() as client:
+    async with outbound.client() as client:
         results = await asyncio.gather(*[
             fetch_entity(client, ha_url, ha_token, e) for e in entities
         ])
@@ -143,7 +144,7 @@ async def cover_action(action: str, body: HAActionRequest):
         raise HTTPException(status_code=400, detail="HA not configured")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with outbound.client(timeout=10.0) as client:
             resp = await client.post(
                 f"{ha_url.rstrip('/')}/api/services/cover/{action}",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
@@ -185,7 +186,7 @@ async def alarm_action(action: str, body: HAActionRequest):
         payload["code"] = alarm_code
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with outbound.client(timeout=10.0) as client:
             resp = await client.post(
                 f"{ha_url.rstrip('/')}/api/services/alarm_control_panel/{action}",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
@@ -227,7 +228,7 @@ async def speak_tts(body: TTSRequest):
         "message": body.message,
     }
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with outbound.client(timeout=10.0) as client:
             resp = await client.post(
                 f"{ha_url.rstrip('/')}/api/services/tts/speak",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
@@ -256,7 +257,7 @@ async def fire_tts(message: str, entity_id: str, tts_engine: str = "tts.google_t
     if not ha_url or not ha_token:
         return
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with outbound.client(timeout=10.0) as client:
             await client.post(
                 f"{ha_url.rstrip('/')}/api/services/tts/speak",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-import httpx
 import json
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import outbound
 from database import get_db
 
 router = APIRouter()
@@ -28,7 +28,7 @@ async def proxy_camera_stream(entity_id: str):
     stream_url = f"{ha_url}/api/camera_proxy_stream/{entity_id}"
 
     async def generate():
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with outbound.client(timeout=None) as client:
             async with client.stream(
                 "GET",
                 stream_url,
@@ -49,7 +49,7 @@ async def proxy_camera_snapshot(entity_id: str):
     ha_url, ha_token = get_ha_config()
     if not ha_url or not ha_token:
         raise HTTPException(status_code=503, detail="Home Assistant not configured")
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with outbound.client(timeout=10.0) as client:
         resp = await client.get(
             f"{ha_url}/api/camera_proxy/{entity_id}",
             headers={"Authorization": f"Bearer {ha_token}"},

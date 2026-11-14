@@ -9,10 +9,14 @@ DB_PATH = (
 )
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    # WAL is persisted on the database file by init_db. Asking for it again
+    # on every connection takes a lock, and a page load opens many connections
+    # at once. foreign_keys and synchronous are per connection and cheap.
+    conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
     return conn
 
 def init_db():
@@ -206,6 +210,19 @@ def init_db():
             conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, val))
         except Exception:
             pass
+    conn.commit()
+
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_datetime);
+        CREATE INDEX IF NOT EXISTS idx_events_end ON events(end_datetime);
+        CREATE INDEX IF NOT EXISTS idx_events_member ON events(member_id, is_family);
+        CREATE INDEX IF NOT EXISTS idx_chores_assigned ON chores(assigned_to, completed, due_date);
+        CREATE INDEX IF NOT EXISTS idx_chores_due ON chores(due_date);
+        CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+        CREATE INDEX IF NOT EXISTS idx_shopping_checked ON shopping_items(checked);
+    """)
     conn.commit()
 
     conn.close()

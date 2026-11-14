@@ -38,13 +38,16 @@ const TOD_CONFIG = {
   anytime:   { label: 'Anytime',   emoji: '📋', color: '#78909C', light: '#ECEFF1' },
 };
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   onPersonFilterChange(() => renderChores());
-  await initAppTimezone();
-  members = await API.get('/api/members/');
-  populateMemberSelect();
-  loadChores();
-  loadLeaderboard();
+  initAppTimezone().then(() => {
+    loadChores();
+    loadLeaderboard();
+  });
+  API.get('/api/members/').then(rows => {
+    members = rows || [];
+    populateMemberSelect();
+  }).catch(() => {});
 
   document.getElementById('addChoreBtn').onclick = () => openChoreModal();
   document.getElementById('closeChoreModal').onclick = closeChoreModal;

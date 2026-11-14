@@ -116,15 +116,15 @@ async function loadMemberOptions() {
   } catch (e) {}
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   onPersonFilterChange(() => {
     const person = getPersonFilter();
     const sel = document.getElementById('msgRecipient');
     if (sel) sel.value = person === 'all' ? '' : person;
     loadMessages();
   });
-  await loadMemberOptions();
-  await loadMessages();
+  loadMemberOptions();
+  loadMessages();
   setInterval(loadMessages, 60000);
 
   document.getElementById('msgBody').addEventListener('keydown', e => {

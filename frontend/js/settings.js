@@ -15,7 +15,7 @@ let activeEmojiGroup = 'people';
 let calendarAccounts = [];
 let calendarSources = [];
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   // Tab switching
   document.querySelectorAll('.settings-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  await loadMembers();
+  loadMembers();
   loadFamilyCalendar();
   loadSyncInterval();
   loadSlideshowSettings();
@@ -88,8 +88,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadMembers() {
-  members = await API.get('/api/members/');
-  loadMembersFromCache();
+  try {
+    members = await API.get('/api/members/');
+    loadMembersFromCache();
+  } catch (e) {
+    const el = document.getElementById('membersList');
+    if (el) el.innerHTML = '<div class="empty-state">Could not load family members</div>';
+  }
 }
 
 async function moveMember(id, dir) {

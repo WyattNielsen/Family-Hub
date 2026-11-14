@@ -1,10 +1,12 @@
 let _secEntities = [];
 
-document.addEventListener('DOMContentLoaded', async () => {
-  await initAppTimezone();
+document.addEventListener('DOMContentLoaded', () => {
+  initAppTimezone();
   loadSidebarMembers();
-  loadSecurityDevices();
-  loadCameraFeeds();
+  afterPagePaint(() => {
+    loadSecurityDevices();
+    loadCameraFeeds();
+  });
   setInterval(loadSecurityDevices, 30000);
 });
 

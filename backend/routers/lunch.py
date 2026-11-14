@@ -1,8 +1,8 @@
 from fastapi import APIRouter
-import httpx
 from datetime import datetime
 import pytz
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import outbound
 from database import get_db
 
 router = APIRouter()
@@ -49,7 +49,7 @@ async def fetch_items_for_date(date_key: str):
     date_path = date_key.replace("-", "/")
     url = f"https://{district}.api.nutrislice.com/menu/api/weeks/school/{slug}/menu-type/{menu_type}/{date_path}/"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with outbound.client(timeout=10.0) as client:
             resp = await client.get(url, headers={"Accept": "application/json"})
             if resp.status_code != 200:
                 return None
@@ -146,7 +146,7 @@ async def debug_menu():
     district, slug, menu_type = get_lunch_config()
     date_path, date_key = get_today_local()
     url = f"https://{district}.api.nutrislice.com/menu/api/weeks/school/{slug}/menu-type/{menu_type}/{date_path}/"
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with outbound.client(timeout=10.0) as client:
         resp = await client.get(url, headers={"Accept": "application/json"})
         if resp.status_code != 200:
             return {"error": resp.status_code}

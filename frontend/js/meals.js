@@ -2,25 +2,24 @@ let weekDays = [];
 let members = [];
 let weekOffset = 0;
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   onPersonFilterChange(() => {
     fillPeople();
     loadWeek();
     loadRequests();
   });
-  await initAppTimezone();
-  try {
-    members = await API.get('/api/members/');
-  } catch (e) {
-    members = [];
-  }
-  fillPeople();
   document.getElementById('requestForm').addEventListener('submit', submitRequest);
   document.getElementById('weekPrev').addEventListener('click', () => shiftWeek(-1));
   document.getElementById('weekNext').addEventListener('click', () => shiftWeek(1));
-  await loadWeek();
-  await loadRequests();
-  await loadHistory();
+  initAppTimezone().then(() => {
+    loadWeek();
+    loadRequests();
+    loadHistory();
+  });
+  API.get('/api/members/').then(rows => {
+    members = rows || [];
+    fillPeople();
+  }).catch(() => { members = []; });
 });
 
 function shiftWeek(delta) {
@@ -93,7 +92,7 @@ function menuLine(items) {
   return text + (extra > 0 ? ` · +${extra}` : '');
 }
 
-function renderSchools(data) {
+function renderSchools(data, loading) {
   const el = document.getElementById('schoolWeek');
   if (!el) return;
   if (data.school_menus_hidden) {
@@ -106,7 +105,9 @@ function renderSchools(data) {
     return;
   }
   if (!schools.length) {
-    el.innerHTML = '';
+    el.innerHTML = loading && data.configured
+      ? '<div class="meals-note">Loading school menus…</div>'
+      : '';
     return;
   }
   const today = toETDateStr(new Date());
@@ -140,8 +141,11 @@ function renderSchools(data) {
   }).join('');
 }
 
+let _weekGen = 0;
+
 async function loadWeek() {
   const el = document.getElementById('weekPlan');
+  const gen = ++_weekGen;
   const start = weekAnchor();
   const person = getPersonFilter();
   let url = '/api/meals/week?start=' + start;
@@ -151,7 +155,8 @@ async function loadWeek() {
   const nextBtn = document.getElementById('weekNext');
   if (nextBtn) nextBtn.textContent = weekOffset === 0 ? 'Next week' : '›';
   try {
-    const data = await API.get(url);
+    const data = await API.get(url + '&include_school=false');
+    if (gen !== _weekGen) return;
     weekDays = data.days || [];
     if (title) title.textContent = weekHeading(data.start, data.end);
     if (range) range.textContent = rangeLabel(data.start || start, data.end || addDays(start, 6));
@@ -167,8 +172,20 @@ async function loadWeek() {
       });
       input.addEventListener('blur', () => saveDay(input));
     });
-    renderSchools(data);
+    const wantsSchool = data.configured && !data.school_menus_hidden;
+    renderSchools(data, wantsSchool);
+    if (!wantsSchool) return;
+    try {
+      const menus = await API.get(url);
+      if (gen !== _weekGen) return;
+      renderSchools(menus, false);
+    } catch (e) {
+      if (gen !== _weekGen) return;
+      const school = document.getElementById('schoolWeek');
+      if (school) school.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+    }
   } catch (e) {
+    if (gen !== _weekGen) return;
     weekDays = [];
     el.innerHTML = '<div class="empty-state">Could not load the week</div>';
     const school = document.getElementById('schoolWeek');

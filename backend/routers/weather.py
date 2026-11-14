@@ -1,6 +1,6 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter
-import httpx
+import outbound
 from database import get_db
 
 router = APIRouter()
@@ -60,7 +60,7 @@ async def get_weather():
     # Geocode if lat/lon not cached
     if not lat or not lon:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with outbound.client(timeout=10.0) as client:
                 resp = await client.get(
                     f"https://api.zippopotam.us/us/{zip_code}",
                     headers={"Accept": "application/json"}
@@ -86,7 +86,7 @@ async def get_weather():
 
     # Fetch weather from Open-Meteo
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with outbound.client(timeout=10.0) as client:
             resp = await client.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={

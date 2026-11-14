@@ -6,14 +6,13 @@ function setDashboardDate() {
   });
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   onPersonFilterChange(() => {
     loadTodayEvents();
     loadUpcomingChores();
     loadMeals();
     loadMessagePreview();
   });
-  await initAppTimezone();
   setDashboardDate();
 
   const params = new URLSearchParams(window.location.search);
@@ -22,14 +21,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     history.replaceState({}, '', '/');
   }
 
-  loadTodayEvents();
-  loadUpcomingChores();
-  loadMeals();
-  loadShoppingStrip();
-  loadHAStatus();
-  loadStocks();
-  loadMessagePreview();
-  loadDashCameras();
+  initAppTimezone().then(() => {
+    setDashboardDate();
+    loadTodayEvents();
+    loadUpcomingChores();
+    loadMeals();
+    loadShoppingStrip();
+    loadMessagePreview();
+  });
+  afterPagePaint(() => {
+    loadHAStatus();
+    loadStocks();
+    loadDashCameras();
+  });
   setInterval(loadHAStatus, 30000);
   setInterval(loadStocks, 5 * 60 * 1000);
 
@@ -564,86 +568,109 @@ async function saveDinner(date, title) {
   await API.put('/api/meals/dinner', { meal_date: date, title });
 }
 
+let _mealsGen = 0;
+
+function mealsSchoolHtml(data, person, dinnerDate, loading) {
+  if (data.school_menus_hidden) return '';
+  if (!data.configured) {
+    return '<div class="meals-note">Connect SchoolCafe in Settings to see school menus.</div>';
+  }
+  if (loading) return '<div class="meals-note">Loading school menus…</div>';
+  if (!data.schools || !data.schools.length) {
+    return person === 'all'
+      ? '<div class="meals-note">Assign a school to each student in Settings.</div>'
+      : '<div class="meals-note">No school menu for this person.</div>';
+  }
+  const servedDate = data.school_date || schoolMenuDate(dinnerDate);
+  const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
+  return `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + data.schools.map(s => {
+    const breakfast = menuItemsText(s.breakfast);
+    const lunch = menuItemsText(s.lunch);
+    const body = s.error
+      ? `<div class="meals-note">${escapeHtml(s.error)}</div>`
+      : `${breakfast ? `<div class="menu-row"><span class="menu-row-label">🌅 Breakfast</span><span class="menu-row-items">${breakfast}</span></div>` : ''}
+         ${lunch ? `<div class="menu-row"><span class="menu-row-label">🍕 Lunch</span><span class="menu-row-items">${lunch}</span></div>` : ''}
+         ${!breakfast && !lunch ? '<div class="meals-note">No menu posted</div>' : ''}`;
+    return `<div class="school-block" style="--event:${s.member_color || '#4A90D9'}">
+      <div class="school-block-head">
+        ${memberAvatarHtml({ avatar: s.avatar, avatar_photo: s.avatar_photo, color: s.member_color }, 'avatar-sm')}
+        <div>
+          <div class="school-block-name" style="color:${s.member_color || 'inherit'}">${escapeHtml(s.member_name)}</div>
+          <div class="school-block-school">${escapeHtml(s.school_name || '')}</div>
+        </div>
+      </div>
+      ${body}
+    </div>`;
+  }).join('');
+}
+
+function paintDinner(el, data, requests, dinnerDate, schoolHtml) {
+  const dinnerTitle = (data.dinner && data.dinner.title) || '';
+  const editing = document.activeElement && document.activeElement.id === 'dinnerTitleInput';
+  const draft = editing ? document.activeElement.value : null;
+  const shownAsks = (requests || []).slice(0, 3);
+  const asksHtml = shownAsks.length ? `<div class="meal-ask-list">${shownAsks.map(r => `
+    <a class="meal-ask" href="/meals.html">
+      ${memberAvatarHtml(r, 'avatar-sm')}
+      <span><strong style="color:${r.color || 'inherit'}">${escapeHtml(r.name)}</strong> wants ${escapeHtml(r.title)}</span>
+    </a>`).join('')}${requests.length > 3 ? `<a href="/meals.html" class="meals-note">+${requests.length - 3} more</a>` : ''}</div>` : '';
+  el.innerHTML = `
+    <div class="dinner-card">
+      <div class="dinner-kicker">Tonight</div>
+      <input id="dinnerTitleInput" class="dinner-input" placeholder="What's for dinner?" value="${escapeHtml(draft !== null ? draft : dinnerTitle)}" autocomplete="off">
+    </div>
+    ${asksHtml}
+    <div id="mealsSchool">${schoolHtml}</div>`;
+  const input = document.getElementById('dinnerTitleInput');
+  if (input) {
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+    });
+    input.addEventListener('blur', async () => {
+      const next = input.value.trim();
+      if (next === dinnerTitle) return;
+      try {
+        await saveDinner(dinnerDate, next);
+      } catch (e) {
+        showToast('Could not save dinner', 'error');
+      }
+    });
+    if (editing) input.focus();
+  }
+}
+
 async function loadMeals() {
   const el = document.getElementById('mealsBody');
   if (!el) return;
+  const gen = ++_mealsGen;
   const dinnerDate = toETDateStr(new Date());
   const schoolDate = schoolMenuDate(dinnerDate);
   const person = getPersonFilter();
   let url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
   if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
+  const reqUrl = person === 'all'
+    ? '/api/meals/requests'
+    : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
   try {
-    const data = await API.get(url);
-    const reqUrl = person === 'all'
-      ? '/api/meals/requests'
-      : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
-    const requests = await API.get(reqUrl).catch(() => []);
-    const dinnerTitle = (data.dinner && data.dinner.title) || '';
-    const servedDate = data.school_date || schoolDate;
-    const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
-    let schoolsHtml = '';
-    if (data.school_menus_hidden) {
-      schoolsHtml = '';
-    } else if (!data.configured) {
-      schoolsHtml = '<div class="meals-note">Connect SchoolCafe in Settings to see school menus.</div>';
-    } else if (!data.schools.length) {
-      schoolsHtml = person === 'all'
-        ? '<div class="meals-note">Assign a school to each student in Settings.</div>'
-        : '<div class="meals-note">No school menu for this person.</div>';
-    } else {
-      schoolsHtml = `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + data.schools.map(s => {
-        const breakfast = menuItemsText(s.breakfast);
-        const lunch = menuItemsText(s.lunch);
-        const body = s.error
-          ? `<div class="meals-note">${escapeHtml(s.error)}</div>`
-          : `${breakfast ? `<div class="menu-row"><span class="menu-row-label">🌅 Breakfast</span><span class="menu-row-items">${breakfast}</span></div>` : ''}
-             ${lunch ? `<div class="menu-row"><span class="menu-row-label">🍕 Lunch</span><span class="menu-row-items">${lunch}</span></div>` : ''}
-             ${!breakfast && !lunch ? '<div class="meals-note">No menu posted</div>' : ''}`;
-        return `<div class="school-block" style="--event:${s.member_color || '#4A90D9'}">
-          <div class="school-block-head">
-            ${memberAvatarHtml({ avatar: s.avatar, avatar_photo: s.avatar_photo, color: s.member_color }, 'avatar-sm')}
-            <div>
-              <div class="school-block-name" style="color:${s.member_color || 'inherit'}">${escapeHtml(s.member_name)}</div>
-              <div class="school-block-school">${escapeHtml(s.school_name || '')}</div>
-            </div>
-          </div>
-          ${body}
-        </div>`;
-      }).join('');
-    }
-    const editing = document.activeElement && document.activeElement.id === 'dinnerTitleInput';
-    const draft = editing ? document.activeElement.value : null;
-    const shownAsks = (requests || []).slice(0, 3);
-    const asksHtml = shownAsks.length ? `<div class="meal-ask-list">${shownAsks.map(r => `
-      <a class="meal-ask" href="/meals.html">
-        ${memberAvatarHtml(r, 'avatar-sm')}
-        <span><strong style="color:${r.color || 'inherit'}">${escapeHtml(r.name)}</strong> wants ${escapeHtml(r.title)}</span>
-      </a>`).join('')}${requests.length > 3 ? `<a href="/meals.html" class="meals-note">+${requests.length - 3} more</a>` : ''}</div>` : '';
-    el.innerHTML = `
-      <div class="dinner-card">
-        <div class="dinner-kicker">Tonight</div>
-        <input id="dinnerTitleInput" class="dinner-input" placeholder="What's for dinner?" value="${escapeHtml(draft !== null ? draft : dinnerTitle)}" autocomplete="off">
-      </div>
-      ${asksHtml}
-      ${schoolsHtml}`;
-    const input = document.getElementById('dinnerTitleInput');
-    if (input) {
-      input.addEventListener('keydown', ev => {
-        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-      });
-      input.addEventListener('blur', async () => {
-        const next = input.value.trim();
-        if (next === dinnerTitle) return;
-        try {
-          await saveDinner(dinnerDate, next);
-        } catch (e) {
-          showToast('Could not save dinner', 'error');
-        }
-      });
-      if (editing) input.focus();
+    const [data, requests] = await Promise.all([
+      API.get(url + '&include_school=false'),
+      API.get(reqUrl).catch(() => []),
+    ]);
+    if (gen !== _mealsGen) return;
+    const wantsSchool = data.configured && !data.school_menus_hidden;
+    paintDinner(el, data, requests, dinnerDate, mealsSchoolHtml(data, person, dinnerDate, wantsSchool));
+    if (!wantsSchool) return;
+    try {
+      const menus = await API.get(url);
+      if (gen !== _mealsGen) return;
+      const slot = document.getElementById('mealsSchool');
+      if (slot) slot.innerHTML = mealsSchoolHtml(menus, person, dinnerDate, false);
+    } catch (e) {
+      const slot = document.getElementById('mealsSchool');
+      if (slot && gen === _mealsGen) slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
     }
   } catch (e) {
-    el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
+    if (gen === _mealsGen) el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
   }
 }
 

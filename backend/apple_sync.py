@@ -6,8 +6,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-import httpx
+import asyncio
+
 from icalendar import Calendar
+
+import outbound
 
 try:
     import recurring_ical_events
@@ -103,18 +106,7 @@ def _event_fields_from_component(component, fallback_color: Optional[str] = None
     }
 
 
-async def fetch_ics_events(url: str, color: Optional[str] = None) -> list[dict]:
-    url = normalize_ics_url(url)
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("ICS URL must be http(s) or webcal")
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
-        resp = await client.get(url, headers={"User-Agent": "FamilyHub/1.0"})
-        if resp.status_code != 200:
-            raise ValueError(f"ICS fetch failed ({resp.status_code})")
-        text = resp.text
-
+def _events_from_ics(text: str, color: Optional[str] = None) -> list[dict]:
     cal = Calendar.from_ical(text)
     start, end = sync_window()
     events: list[dict] = []
@@ -133,6 +125,21 @@ async def fetch_ics_events(url: str, color: Optional[str] = None) -> list[dict]:
         if fields:
             events.append(fields)
     return events
+
+
+async def fetch_ics_events(url: str, color: Optional[str] = None) -> list[dict]:
+    url = normalize_ics_url(url)
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("ICS URL must be http(s) or webcal")
+
+    async with outbound.client(timeout=60.0, headers={"User-Agent": "FamilyHub/1.0"}) as client:
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            raise ValueError(f"ICS fetch failed ({resp.status_code})")
+        text = resp.text
+
+    return await asyncio.to_thread(_events_from_ics, text, color)
 
 
 def list_icloud_calendars(apple_id: str, app_password: str) -> list[dict]:
@@ -159,7 +166,7 @@ def list_icloud_calendars(apple_id: str, app_password: str) -> list[dict]:
 def fetch_caldav_events(apple_id: str, app_password: str, calendar_url: str, color: Optional[str] = None) -> list[dict]:
     from caldav import DAVClient
 
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=20)
     # Re-bind to the specific calendar URL
     cal = client.calendar(url=calendar_url)
     start, end = sync_window()

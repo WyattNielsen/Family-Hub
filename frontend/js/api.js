@@ -1,38 +1,65 @@
 // ── API Helper ────────────────────────────────────────────────
+// A page asks for the same lists several times (sidebar, person filter, and
+// the section itself). Share the in-flight request, and reuse a very fresh
+// response so those calls don't each wait on the database.
+const _getCache = new Map();
+const _getInflight = new Map();
+let _getCacheGen = 0;
+const GET_CACHE_MS = 2000;
+
+function _bustGetCache() {
+  _getCacheGen += 1;
+  _getCache.clear();
+}
+
+async function _send(path, options) {
+  _bustGetCache();
+  const r = await fetch(path, options);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 const API = {
   async get(path) {
-    const r = await fetch(path);
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
+    const hit = _getCache.get(path);
+    if (hit && Date.now() - hit.at < GET_CACHE_MS) return hit.data;
+    const pending = _getInflight.get(path);
+    if (pending) return pending;
+    const gen = _getCacheGen;
+    const request = (async () => {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
+      return data;
+    })();
+    _getInflight.set(path, request);
+    try {
+      return await request;
+    } finally {
+      if (_getInflight.get(path) === request) _getInflight.delete(path);
+    }
   },
-  async post(path, body) {
-    const r = await fetch(path, {
+  post(path, body) {
+    return _send(path, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
   },
-  async put(path, body) {
-    const r = await fetch(path, {
+  put(path, body) {
+    return _send(path, {
       method: 'PUT', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
   },
-  async delete(path) {
-    const r = await fetch(path, { method: 'DELETE' });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
+  delete(path) {
+    return _send(path, { method: 'DELETE' });
   },
-  async patch(path, body) {
-    const r = await fetch(path, {
+  patch(path, body) {
+    return _send(path, {
       method: 'PATCH', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
   }
 };
 
@@ -115,11 +142,13 @@ async function mountPersonFilter(onChange) {
     current = 'all';
     setPersonFilter('all');
   }
-  const everyone = `<button type="button" class="person-chip${current === 'all' ? ' active' : ''}" data-person="all">Everyone</button>`;
+  const badge = '<span class="person-badge" style="display:none"></span>';
+  const everyone = `<button type="button" class="person-chip${current === 'all' ? ' active' : ''}" data-person="all">Everyone${badge}</button>`;
   const chips = members.map(m => `
     <button type="button" class="person-chip${String(current) === String(m.id) ? ' active' : ''}" data-person="${m.id}" style="--chip:${m.color}">
       ${memberAvatarHtml(m, 'avatar-sm')}
       <span>${escapeHtml(m.name)}</span>
+      ${badge}
     </button>`).join('');
   el.innerHTML = everyone + chips;
   el.querySelectorAll('.person-chip').forEach(btn => {
@@ -130,6 +159,7 @@ async function mountPersonFilter(onChange) {
       loadMessageBadge();
     };
   });
+  loadMessageBadge();
   return members;
 }
 
@@ -151,11 +181,15 @@ async function loadSidebarMembers() {
 // ── Date Helpers ──────────────────────────────────────────────
 let TZ = 'America/New_York';
 let _tzLoaded = false;
+function loadAppSettings() {
+  return API.get('/api/settings/');
+}
+
 async function initAppTimezone() {
   if (_tzLoaded) return;
   try {
-    const s = await API.get('/api/settings/timezone');
-    if (s.value) TZ = s.value;
+    const s = await loadAppSettings();
+    if (s.timezone) TZ = s.timezone;
   } catch(e) {}
   _tzLoaded = true;
 }
@@ -225,14 +259,10 @@ function _resetDim() {
 
 async function initTheme() {
   try {
-    const [s, e, d] = await Promise.all([
-      API.get('/api/settings/dark_mode_start').catch(() => ({value: '21'})),
-      API.get('/api/settings/dark_mode_end').catch(() => ({value: '7'})),
-      API.get('/api/settings/dim_minutes').catch(() => ({value: '5'}))
-    ]);
-    _darkStart = parseInt(s.value || '21');
-    _darkEnd   = parseInt(e.value || '7');
-    _dimDelay  = parseInt(d.value || '5') * 60000;
+    const s = await loadAppSettings();
+    _darkStart = parseInt(s.dark_mode_start || '21');
+    _darkEnd   = parseInt(s.dark_mode_end || '7');
+    _dimDelay  = parseInt(s.dim_minutes || '5') * 60000;
   } catch(e) {}
   _applyTheme();
   setInterval(_applyTheme, 60000);
@@ -242,24 +272,31 @@ async function initTheme() {
   _resetDim();
 }
 
-// ── Message Badge (all pages) ─────────────────────────────────
+// ── Message badges on person names ────────────────────────────
 async function loadMessageBadge() {
-  const badge = document.getElementById('msgNavBadge');
-  if (!badge) return;
-  if (window.location.pathname === '/messages.html') {
-    badge.style.display = 'none';
-    return;
-  }
+  const chips = document.querySelectorAll('#personFilter .person-chip');
+  if (!chips.length) return;
   try {
     const msgs = await API.get('/api/messages/');
-    const person = getPersonFilter();
-    const open = person === 'all' ? msgs : msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person));
-    if (open.length > 0) {
-      badge.textContent = open.length > 9 ? '9+' : open.length;
-      badge.style.display = 'inline-block';
-    } else {
-      badge.style.display = 'none';
+    const counts = { all: 0 };
+    for (const m of msgs) {
+      if (!m.recipient_id) counts.all += 1;
+      else {
+        const id = String(m.recipient_id);
+        counts[id] = (counts[id] || 0) + 1;
+      }
     }
+    chips.forEach(chip => {
+      const badge = chip.querySelector('.person-badge');
+      if (!badge) return;
+      const n = counts[chip.dataset.person] || 0;
+      if (n > 0) {
+        badge.textContent = n > 9 ? '9+' : String(n);
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+    });
   } catch(e) {}
 }
 
@@ -300,6 +337,10 @@ function _updateFullscreenBtn() {
 }
 document.addEventListener('fullscreenchange', _updateFullscreenBtn);
 
+function afterPagePaint(fn) {
+  requestAnimationFrame(() => setTimeout(fn, 0));
+}
+
 async function loadWeather() {
   const el = document.getElementById('weatherWidget');
   if (!el) return;
@@ -333,9 +374,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSidebarMembers();
   initTheme();
   _updateFullscreenBtn();
-  loadMessageBadge();
   mountPersonFilter();
-  loadWeather();
+  afterPagePaint(loadWeather);
   ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
     document.addEventListener(ev, _onPersonActivity, { passive: true })
   );

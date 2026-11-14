@@ -68,13 +68,17 @@ function eventBodyHtml(raw) {
   return out;
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   onPersonFilterChange(() => loadEvents());
-  await initAppTimezone();
-  members = await API.get('/api/members/');
-  populateMemberSelect();
   renderCalendar();
-  loadEvents();
+  initAppTimezone().then(() => {
+    renderCalendar();
+    loadEvents();
+  });
+  API.get('/api/members/').then(rows => {
+    members = rows || [];
+    populateMemberSelect();
+  }).catch(() => {});
   loadSyncStatus();
 
   document.getElementById('prevMonth').onclick = () => { currentDate.setMonth(currentDate.getMonth() - 1); renderCalendar(); loadEvents(); };

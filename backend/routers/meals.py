@@ -86,6 +86,7 @@ async def day_menu(
     date: Optional[str] = None,
     school_date: Optional[str] = None,
     member_id: Optional[int] = Query(None),
+    include_school: bool = Query(True),
 ):
     today, _hour = schoolcafe.app_today()
     dinner_date = _valid_date(date) if date else today
@@ -102,7 +103,7 @@ async def day_menu(
     dinner = {"title": row["title"] if row else "", "notes": row["notes"] if row else ""}
 
     schools = []
-    if district_id and not hidden:
+    if include_school and district_id and not hidden:
         members = _members(member_id)
         if members:
             schools = await asyncio.gather(*[_school_block(m, menu_date) for m in members])
@@ -151,7 +152,11 @@ async def _school_week(member: dict, dates: list):
 
 
 @router.get("/week")
-async def week_menu(start: Optional[str] = None, member_id: Optional[int] = Query(None)):
+async def week_menu(
+    start: Optional[str] = None,
+    member_id: Optional[int] = Query(None),
+    include_school: bool = Query(True),
+):
     today, _hour = schoolcafe.app_today()
     anchor = _valid_date(start) if start else today
     start_date = schoolcafe.monday_of(anchor)
@@ -175,7 +180,7 @@ async def week_menu(start: Optional[str] = None, member_id: Optional[int] = Quer
     hidden = schoolcafe.setting("lunch_hidden", "false") == "true"
     district_id = (schoolcafe.setting("schoolcafe_district_id") or "").strip()
     schools = []
-    if district_id and not hidden:
+    if include_school and district_id and not hidden:
         members = _members(member_id)
         if members:
             schools = list(await asyncio.gather(*[_school_week(m, dates) for m in members]))

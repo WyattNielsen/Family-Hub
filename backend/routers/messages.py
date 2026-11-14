@@ -4,8 +4,10 @@ from typing import Optional
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
 from datetime import datetime, timedelta
+import time
 
 router = APIRouter()
+_last_expire_check = 0.0
 
 class MessageCreate(BaseModel):
     body: str
@@ -14,11 +16,21 @@ class MessageCreate(BaseModel):
 
 @router.get("/")
 def get_messages():
+    global _last_expire_check
     conn = get_db()
-    # Auto-expire messages older than 7 days
-    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    conn.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
-    conn.commit()
+    # A write on every page view locks the database while the rest of the
+    # page is also reading. Expire at most once a minute, and only if a row
+    # is actually old.
+    now = time.monotonic()
+    if now - _last_expire_check > 60:
+        cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        expired = conn.execute(
+            "SELECT 1 FROM messages WHERE created_at < ? LIMIT 1", (cutoff,)
+        ).fetchone()
+        if expired:
+            conn.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
+            conn.commit()
+        _last_expire_check = now
     rows = conn.execute("""
         SELECT msg.id, msg.body, msg.created_at, msg.recipient_id,
                m.id as member_id, m.name, m.color, m.avatar, m.avatar_photo,

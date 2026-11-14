@@ -166,25 +166,28 @@ def get_leaderboard():
         ORDER BY points DESC, m.sort_order, m.name
     """).fetchall()
 
-    # Compute streak per member: consecutive days (back from today) with >= 1 completed chore
+    # One read of completed days, then walk each streak in memory.
+    # The old loop queried once per member per day.
+    done_days = {}
+    for row in conn.execute(
+        """SELECT assigned_to, date(due_date) AS due FROM chores
+           WHERE completed=1 AND assigned_to IS NOT NULL AND due_date IS NOT NULL
+           GROUP BY assigned_to, date(due_date)"""
+    ):
+        done_days.setdefault(row["assigned_to"], set()).add(row["due"])
+
     result = []
     tz_name = conn.execute("SELECT value FROM settings WHERE key='timezone'").fetchone()
     tz = pytz.timezone(tz_name["value"] if tz_name and tz_name["value"] else "America/New_York")
     today = datetime.now(tz).date()
     for r in rows:
         d = dict(r)
+        days = done_days.get(d["id"], ())
         streak = 0
         check = today
-        while True:
-            done = conn.execute(
-                "SELECT COUNT(*) FROM chores WHERE assigned_to=? AND completed=1 AND date(due_date)=?",
-                (d["id"], check.isoformat())
-            ).fetchone()[0]
-            if done:
-                streak += 1
-                check -= timedelta(days=1)
-            else:
-                break
+        while check.isoformat() in days:
+            streak += 1
+            check -= timedelta(days=1)
         d["streak"] = streak
         result.append(d)
 

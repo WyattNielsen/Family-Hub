@@ -2,9 +2,11 @@ import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
 from database import get_db
 import apple_sync
 import httpx
+import outbound
 import os as _os
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
@@ -827,19 +829,75 @@ GOOGLE_COLOR_MAP = {
 }
 
 
-async def _sync_google_source(access_token: str, source: dict, conn) -> int:
+def _store_google_events(source: dict, google_events: list, cal_color) -> int:
+    """Replace inbound Google rows. Runs off the event loop with its own connection."""
+    conn = get_db()
+    try:
+        source_id = source["id"]
+        member_id = source["member_id"]
+        conn.execute(
+            """DELETE FROM events
+               WHERE external_source_id=? AND google_calendar_id IS NULL""",
+            (source_id,),
+        )
+        synced = 0
+        for ge in google_events:
+            if ge.get("status") == "cancelled":
+                continue
+            gid = ge["id"]
+            written = conn.execute(
+                """SELECT id FROM events
+                   WHERE google_event_id=? AND google_calendar_id IS NOT NULL""",
+                (gid,),
+            ).fetchone()
+            if written:
+                continue
+            title = ge.get("summary", "(No title)")
+            desc = ge.get("description", "")
+            location = ge.get("location", "")
+            start = ge["start"].get("dateTime") or ge["start"].get("date")
+            end = ge["end"].get("dateTime") or ge["end"].get("date")
+            all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
+            color_id = ge.get("colorId")
+            event_color = GOOGLE_COLOR_MAP.get(color_id) if color_id else cal_color
+            family_flag = 1 if source.get("is_family") else 0
+            conn.execute(
+                """INSERT INTO events
+                   (title, description, location, start_datetime, end_datetime, all_day,
+                    member_id, is_family, google_event_id, color, external_source_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (title, desc, location, start, end, all_day, member_id, family_flag, gid, event_color, source_id),
+            )
+            synced += 1
+        conn.commit()
+        return synced
+    finally:
+        conn.close()
+
+
+def _store_apple_events(member_id, source_id: int, events: list, is_family: bool) -> int:
+    conn = get_db()
+    try:
+        synced = apple_sync.upsert_apple_events(
+            conn, member_id, source_id, events, is_family=is_family
+        )
+        conn.commit()
+        return synced
+    finally:
+        conn.close()
+
+
+async def _sync_google_source(access_token: str, source: dict) -> int:
     """Sync inbound events from one Google calendar_sources row."""
     cal_id = source["external_id"]
-    member_id = source["member_id"]
-    source_id = source["id"]
     cal_color = source.get("color")
     encoded_cal_id = quote(cal_id, safe="")
+    headers = {"Authorization": f"Bearer {access_token}"}
 
-    # Prefer calendarList backgroundColor when available
-    async with httpx.AsyncClient() as client:
+    async with outbound.client(timeout=20.0) as client:
         cl_resp = await client.get(
             "https://www.googleapis.com/calendar/v3/users/me/calendarList",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers=headers,
             params={"maxResults": "250"},
         )
         if cl_resp.status_code == 200:
@@ -848,11 +906,10 @@ async def _sync_google_source(access_token: str, source: dict, conn) -> int:
                     cal_color = item["backgroundColor"]
                     break
 
-    window_start, window_end = apple_sync.sync_window()
-    async with httpx.AsyncClient() as client:
+        window_start, window_end = apple_sync.sync_window()
         resp = await client.get(
             f"https://www.googleapis.com/calendar/v3/calendars/{encoded_cal_id}/events",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers=headers,
             params={
                 "timeMin": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "timeMax": window_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -867,47 +924,19 @@ async def _sync_google_source(access_token: str, source: dict, conn) -> int:
             return 0
         google_events = resp.json().get("items", [])
 
-    # Clear inbound for this source; preserve locally-written events
-    conn.execute(
-        """DELETE FROM events
-           WHERE external_source_id=? AND google_calendar_id IS NULL""",
-        (source_id,),
-    )
-
-    synced = 0
-    for ge in google_events:
-        if ge.get("status") == "cancelled":
-            continue
-        gid = ge["id"]
-        # Skip events we ourselves wrote (already stored with google_calendar_id)
-        written = conn.execute(
-            """SELECT id FROM events
-               WHERE google_event_id=? AND google_calendar_id IS NOT NULL""",
-            (gid,),
-        ).fetchone()
-        if written:
-            continue
-        title = ge.get("summary", "(No title)")
-        desc = ge.get("description", "")
-        location = ge.get("location", "")
-        start = ge["start"].get("dateTime") or ge["start"].get("date")
-        end = ge["end"].get("dateTime") or ge["end"].get("date")
-        all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
-        color_id = ge.get("colorId")
-        event_color = GOOGLE_COLOR_MAP.get(color_id) if color_id else cal_color
-        family_flag = 1 if source.get("is_family") else 0
-        conn.execute(
-            """INSERT INTO events
-               (title, description, location, start_datetime, end_datetime, all_day,
-                member_id, is_family, google_event_id, color, external_source_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (title, desc, location, start, end, all_day, member_id, family_flag, gid, event_color, source_id),
-        )
-        synced += 1
-    return synced
+    return await asyncio.to_thread(_store_google_events, source, google_events, cal_color)
 
 
-async def _sync_source(source: dict, account: Optional[dict], conn) -> int:
+def _load_account(account_id: int) -> Optional[dict]:
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM calendar_accounts WHERE id=?", (account_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+async def _sync_source(source: dict, account: Optional[dict] = None) -> int:
     kind = source["kind"]
     is_family = bool(source.get("is_family"))
     member_id = source["member_id"]
@@ -916,19 +945,23 @@ async def _sync_source(source: dict, account: Optional[dict], conn) -> int:
     if is_family:
         member_id = None
     color = source.get("color")
+    if source.get("account_id"):
+        loaded = _load_account(source["account_id"])
+        if loaded:
+            account = loaded
 
     if kind == "google":
         if not account or not account.get("access_token"):
             print(f"Skipping Google source {source['id']}: no account tokens")
             return 0
         access_token = await refresh_account_token_if_needed(account)
-        return await _sync_google_source(access_token, source, conn)
+        return await _sync_google_source(access_token, source)
 
     if kind == "ics":
         try:
             events = await apple_sync.fetch_ics_events(source["external_id"], color=color)
-            return apple_sync.upsert_apple_events(
-                conn, member_id, source["id"], events, is_family=is_family
+            return await asyncio.to_thread(
+                _store_apple_events, member_id, source["id"], events, is_family
             )
         except Exception as exc:
             print(f"ICS sync failed for source {source['id']}: {exc}")
@@ -939,11 +972,12 @@ async def _sync_source(source: dict, account: Optional[dict], conn) -> int:
             print(f"Skipping CalDAV source {source['id']}: iCloud credentials missing")
             return 0
         try:
-            events = apple_sync.fetch_caldav_events(
-                account["apple_id"], account["app_password"], source["external_id"], color=color
+            events = await asyncio.to_thread(
+                apple_sync.fetch_caldav_events,
+                account["apple_id"], account["app_password"], source["external_id"], color,
             )
-            return apple_sync.upsert_apple_events(
-                conn, member_id, source["id"], events, is_family=is_family
+            return await asyncio.to_thread(
+                _store_apple_events, member_id, source["id"], events, is_family
             )
         except Exception as exc:
             print(f"CalDAV sync failed for source {source['id']}: {exc}")
@@ -1002,32 +1036,36 @@ async def get_sync_status():
         "interval_minutes": int(interval["value"]) if interval else 0,
     }
 
+def _touch_last_synced():
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('google_last_synced', ?)",
+            (datetime.utcnow().isoformat(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 async def run_full_sync():
-    """Auto-sync all assigned calendar sources. Called by background loop."""
+    """Auto-sync all assigned calendar sources. Called by background loop.
+
+    Network and calendar parsing run without holding a database connection,
+    and blocking provider calls run off the event loop so page loads stay responsive.
+    """
     conn = get_db()
-    sources = _assigned_sources(conn)
-    conn.close()
+    try:
+        sources = _assigned_sources(conn)
+    finally:
+        conn.close()
     total = 0
-    conn = get_db()
     for src in sources:
         try:
-            account = _account_from_source_row(src)
-            # Re-load full account row for token refresh updates
-            if src.get("account_id"):
-                acct_row = conn.execute(
-                    "SELECT * FROM calendar_accounts WHERE id=?", (src["account_id"],)
-                ).fetchone()
-                account = dict(acct_row) if acct_row else account
-            total += await _sync_source(src, account, conn)
-            conn.commit()
+            total += await _sync_source(src, _account_from_source_row(src))
         except Exception as e:
             print(f"Full sync source {src.get('id')} failed: {e}")
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('google_last_synced', ?)",
-        (datetime.utcnow().isoformat(),),
-    )
-    conn.commit()
-    conn.close()
+    await asyncio.to_thread(_touch_last_synced)
     return total
 
 @router.post("/sync/all")
@@ -1047,25 +1085,16 @@ async def sync_member_calendars(member_id: int):
         raise HTTPException(status_code=404, detail="Member not found")
 
     sources = _assigned_sources(conn, member_id=member_id)
+    conn.close()
     if not sources:
-        conn.close()
         raise HTTPException(status_code=400, detail="No calendars assigned to this member")
 
     synced = 0
     by_kind = {"google": 0, "ics": 0, "caldav": 0}
     for src in sources:
-        account = None
-        if src.get("account_id"):
-            acct_row = conn.execute(
-                "SELECT * FROM calendar_accounts WHERE id=?", (src["account_id"],)
-            ).fetchone()
-            account = dict(acct_row) if acct_row else None
-        count = await _sync_source(src, account, conn)
+        count = await _sync_source(src, _account_from_source_row(src))
         synced += count
         by_kind[src["kind"]] = by_kind.get(src["kind"], 0) + count
-
-    conn.commit()
-    conn.close()
     return {
         "synced": synced,
         "google": by_kind.get("google", 0),
