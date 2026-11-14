@@ -158,7 +158,7 @@ function renderCalendar() {
       <div class="cal-date">${isToday ? `<span>${d}</span>` : d}</div>
       <div class="cal-events">
         ${dayEvents.slice(0, 3).map(e => {
-          const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
+          const color = eventDisplayColor(e);
           return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${escapeHtml(e.title)}</div>`;
         }).join('')}
         ${dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : ''}
@@ -205,7 +205,7 @@ function selectDay(dateStr) {
       `<div class="empty-state" style="margin-top:12px">No events. <a href="#" onclick="openEventModal('${dateStr}');return false" style="color:var(--primary);font-weight:800">+ Add one</a></div>`;
   } else {
     document.getElementById('dayEventsList').innerHTML = dayEvents.map(e => {
-      const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
+      const color = eventDisplayColor(e);
       const descHtml = e.description ? eventBodyHtml(e.description) : '';
       const descBlock = descHtml.replace(/<br>/g, '').trim()
         ? `<div style="font-size:13px;color:var(--text2);margin-top:4px">${descHtml}</div>`
@@ -301,7 +301,7 @@ function showEventDetail(eventId, domEvent) {
   const e = allEvents.find(ev => ev.id === eventId);
   if (!e) return;
 
-  const color = e.color || (e.is_family ? '#F6BF26' : e.member_color) || '#F6BF26';
+  const color = eventDisplayColor(e);
 
   // Color bar
   document.getElementById('eventDetailBar').style.background = color;

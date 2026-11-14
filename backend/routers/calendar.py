@@ -99,7 +99,13 @@ def get_events(
     query += " ORDER BY e.start_datetime"
     events = conn.execute(query, params).fetchall()
     conn.close()
-    return [dict(e) for e in events]
+    rows = []
+    for e in events:
+        row = dict(e)
+        if row.get("member_color") and not row.get("is_family"):
+            row["color"] = row["member_color"]
+        rows.append(row)
+    return rows
 
 def _pad_datetime(dt: str) -> str:
     """Ensure datetime is full RFC3339 (needs seconds for Google API)."""
@@ -340,7 +346,7 @@ async def create_event(event: EventCreate):
             conn.close()
             raise HTTPException(status_code=400, detail="Select a person or Family for this event")
         member = conn.execute(
-            "SELECT id, write_calendar_source_id FROM members WHERE id=?", (event.member_id,)
+            "SELECT id, color, write_calendar_source_id FROM members WHERE id=?", (event.member_id,)
         ).fetchone()
         if not member:
             conn.close()
@@ -358,7 +364,7 @@ async def create_event(event: EventCreate):
             conn.close()
             raise HTTPException(status_code=400, detail="Write calendar must be Google or iCloud CalDAV")
         member_id = event.member_id
-        color = event.color
+        color = member["color"] or event.color
 
     cur = conn.execute("""
         INSERT INTO events (title, description, location, start_datetime, end_datetime, all_day, member_id, is_family, color, recurrence)

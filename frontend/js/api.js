@@ -76,6 +76,11 @@ function escapeHtml(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function eventDisplayColor(event) {
+  if (event && event.member_color && !Number(event.is_family)) return event.member_color;
+  return (event && event.color) || '#F6BF26';
+}
+
 function memberAvatarHtml(member, className) {
   const color = (member && member.color) || '#9AA0B8';
   const cls = 'member-avatar' + (className ? ' ' + className : '');

@@ -162,7 +162,7 @@ async function loadTodayEvents() {
       return;
     }
     el.innerHTML = events.map(e => {
-      const color = e.color || e.member_color || '#F6BF26';
+      const color = eventDisplayColor(e);
       const eventDate = e.start_datetime ? new Date(e.start_datetime) : null;
       const eventDateStr = e.start_datetime ? e.start_datetime.slice(0, 10) : null;
       const todayStr = toETDateStr(new Date());
