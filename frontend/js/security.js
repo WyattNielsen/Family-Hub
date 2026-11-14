@@ -108,12 +108,17 @@ function renderOtherCards(others) {
 }
 
 async function coverAction(action, entityId) {
+  const btns = document.querySelectorAll('#haCoverPopover button');
+  btns.forEach(b => b.disabled = true);
   try {
     await API.post(`/api/homeassistant/cover/${action}`, { entity_id: entityId });
     showToast(action === 'open_cover' ? '🔼 Opening…' : '🔽 Closing…', 'success');
-    setTimeout(loadSecurityDevices, 3000);
+    document.getElementById('haCoverPopover')?.remove();
+    optimisticHAUpdate(entityId, action === 'open_cover' ? 'opening' : 'closing');
+    setTimeout(() => { loadSecurityDevices(); loadHAStatus(); }, 3000);
   } catch(e) {
     showToast('Failed to send command', 'error');
+    btns.forEach(b => b.disabled = false);
   }
 }
 
@@ -121,7 +126,11 @@ async function alarmAction(action, entityId) {
   try {
     await API.post(`/api/homeassistant/alarm/${action}`, { entity_id: entityId });
     showToast(action === 'alarm_disarm' ? '🔓 Disarmed' : '🔒 Armed', 'success');
-    setTimeout(loadSecurityDevices, 3000);
+    const expectedState = action === 'alarm_disarm' ? 'disarmed'
+      : action === 'alarm_arm_away' ? 'armed_away'
+      : action === 'alarm_arm_home' ? 'armed_home' : 'arming';
+    optimisticHAUpdate(entityId, expectedState);
+    setTimeout(() => { loadSecurityDevices(); loadHAStatus(); }, 3000);
   } catch(e) {
     showToast('Failed to send alarm command', 'error');
   }

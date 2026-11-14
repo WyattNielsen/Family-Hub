@@ -204,6 +204,7 @@ input, select, textarea { font-family: var(--font); }
   .page-header .weather-tmr-label { display: none; }
 }
 .page-header .dash-cam-card { width: 72px; height: 36px; aspect-ratio: auto; }
+.page-header .dash-cam-label { display: none; }
 
 /* ── Dashboard 3-column grid ───────────────────────────────── */
 .dashboard-grid {
