@@ -1,62 +1,28 @@
-function setDashboardDate() {
-  const el = document.getElementById('todayDate');
-  if (!el) return;
-  el.textContent = new Date().toLocaleDateString('en-US', {
-    timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric'
-  });
-}
+(function () {
+  let _mealsGen = 0;
+  let _stocksTimer = null;
+  let _refreshTimer = null;
+  let _cachedStocks = null;
 
-document.addEventListener('DOMContentLoaded', () => {
-  onPersonFilterChange(() => {
-    loadTodayEvents();
-    loadUpcomingChores();
-    loadMeals();
-    loadMessagePreview();
-  });
-  setDashboardDate();
-
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('connected') === 'family') {
-    showToast('✅ Family Google Calendar connected!', 'success');
-    history.replaceState({}, '', '/');
+  function setDashboardDate() {
+    const el = document.getElementById('todayDate');
+    if (!el) return;
+    el.textContent = new Date().toLocaleDateString('en-US', {
+      timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric'
+    });
   }
 
-  initAppTimezone().then(() => {
-    setDashboardDate();
-    loadTodayEvents();
-    loadUpcomingChores();
-    loadMeals();
-    loadShoppingStrip();
-    loadMessagePreview();
-  });
-  afterPagePaint(loadStocks);
-  setInterval(loadStocks, 5 * 60 * 1000);
+  function visibleMessages(msgs) {
+    const person = getPersonFilter();
+    if (person === 'all') return msgs;
+    return msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person));
+  }
 
-  // Auto-refresh all dashboard data every 5 minutes
-  setInterval(() => {
-    setDashboardDate();
-    loadTodayEvents();
-    loadUpcomingChores();
-    loadMeals();
-    loadShoppingStrip();
-    loadWeather();
-    loadMessagePreview();
-    loadMessageBadge();
-  }, 5 * 60 * 1000);
-});
-
-function visibleMessages(msgs) {
-  const person = getPersonFilter();
-  if (person === 'all') return msgs;
-  return msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person));
-}
-
-async function loadMessagePreview() {
-  const content = document.getElementById('msgPreviewContent');
-  const ack = document.getElementById('msgPreviewAck');
-  if (!content) return;
-  try {
-    const msgs = visibleMessages(await API.get('/api/messages/'));
+  function _renderMessagePreviewList(msgsRaw) {
+    const content = document.getElementById('msgPreviewContent');
+    const ack = document.getElementById('msgPreviewAck');
+    if (!content) return;
+    const msgs = visibleMessages(msgsRaw);
     if (!msgs.length) {
       content.innerHTML = `<span class="msg-preview-text" style="color:var(--text3)">No messages yet — tap ✏️ to leave a note</span>`;
       if (ack) ack.style.display = 'none';
@@ -80,120 +46,116 @@ async function loadMessagePreview() {
       ack.style.display = '';
       ack.dataset.id = m.id;
     }
-  } catch(e) { /* silently fail */ }
-}
-
-async function ackPreviewMessage(e) {
-  e.preventDefault();
-  const id = document.getElementById('msgPreviewAck')?.dataset.id;
-  if (!id) return;
-  try {
-    await API.delete('/api/messages/' + id);
-    loadMessagePreview();
-    loadMessageBadge();
-  } catch (err) {
-    showToast('Could not clear that message', 'error');
   }
-}
 
-async function openComposeModal(e) {
-  e.preventDefault();
-  // Populate author dropdown
-  const author = document.getElementById('composeAuthor');
-  const recipient = document.getElementById('composeRecipient');
-  author.innerHTML = '<option value="">Who\'s posting?</option>';
-  recipient.innerHTML = '<option value="">Everyone</option>';
-  try {
-    const members = await API.get('/api/members/');
-    const person = getPersonFilter();
-    members.forEach(m => {
-      const opt = `<option value="${m.id}">${m.avatar || '👤'} ${escapeHtml(m.name)}</option>`;
-      author.innerHTML += opt;
-      recipient.innerHTML += opt;
-    });
-    if (person !== 'all') recipient.value = person;
-  } catch(_) {}
-  document.getElementById('composeBody').value = '';
-  document.getElementById('composeModal').style.display = 'flex';
-  setTimeout(() => document.getElementById('composeBody').focus(), 100);
-}
-
-function closeComposeModal() {
-  document.getElementById('composeModal').style.display = 'none';
-}
-
-async function postQuickMessage() {
-  const body = document.getElementById('composeBody').value.trim();
-  if (!body) return;
-  const author_id = document.getElementById('composeAuthor').value || null;
-  const recipient_id = document.getElementById('composeRecipient').value || null;
-  try {
-    await API.post('/api/messages/', {
-      body,
-      author_id: author_id ? parseInt(author_id) : null,
-      recipient_id: recipient_id ? parseInt(recipient_id) : null,
-    });
-    closeComposeModal();
-    showToast('Message posted!', 'success');
-    loadMessagePreview();
-    loadMessageBadge();
-  } catch(e) {
-    showToast('Failed to post message', 'error');
+  async function loadMessagePreview() {
+    if (!document.getElementById('msgPreviewContent')) return;
+    const cached = API.peek('/api/messages/');
+    if (cached) _renderMessagePreviewList(cached);
+    try {
+      const msgs = await API.get('/api/messages/');
+      _renderMessagePreviewList(msgs);
+    } catch (e) {}
   }
-}
 
-function eventStillGoing(e, now) {
-  const endRaw = e.end_datetime || e.start_datetime;
-  if (!endRaw) return false;
-  // All-day end dates are exclusive. new Date("YYYY-MM-DD") is UTC midnight,
-  // which hides the event on the evening before it is actually over.
-  if (e.all_day || endRaw.indexOf('T') === -1) {
-    const [y, m, d] = endRaw.slice(0, 10).split('-').map(Number);
-    return new Date(y, m - 1, d).getTime() > now.getTime();
+  async function ackPreviewMessage(e) {
+    e.preventDefault();
+    const id = document.getElementById('msgPreviewAck')?.dataset.id;
+    if (!id) return;
+    try {
+      await API.delete('/api/messages/' + id);
+      loadMessagePreview();
+      loadMessageBadge();
+    } catch (err) {
+      showToast('Could not clear that message', 'error');
+    }
   }
-  const end = new Date(endRaw);
-  return !Number.isNaN(end.getTime()) && end > now;
-}
 
-async function loadTodayEvents() {
-  const el = document.getElementById('todayEvents');
-  try {
-    const now = new Date();
-    const start = now.toISOString();
-    // A week, so a person's other calendars still show when their next
-    // events are past tomorrow.
-    const endWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const end = endWeek.toISOString();
-    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-    const person = getPersonFilter();
-    if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
-    const allFetched = await API.get(eventsUrl);
+  async function openComposeModal(e) {
+    e.preventDefault();
+    const author = document.getElementById('composeAuthor');
+    const recipient = document.getElementById('composeRecipient');
+    if (!author || !recipient) return;
+    author.innerHTML = '<option value="">Who\'s posting?</option>';
+    recipient.innerHTML = '<option value="">Everyone</option>';
+    try {
+      const members = await API.get('/api/members/');
+      const person = getPersonFilter();
+      members.forEach(m => {
+        const opt = `<option value="${m.id}">${m.avatar || '👤'} ${escapeHtml(m.name)}</option>`;
+        author.innerHTML += opt;
+        recipient.innerHTML += opt;
+      });
+      if (person !== 'all') recipient.value = person;
+    } catch (_) {}
+    document.getElementById('composeBody').value = '';
+    document.getElementById('composeModal').style.display = 'flex';
+    setTimeout(() => document.getElementById('composeBody')?.focus(), 100);
+  }
+
+  function closeComposeModal() {
+    const el = document.getElementById('composeModal');
+    if (el) el.style.display = 'none';
+  }
+
+  async function postQuickMessage() {
+    const bodyEl = document.getElementById('composeBody');
+    if (!bodyEl) return;
+    const body = bodyEl.value.trim();
+    if (!body) return;
+    const author_id = document.getElementById('composeAuthor').value || null;
+    const recipient_id = document.getElementById('composeRecipient').value || null;
+    try {
+      await API.post('/api/messages/', {
+        body,
+        author_id: author_id ? parseInt(author_id, 10) : null,
+        recipient_id: recipient_id ? parseInt(recipient_id, 10) : null,
+      });
+      closeComposeModal();
+      showToast('Message posted!', 'success');
+      loadMessagePreview();
+      loadMessageBadge();
+    } catch (e) {
+      showToast('Failed to post message', 'error');
+    }
+  }
+
+  function eventStillGoing(e, now) {
+    const endRaw = e.end_datetime || e.start_datetime;
+    if (!endRaw) return false;
+    if (e.all_day || endRaw.indexOf('T') === -1) {
+      const [y, m, d] = endRaw.slice(0, 10).split('-').map(Number);
+      return new Date(y, m - 1, d).getTime() > now.getTime();
+    }
+    const end = new Date(endRaw);
+    return !Number.isNaN(end.getTime()) && end > now;
+  }
+
+  function _renderEventsList(el, allFetched, now) {
     const events = allFetched.filter(e => eventStillGoing(e, now));
     if (!events.length) {
       el.innerHTML = '<div class="empty-state">🎉 Nothing coming up!</div>';
       return;
     }
+    const todayStr = toETDateStr(now);
+    const todayDate = new Date(todayStr + 'T12:00:00');
     el.innerHTML = events.map(e => {
       const color = eventDisplayColor(e);
       const eventDate = e.start_datetime ? new Date(e.start_datetime) : null;
       const eventDateStr = e.start_datetime ? e.start_datetime.slice(0, 10) : null;
-      const todayStr = toETDateStr(new Date());
-      const isToday = eventDateStr === todayStr;
+      const isTodayEv = eventDateStr === todayStr;
       let dateLabel = '';
       if (eventDateStr) {
-        if (isToday) {
+        if (isTodayEv) {
           dateLabel = 'Today';
         } else if (e.all_day) {
-          // Parse date-only string as local time to avoid UTC-shift bug
           const [yr, mo, dy] = eventDateStr.split('-').map(Number);
           dateLabel = new Date(yr, mo - 1, dy).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
         } else {
           dateLabel = eventDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: TZ });
         }
       }
-      // Countdown — integrate into date label
-      if (eventDateStr && !isToday) {
-        const todayDate = new Date(todayStr + 'T12:00:00');
+      if (eventDateStr && !isTodayEv) {
         const evDate = new Date(eventDateStr + 'T12:00:00');
         const days = Math.round((evDate - todayDate) / 86400000);
         if (days === 1) dateLabel = 'Tomorrow';
@@ -208,36 +170,73 @@ async function loadTodayEvents() {
           ${e.is_family ? '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>' : ''}
         </div>`;
     }).join('');
-  } catch(e) {
-    el.innerHTML = '<div class="empty-state">Failed to load events</div>';
   }
-}
 
-const TOD_ORDER = ['morning', 'afternoon', 'evening'];
-const TOD_LABEL = { morning: '🌅 Morning', afternoon: '☀️ Afternoon', evening: '🌙 Evening' };
+  let _lastEventsKey = '';
+  let _lastEventsData = null;
 
-function renderChoresByTOD(chores, color) {
-  const grouped = { morning: [], afternoon: [], evening: [], none: [] };
-  for (const c of chores) {
-    (grouped[c.time_of_day] || grouped.none).push(c);
+  async function loadTodayEvents() {
+    const el = document.getElementById('todayEvents');
+    if (!el) return;
+    const now = new Date();
+    // Bucket start/end to the minute so cache hits cleanly across screen switches!
+    const minuteNow = new Date(Math.floor(now.getTime() / 60000) * 60000);
+    const start = minuteNow.toISOString();
+    const endWeek = new Date(minuteNow.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const end = endWeek.toISOString();
+    const person = getPersonFilter();
+    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+    if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
+
+    const cached = API.peek(eventsUrl) || (_lastEventsKey === person ? _lastEventsData : null);
+    if (cached) _renderEventsList(el, cached, now);
+
+    try {
+      const allFetched = await API.get(eventsUrl);
+      _lastEventsKey = person;
+      _lastEventsData = allFetched;
+      if (document.getElementById('todayEvents') === el) {
+        _renderEventsList(el, allFetched, new Date());
+      }
+    } catch (e) {
+      if (!cached && document.getElementById('todayEvents') === el) {
+        el.innerHTML = '<div class="empty-state">Failed to load events</div>';
+      }
+    }
   }
-  let html = '';
-  for (const tod of TOD_ORDER) {
-    if (!grouped[tod].length) continue;
-    html += `<div class="chore-tod-group-header">${TOD_LABEL[tod]}</div>`;
-    html += grouped[tod].map(c => renderDashboardChore(c, color)).join('');
-  }
-  html += grouped.none.map(c => renderDashboardChore(c, color)).join('');
-  return html;
-}
 
-async function loadUpcomingChores() {
-  const el = document.getElementById('upcomingChores');
-  try {
-    const [chores, members] = await Promise.all([
-      API.get('/api/chores/?hide_future=true&completed=false&since_days=0'),
-      API.get('/api/members/')
-    ]);
+  const TOD_ORDER = ['morning', 'afternoon', 'evening'];
+  const TOD_LABEL = { morning: '🌅 Morning', afternoon: '☀️ Afternoon', evening: '🌙 Evening' };
+
+  function renderDashboardChore(c, color) {
+    return `
+      <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}" style="--event:${color}">
+        <div class="dashboard-chore-check ${c.completed ? 'checked' : ''}"
+             style="${c.completed ? `background:${color}` : `border-color:${color}`}"
+             onclick="toggleDashboardChore(${c.id}, ${c.completed})">
+          ${c.completed ? '✓' : ''}
+        </div>
+        <div class="dashboard-chore-title ${c.completed ? 'done' : ''}">${c.title}</div>
+        <div class="dashboard-chore-pts">🌟${c.points}</div>
+      </div>`;
+  }
+
+  function renderChoresByTOD(chores, color) {
+    const grouped = { morning: [], afternoon: [], evening: [], none: [] };
+    for (const c of chores) {
+      (grouped[c.time_of_day] || grouped.none).push(c);
+    }
+    let html = '';
+    for (const tod of TOD_ORDER) {
+      if (!grouped[tod].length) continue;
+      html += `<div class="chore-tod-group-header">${TOD_LABEL[tod]}</div>`;
+      html += grouped[tod].map(c => renderDashboardChore(c, color)).join('');
+    }
+    html += grouped.none.map(c => renderDashboardChore(c, color)).join('');
+    return html;
+  }
+
+  async function _paintUpcomingChores(el, chores, members) {
     const person = getPersonFilter();
     const visibleMembers = person === 'all' ? members : members.filter(m => String(m.id) === String(person));
     const visibleChores = person === 'all' ? chores : chores.filter(c => String(c.assigned_to) === String(person));
@@ -247,11 +246,11 @@ async function loadUpcomingChores() {
         el.innerHTML = '<div class="empty-state">🙌 All done today!</div>';
         return;
       }
-      // Show mini leaderboard instead of blank state
       try {
         const lb = await API.get('/api/chores/leaderboard');
+        if (document.getElementById('upcomingChores') !== el) return;
         if (lb && lb.length) {
-          const medals = ['🥇','🥈','🥉'];
+          const medals = ['🥇', '🥈', '🥉'];
           el.innerHTML = `
             <div class="dash-chores-done">
               <div class="dash-chores-done-title">🙌 All done today!</div>
@@ -268,11 +267,14 @@ async function loadUpcomingChores() {
         } else {
           el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>';
         }
-      } catch { el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>'; }
+      } catch {
+        if (document.getElementById('upcomingChores') === el) {
+          el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>';
+        }
+      }
       return;
     }
 
-    // Group by member
     const byMember = {};
     const unassigned = [];
     for (const c of visibleChores) {
@@ -303,41 +305,44 @@ async function loadUpcomingChores() {
       </div>`;
     }
     el.innerHTML = html || '<div class="empty-state">🙌 All chores done!</div>';
-  } catch(e) {
-    el.innerHTML = '<div class="empty-state">Failed to load chores</div>';
   }
-}
 
-function renderDashboardChore(c, color) {
-  return `
-    <div class="dashboard-chore-item ${c.completed ? 'done' : ''}" id="dchore-${c.id}" style="--event:${color}">
-      <div class="dashboard-chore-check ${c.completed ? 'checked' : ''}"
-           style="${c.completed ? `background:${color}` : `border-color:${color}`}"
-           onclick="toggleDashboardChore(${c.id}, ${c.completed})">
-        ${c.completed ? '✓' : ''}
-      </div>
-      <div class="dashboard-chore-title ${c.completed ? 'done' : ''}">${c.title}</div>
-      <div class="dashboard-chore-pts">🌟${c.points}</div>
-    </div>`;
-}
-
-async function toggleDashboardChore(id, currentlyCompleted) {
-  try {
-    await API.put(`/api/chores/${id}`, { completed: !currentlyCompleted });
-    if (!currentlyCompleted) showToast('✅ Nice work! Points earned!', 'success');
-    loadUpcomingChores();
-  } catch(e) {
-    showToast('Failed to update chore', 'error');
+  async function loadUpcomingChores() {
+    const el = document.getElementById('upcomingChores');
+    if (!el) return;
+    const choresUrl = '/api/chores/?hide_future=true&completed=false&since_days=0';
+    const cachedChores = API.peek(choresUrl);
+    const cachedMembers = API.peek('/api/members/');
+    if (cachedChores && cachedMembers) {
+      _paintUpcomingChores(el, cachedChores, cachedMembers);
+    }
+    try {
+      const [chores, members] = await Promise.all([
+        API.get(choresUrl),
+        API.get('/api/members/')
+      ]);
+      if (document.getElementById('upcomingChores') === el) {
+        await _paintUpcomingChores(el, chores, members);
+      }
+    } catch (e) {
+      if (!cachedChores && document.getElementById('upcomingChores') === el) {
+        el.innerHTML = '<div class="empty-state">Failed to load chores</div>';
+      }
+    }
   }
-}
 
+  async function toggleDashboardChore(id, currentlyCompleted) {
+    try {
+      await API.put(`/api/chores/${id}`, { completed: !currentlyCompleted });
+      if (!currentlyCompleted) showToast('✅ Nice work! Points earned!', 'success');
+      loadUpcomingChores();
+    } catch (e) {
+      showToast('Failed to update chore', 'error');
+    }
+  }
 
-async function loadStocks() {
-  const el = document.getElementById('stockTicker');
-  if (!el) return;
-  try {
-    const stocks = await API.get('/api/stocks/');
-    if (!stocks.length) { el.style.display = 'none'; return; }
+  function _paintStocks(el, stocks) {
+    if (!stocks || !stocks.length) { el.style.display = 'none'; return; }
     el.style.display = 'flex';
     const items = stocks.map(s => {
       const up = s.change_pct >= 0;
@@ -348,163 +353,186 @@ async function loadStocks() {
       </div>`;
     }).join('<div class="ticker-sep">|</div>');
     el.innerHTML = `<div class="ticker-scroll">${items}</div>`;
-  } catch(e) {
-    if (el) el.style.display = 'none';
   }
-}
 
-function appHour() {
-  const raw = new Date().toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
-  const hour = parseInt(raw, 10);
-  return hour === 24 ? 0 : hour;
-}
-
-function schoolMenuDate(dinnerDate) {
-  let iso = appHour() >= 17 ? addDays(dinnerDate, 1) : dinnerDate;
-  const [y, m, d] = iso.split('-').map(Number);
-  const dow = new Date(y, m - 1, d).getDay();
-  if (dow === 6) iso = addDays(iso, 2);
-  else if (dow === 0) iso = addDays(iso, 1);
-  return iso;
-}
-
-function schoolWhenLabel(dinnerDate, schoolDate) {
-  if (schoolDate === dinnerDate) return 'Today';
-  if (schoolDate === addDays(dinnerDate, 1)) return 'Tomorrow';
-  const [y, m, d] = schoolDate.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
-}
-
-function addDays(dateStr, n) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + n);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-}
-
-function menuItemsText(items) {
-  if (!items || !items.length) return '';
-  const shown = items.slice(0, 8).map(i =>
-    i.is_entree ? `<span class="menu-entree">${escapeHtml(i.name)}</span>` : escapeHtml(i.name)
-  ).join(' · ');
-  return shown + (items.length > 8 ? ` · +${items.length - 8}` : '');
-}
-
-async function saveDinner(date, title) {
-  await API.put('/api/meals/dinner', { meal_date: date, title });
-}
-
-let _mealsGen = 0;
-
-function mealsSchoolHtml(data, person, dinnerDate, loading) {
-  if (data.school_menus_hidden) return '';
-  if (!data.configured) {
-    return '<div class="meals-note">Connect SchoolCafe in Settings to see school menus.</div>';
-  }
-  if (loading) return '<div class="meals-note">Loading school menus…</div>';
-  if (!data.schools || !data.schools.length) {
-    return person === 'all'
-      ? '<div class="meals-note">Assign a school to each student in Settings.</div>'
-      : '<div class="meals-note">No school menu for this person.</div>';
-  }
-  const servedDate = data.school_date || schoolMenuDate(dinnerDate);
-  const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
-  return `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + data.schools.map(s => {
-    const breakfast = menuItemsText(s.breakfast);
-    const lunch = menuItemsText(s.lunch);
-    const body = s.error
-      ? `<div class="meals-note">${escapeHtml(s.error)}</div>`
-      : `${breakfast ? `<div class="menu-row"><span class="menu-row-label">🌅 Breakfast</span><span class="menu-row-items">${breakfast}</span></div>` : ''}
-         ${lunch ? `<div class="menu-row"><span class="menu-row-label">🍕 Lunch</span><span class="menu-row-items">${lunch}</span></div>` : ''}
-         ${!breakfast && !lunch ? '<div class="meals-note">No menu posted</div>' : ''}`;
-    return `<div class="school-block" style="--event:${s.member_color || '#4A90D9'}">
-      <div class="school-block-head">
-        ${memberAvatarHtml({ avatar: s.avatar, avatar_photo: s.avatar_photo, color: s.member_color }, 'avatar-sm')}
-        <div>
-          <div class="school-block-name" style="color:${s.member_color || 'inherit'}">${escapeHtml(s.member_name)}</div>
-          <div class="school-block-school">${escapeHtml(s.school_name || '')}</div>
-        </div>
-      </div>
-      ${body}
-    </div>`;
-  }).join('');
-}
-
-function paintDinner(el, data, requests, dinnerDate, schoolHtml) {
-  const dinnerTitle = (data.dinner && data.dinner.title) || '';
-  const editing = document.activeElement && document.activeElement.id === 'dinnerTitleInput';
-  const draft = editing ? document.activeElement.value : null;
-  const shownAsks = (requests || []).slice(0, 3);
-  const asksHtml = shownAsks.length ? `<div class="meal-ask-list">${shownAsks.map(r => `
-    <a class="meal-ask" href="/meals.html">
-      ${memberAvatarHtml(r, 'avatar-sm')}
-      <span><strong style="color:${r.color || 'inherit'}">${escapeHtml(r.name)}</strong> wants ${escapeHtml(r.title)}</span>
-    </a>`).join('')}${requests.length > 3 ? `<a href="/meals.html" class="meals-note">+${requests.length - 3} more</a>` : ''}</div>` : '';
-  el.innerHTML = `
-    <div class="dinner-card">
-      <div class="dinner-kicker">Tonight</div>
-      <input id="dinnerTitleInput" class="dinner-input" placeholder="What's for dinner?" value="${escapeHtml(draft !== null ? draft : dinnerTitle)}" autocomplete="off">
-    </div>
-    ${asksHtml}
-    <div id="mealsSchool">${schoolHtml}</div>`;
-  const input = document.getElementById('dinnerTitleInput');
-  if (input) {
-    input.addEventListener('keydown', ev => {
-      if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-    });
-    input.addEventListener('blur', async () => {
-      const next = input.value.trim();
-      if (next === dinnerTitle) return;
-      try {
-        await saveDinner(dinnerDate, next);
-      } catch (e) {
-        showToast('Could not save dinner', 'error');
-      }
-    });
-    if (editing) input.focus();
-  }
-}
-
-async function loadMeals() {
-  const el = document.getElementById('mealsBody');
-  if (!el) return;
-  const gen = ++_mealsGen;
-  const dinnerDate = toETDateStr(new Date());
-  const schoolDate = schoolMenuDate(dinnerDate);
-  const person = getPersonFilter();
-  let url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
-  if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
-  const reqUrl = person === 'all'
-    ? '/api/meals/requests'
-    : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
-  try {
-    const [data, requests] = await Promise.all([
-      API.get(url + '&include_school=false'),
-      API.get(reqUrl).catch(() => []),
-    ]);
-    if (gen !== _mealsGen) return;
-    const wantsSchool = data.configured && !data.school_menus_hidden;
-    paintDinner(el, data, requests, dinnerDate, mealsSchoolHtml(data, person, dinnerDate, wantsSchool));
-    if (!wantsSchool) return;
+  async function loadStocks() {
+    const el = document.getElementById('stockTicker');
+    if (!el) return;
+    const cached = API.peek('/api/stocks/') || _cachedStocks;
+    if (cached) _paintStocks(el, cached);
     try {
-      const menus = await API.get(url);
-      if (gen !== _mealsGen) return;
-      const slot = document.getElementById('mealsSchool');
-      if (slot) slot.innerHTML = mealsSchoolHtml(menus, person, dinnerDate, false);
+      const stocks = await API.get('/api/stocks/');
+      _cachedStocks = stocks;
+      if (document.getElementById('stockTicker') === el) _paintStocks(el, stocks);
     } catch (e) {
-      const slot = document.getElementById('mealsSchool');
-      if (slot && gen === _mealsGen) slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+      if (!cached && document.getElementById('stockTicker') === el) el.style.display = 'none';
     }
-  } catch (e) {
-    if (gen === _mealsGen) el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
   }
-}
 
-async function loadShoppingStrip() {
-  const el = document.getElementById('shoppingStrip');
-  if (!el) return;
-  try {
-    const items = await API.get('/api/shopping/');
+  function appHour() {
+    const raw = new Date().toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
+    const hour = parseInt(raw, 10);
+    return hour === 24 ? 0 : hour;
+  }
+
+  function addDays(dateStr, n) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + n);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  function schoolMenuDate(dinnerDate) {
+    let iso = appHour() >= 17 ? addDays(dinnerDate, 1) : dinnerDate;
+    const [y, m, d] = iso.split('-').map(Number);
+    const dow = new Date(y, m - 1, d).getDay();
+    if (dow === 6) iso = addDays(iso, 2);
+    else if (dow === 0) iso = addDays(iso, 1);
+    return iso;
+  }
+
+  function schoolWhenLabel(dinnerDate, schoolDate) {
+    if (schoolDate === dinnerDate) return 'Today';
+    if (schoolDate === addDays(dinnerDate, 1)) return 'Tomorrow';
+    const [y, m, d] = schoolDate.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+  }
+
+  function menuItemsText(items) {
+    if (!items || !items.length) return '';
+    const shown = items.slice(0, 8).map(i =>
+      i.is_entree ? `<span class="menu-entree">${escapeHtml(i.name)}</span>` : escapeHtml(i.name)
+    ).join(' · ');
+    return shown + (items.length > 8 ? ` · +${items.length - 8}` : '');
+  }
+
+  async function saveDinner(date, title) {
+    await API.put('/api/meals/dinner', { meal_date: date, title });
+  }
+
+  function mealsSchoolHtml(data, person, dinnerDate, loading) {
+    if (data.school_menus_hidden) return '';
+    if (!data.configured) {
+      return '<div class="meals-note">Connect SchoolCafe in Settings to see school menus.</div>';
+    }
+    if (loading) return '<div class="meals-note">Loading school menus…</div>';
+    if (!data.schools || !data.schools.length) {
+      return person === 'all'
+        ? '<div class="meals-note">Assign a school to each student in Settings.</div>'
+        : '<div class="meals-note">No school menu for this person.</div>';
+    }
+    const servedDate = data.school_date || schoolMenuDate(dinnerDate);
+    const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
+    return `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + data.schools.map(s => {
+      const breakfast = menuItemsText(s.breakfast);
+      const lunch = menuItemsText(s.lunch);
+      const body = s.error
+        ? `<div class="meals-note">${escapeHtml(s.error)}</div>`
+        : `${breakfast ? `<div class="menu-row"><span class="menu-row-label">🌅 Breakfast</span><span class="menu-row-items">${breakfast}</span></div>` : ''}
+           ${lunch ? `<div class="menu-row"><span class="menu-row-label">🍕 Lunch</span><span class="menu-row-items">${lunch}</span></div>` : ''}
+           ${!breakfast && !lunch ? '<div class="meals-note">No menu posted</div>' : ''}`;
+      return `<div class="school-block" style="--event:${s.member_color || '#4A90D9'}">
+        <div class="school-block-head">
+          ${memberAvatarHtml({ avatar: s.avatar, avatar_photo: s.avatar_photo, color: s.member_color }, 'avatar-sm')}
+          <div>
+            <div class="school-block-name" style="color:${s.member_color || 'inherit'}">${escapeHtml(s.member_name)}</div>
+            <div class="school-block-school">${escapeHtml(s.school_name || '')}</div>
+          </div>
+        </div>
+        ${body}
+      </div>`;
+    }).join('');
+  }
+
+  function paintDinner(el, data, requests, dinnerDate, schoolHtml) {
+    const dinnerTitle = (data.dinner && data.dinner.title) || '';
+    const editing = document.activeElement && document.activeElement.id === 'dinnerTitleInput';
+    const draft = editing ? document.activeElement.value : null;
+    const shownAsks = (requests || []).slice(0, 3);
+    const asksHtml = shownAsks.length ? `<div class="meal-ask-list">${shownAsks.map(r => `
+      <a class="meal-ask" href="/meals.html">
+        ${memberAvatarHtml(r, 'avatar-sm')}
+        <span><strong style="color:${r.color || 'inherit'}">${escapeHtml(r.name)}</strong> wants ${escapeHtml(r.title)}</span>
+      </a>`).join('')}${requests.length > 3 ? `<a href="/meals.html" class="meals-note">+${requests.length - 3} more</a>` : ''}</div>` : '';
+    el.innerHTML = `
+      <div class="dinner-card">
+        <div class="dinner-kicker">Tonight</div>
+        <input id="dinnerTitleInput" class="dinner-input" placeholder="What's for dinner?" value="${escapeHtml(draft !== null ? draft : dinnerTitle)}" autocomplete="off">
+      </div>
+      ${asksHtml}
+      <div id="mealsSchool">${schoolHtml}</div>`;
+    const input = document.getElementById('dinnerTitleInput');
+    if (input) {
+      input.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      });
+      input.addEventListener('blur', async () => {
+        const next = input.value.trim();
+        if (next === dinnerTitle) return;
+        try {
+          await saveDinner(dinnerDate, next);
+        } catch (e) {
+          showToast('Could not save dinner', 'error');
+        }
+      });
+      if (editing) input.focus();
+    }
+  }
+
+  async function loadMeals() {
+    const el = document.getElementById('mealsBody');
+    if (!el) return;
+    const gen = ++_mealsGen;
+    const dinnerDate = toETDateStr(new Date());
+    const schoolDate = schoolMenuDate(dinnerDate);
+    const person = getPersonFilter();
+    let url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
+    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
+    const reqUrl = person === 'all'
+      ? '/api/meals/requests'
+      : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
+
+    const cachedFast = API.peek(url + '&include_school=false');
+    const cachedFull = API.peek(url);
+    const cachedReqs = API.peek(reqUrl);
+    if (cachedFull && cachedReqs) {
+      paintDinner(el, cachedFull, cachedReqs, dinnerDate, mealsSchoolHtml(cachedFull, person, dinnerDate, false));
+    } else if (cachedFast && cachedReqs) {
+      const wants = cachedFast.configured && !cachedFast.school_menus_hidden;
+      paintDinner(el, cachedFast, cachedReqs, dinnerDate, mealsSchoolHtml(cachedFast, person, dinnerDate, wants));
+    }
+
+    try {
+      const [data, requests] = await Promise.all([
+        API.get(url + '&include_school=false'),
+        API.get(reqUrl).catch(() => []),
+      ]);
+      if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
+      const wantsSchool = data.configured && !data.school_menus_hidden;
+      const fullCached = API.peek(url);
+      if (fullCached && wantsSchool) {
+        paintDinner(el, data, requests, dinnerDate, mealsSchoolHtml(fullCached, person, dinnerDate, false));
+      } else {
+        paintDinner(el, data, requests, dinnerDate, mealsSchoolHtml(data, person, dinnerDate, wantsSchool));
+      }
+      if (!wantsSchool) return;
+      try {
+        const menus = await API.get(url);
+        if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
+        const slot = document.getElementById('mealsSchool');
+        if (slot) slot.innerHTML = mealsSchoolHtml(menus, person, dinnerDate, false);
+      } catch (e) {
+        const slot = document.getElementById('mealsSchool');
+        if (slot && gen === _mealsGen) slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+      }
+    } catch (e) {
+      if (!cachedFast && gen === _mealsGen && document.getElementById('mealsBody') === el) {
+        el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
+      }
+    }
+  }
+
+  function _paintShoppingStrip(el, items) {
     const open = items.filter(i => !i.checked);
     const shown = open.slice(0, 6);
     el.style.display = 'flex';
@@ -513,17 +541,86 @@ async function loadShoppingStrip() {
       ${shown.map(i => `<button type="button" class="shopping-chip" onclick="checkShoppingItem(${i.id})">${escapeHtml(i.name)}${i.quantity ? ' · ' + escapeHtml(i.quantity) : ''}</button>`).join('')}
       ${open.length > 6 ? `<a href="/shopping.html" class="shopping-strip-more">+${open.length - 6}</a>` : ''}
       ${!open.length ? '<span class="shopping-strip-empty">Nothing to buy</span>' : ''}`;
-  } catch (e) {
-    el.style.display = 'none';
   }
-}
 
-async function checkShoppingItem(id) {
-  try {
-    await API.patch('/api/shopping/' + id, { checked: true });
-    loadShoppingStrip();
-  } catch (e) {
-    showToast('Could not update the list', 'error');
+  async function loadShoppingStrip() {
+    const el = document.getElementById('shoppingStrip');
+    if (!el) return;
+    const cached = API.peek('/api/shopping/');
+    if (cached) _paintShoppingStrip(el, cached);
+    try {
+      const items = await API.get('/api/shopping/');
+      if (document.getElementById('shoppingStrip') === el) _paintShoppingStrip(el, items);
+    } catch (e) {
+      if (!cached && document.getElementById('shoppingStrip') === el) el.style.display = 'none';
+    }
   }
-}
 
+  async function checkShoppingItem(id) {
+    try {
+      await API.patch('/api/shopping/' + id, { checked: true });
+      loadShoppingStrip();
+    } catch (e) {
+      showToast('Could not update the list', 'error');
+    }
+  }
+
+  window.ackPreviewMessage = ackPreviewMessage;
+  window.openComposeModal = openComposeModal;
+  window.closeComposeModal = closeComposeModal;
+  window.postQuickMessage = postQuickMessage;
+  window.toggleDashboardChore = toggleDashboardChore;
+  window.checkShoppingItem = checkShoppingItem;
+
+  function mount() {
+    onPersonFilterChange(() => {
+      loadTodayEvents();
+      loadUpcomingChores();
+      loadMeals();
+      loadMessagePreview();
+    });
+    setDashboardDate();
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('connected') === 'family') {
+      showToast('✅ Family Google Calendar connected!', 'success');
+      history.replaceState({}, '', '/');
+    }
+
+    initAppTimezone().then(() => {
+      if (FHRouter.currentRoute() !== '/') return;
+      setDashboardDate();
+      loadTodayEvents();
+      loadUpcomingChores();
+      loadMeals();
+      loadShoppingStrip();
+      loadMessagePreview();
+    });
+    afterPagePaint(loadStocks);
+
+    _stocksTimer = setInterval(loadStocks, 5 * 60 * 1000);
+    _refreshTimer = setInterval(() => {
+      if (document.hidden) return;
+      setDashboardDate();
+      loadTodayEvents();
+      loadUpcomingChores();
+      loadMeals();
+      loadShoppingStrip();
+      loadWeather();
+      loadMessagePreview();
+      loadMessageBadge();
+    }, 5 * 60 * 1000);
+
+    return unmount;
+  }
+
+  function unmount() {
+    clearInterval(_stocksTimer);
+    clearInterval(_refreshTimer);
+    _stocksTimer = null;
+    _refreshTimer = null;
+    _mealsGen += 1;
+  }
+
+  FHRouter.register('/', { mount, unmount });
+})();

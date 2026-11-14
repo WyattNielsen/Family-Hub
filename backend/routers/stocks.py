@@ -3,13 +3,15 @@ import asyncio
 import time
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
-from database import get_db
+from database import get_setting_value
 
 router = APIRouter()
 
 # Quotes move, but not every few seconds. Share one fetch across screens.
 _QUOTE_TTL = 120
+_QUOTE_STALE_TTL = 3600
 _quote_cache: dict[str, tuple[float, list]] = {}
+_quote_inflight: dict[str, asyncio.Task] = {}
 _quote_lock = asyncio.Lock()
 
 # CoinGecko IDs for crypto symbols
@@ -29,10 +31,17 @@ def format_price(price: float) -> str:
         return f"{price:.4f}"
 
 def configured_symbols() -> str:
-    conn = get_db()
-    row = conn.execute("SELECT value FROM settings WHERE key='stock_symbols'").fetchone()
-    conn.close()
-    return row["value"] if row and row["value"] else "BTC,TSLA,SPY"
+    val = get_setting_value("stock_symbols", "")
+    return val if val else "BTC,TSLA,SPY"
+
+
+async def _refresh_quotes_bg(cache_key: str, symbol_list: list[str]):
+    try:
+        payload = await _fetch_quotes(symbol_list)
+        if payload:
+            _quote_cache[cache_key] = (time.monotonic(), payload)
+    finally:
+        _quote_inflight.pop(cache_key, None)
 
 
 @router.get("/")
@@ -46,8 +55,14 @@ async def get_stocks(symbols: str | None = None):
     cache_key = ",".join(symbol_list)
     now = time.monotonic()
     hit = _quote_cache.get(cache_key)
-    if hit and now - hit[0] < _QUOTE_TTL:
-        return hit[1]
+    if hit:
+        age = now - hit[0]
+        if age < _QUOTE_TTL:
+            return hit[1]
+        if age < _QUOTE_STALE_TTL:
+            if cache_key not in _quote_inflight or _quote_inflight[cache_key].done():
+                _quote_inflight[cache_key] = asyncio.create_task(_refresh_quotes_bg(cache_key, symbol_list))
+            return hit[1]
 
     async with _quote_lock:
         hit = _quote_cache.get(cache_key)
@@ -109,7 +124,7 @@ async def _fetch_quotes(symbol_list: list[str]) -> list:
         except Exception as e:
             print(f"Yahoo Finance error for {sym}: {e}")
 
-    async with outbound.client(timeout=10.0) as client:
+    async with outbound.client(timeout=5.0) as client:
         tasks = []
         if crypto_syms:
             tasks.append(fetch_crypto(client))
@@ -120,5 +135,5 @@ async def _fetch_quotes(symbol_list: list[str]) -> list:
     return [results[s] for s in symbol_list if s in results]
 
 @router.get("/settings")
-def get_stock_settings():
+async def get_stock_settings():
     return {"symbols": configured_symbols()}

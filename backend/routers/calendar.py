@@ -3,9 +3,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
-from database import get_db
+from database import get_db, get_setting_value, get_settings_map, invalidate_settings_cache
 import apple_sync
-import httpx
 import outbound
 import os as _os
 from datetime import datetime, timezone, timedelta
@@ -15,15 +14,8 @@ from zoneinfo import ZoneInfo
 router = APIRouter()
 
 def get_app_tz(conn=None) -> str:
-    close = False
-    if conn is None:
-        conn = get_db(); close = True
-    try:
-        row = conn.execute("SELECT value FROM settings WHERE key = 'timezone'").fetchone()
-        return (row["value"] if row and row["value"] else None) or "America/New_York"
-    finally:
-        if close:
-            conn.close()
+    del conn
+    return get_setting_value("timezone", "America/New_York") or "America/New_York"
 
 GOOGLE_CLIENT_ID = _os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = _os.environ.get("GOOGLE_CLIENT_SECRET", "")
@@ -158,10 +150,10 @@ def get_events(
     member_id: Optional[int] = Query(None)
 ):
     conn = get_db()
-    tz = _zone(get_app_tz(conn))
-    # Date prefixes only. Full timestamps mix UTC "Z", offsets, and all-day
-    # dates, and SQLite compares those as text, which drops events that are
-    # still ahead.
+    tz = _zone(get_app_tz())
+    # Use index-friendly ISO date range bounds (no substr() wrapper) so SQLite
+    # uses idx_events_start / idx_events_end directly instead of full-scanning
+    # thousands of synced events. Exact timezone overlap is checked below.
     query = """
         SELECT e.*, m.name as member_name, m.color as member_color,
                m.avatar as member_avatar, m.avatar_photo as member_avatar_photo
@@ -171,11 +163,11 @@ def get_events(
     """
     params = []
     if start:
-        query += " AND substr(e.end_datetime, 1, 10) >= ?"
+        query += " AND e.end_datetime >= ?"
         params.append(_date_shift(start, -2))
     if end:
-        query += " AND substr(e.start_datetime, 1, 10) <= ?"
-        params.append(_date_shift(end, 2))
+        query += " AND e.start_datetime < ?"
+        params.append(_date_shift(end, 3))
     if member_id:
         # Person view: that member's events plus shared family calendars
         query += " AND (e.member_id = ? OR e.is_family = 1)"
@@ -252,6 +244,7 @@ def _set_setting(conn, key: str, value: Optional[str]):
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
             (key, str(value)),
         )
+    invalidate_settings_cache()
 
 
 def _source_with_account(conn, source_id: int):
@@ -321,10 +314,10 @@ async def _push_event_to_write_calendar(event_row: dict, conn) -> tuple:
         if not account or not account.get("access_token"):
             return None, None, None
         access_token = await refresh_account_token_if_needed(account)
-        body = _build_google_body(event_row, tz=get_app_tz(conn))
+        body = _build_google_body(event_row, tz=get_app_tz())
         encoded = quote(calendar_ext, safe="")
         try:
-            async with httpx.AsyncClient() as client:
+            async with outbound.client(timeout=10.0) as client:
                 if remote_id:
                     resp = await client.put(
                         f"https://www.googleapis.com/calendar/v3/calendars/{encoded}/events/{remote_id}",
@@ -349,15 +342,18 @@ async def _push_event_to_write_calendar(event_row: dict, conn) -> tuple:
             return None, None, None
         try:
             if remote_id:
-                ok = apple_sync.update_caldav_event(
+                ok = await asyncio.to_thread(
+                    apple_sync.update_caldav_event,
                     account["apple_id"], account["app_password"], calendar_ext, remote_id, event_row
                 )
                 if not ok:
-                    remote_id = apple_sync.create_caldav_event(
+                    remote_id = await asyncio.to_thread(
+                        apple_sync.create_caldav_event,
                         account["apple_id"], account["app_password"], calendar_ext, event_row
                     )
             else:
-                remote_id = apple_sync.create_caldav_event(
+                remote_id = await asyncio.to_thread(
+                    apple_sync.create_caldav_event,
                     account["apple_id"], account["app_password"], calendar_ext, event_row
                 )
             return remote_id, calendar_ext, source["id"]
@@ -396,7 +392,7 @@ async def _delete_from_write_calendar(event_row: dict, conn):
         try:
             access_token = await refresh_account_token_if_needed(dict(account))
             encoded = quote(calendar_id, safe="")
-            async with httpx.AsyncClient() as client:
+            async with outbound.client(timeout=10.0) as client:
                 await client.delete(
                     f"https://www.googleapis.com/calendar/v3/calendars/{encoded}/events/{remote_id}",
                     headers={"Authorization": f"Bearer {access_token}"},
@@ -407,7 +403,8 @@ async def _delete_from_write_calendar(event_row: dict, conn):
 
     if kind == "caldav" and account:
         try:
-            apple_sync.delete_caldav_event(
+            await asyncio.to_thread(
+                apple_sync.delete_caldav_event,
                 account["apple_id"], account["app_password"], calendar_id, remote_id
             )
         except Exception as e:
@@ -544,7 +541,7 @@ async def refresh_account_token_if_needed(account: dict) -> str:
         except Exception:
             needs_refresh = True
     if needs_refresh and refresh_token:
-        async with httpx.AsyncClient() as client:
+        async with outbound.client(timeout=10.0) as client:
             resp = await client.post("https://oauth2.googleapis.com/token", data={
                 "client_id": GOOGLE_CLIENT_ID,
                 "client_secret": GOOGLE_CLIENT_SECRET,
@@ -555,15 +552,19 @@ async def refresh_account_token_if_needed(account: dict) -> str:
                 data = resp.json()
                 new_token = data["access_token"]
                 new_expiry = (datetime.now(timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))).isoformat()
-                conn = get_db()
-                conn.execute(
-                    """UPDATE calendar_accounts
-                       SET access_token=?, token_expiry=?, updated_at=datetime('now')
-                       WHERE id=?""",
-                    (new_token, new_expiry, account_id),
-                )
-                conn.commit()
-                conn.close()
+                def _save_token():
+                    conn = get_db()
+                    try:
+                        conn.execute(
+                            """UPDATE calendar_accounts
+                               SET access_token=?, token_expiry=?, updated_at=datetime('now')
+                               WHERE id=?""",
+                            (new_token, new_expiry, account_id),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                await asyncio.to_thread(_save_token)
                 return new_token
     return access_token
 
@@ -659,7 +660,7 @@ async def list_available_calendars(account_id: int):
         if not account.get("access_token"):
             raise HTTPException(status_code=400, detail="Google account has no access token")
         access_token = await refresh_account_token_if_needed(account)
-        async with httpx.AsyncClient() as client:
+        async with outbound.client(timeout=10.0) as client:
             resp = await client.get(
                 "https://www.googleapis.com/calendar/v3/users/me/calendarList",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -685,7 +686,9 @@ async def list_available_calendars(account_id: int):
         if not account.get("apple_id") or not account.get("app_password"):
             raise HTTPException(status_code=400, detail="iCloud credentials missing")
         try:
-            calendars = apple_sync.list_icloud_calendars(account["apple_id"], account["app_password"])
+            calendars = await asyncio.to_thread(
+                apple_sync.list_icloud_calendars, account["apple_id"], account["app_password"]
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Failed to list iCloud calendars: {exc}") from exc
         return {
@@ -936,47 +939,53 @@ GOOGLE_COLOR_MAP = {
 
 
 def _store_google_events(source: dict, google_events: list, cal_color) -> int:
-    """Replace inbound Google rows. Runs off the event loop with its own connection."""
+    """Replace inbound Google rows using a single batch transaction so the
+    SQLite write lock is held for milliseconds rather than seconds."""
+    source_id = source["id"]
+    member_id = source["member_id"]
+    family_flag = 1 if source.get("is_family") else 0
+
+    # Prepare rows in memory BEFORE opening a DB write transaction
+    prepared = []
+    for ge in google_events:
+        if ge.get("status") == "cancelled":
+            continue
+        gid = ge.get("id")
+        if not gid:
+            continue
+        title = ge.get("summary", "(No title)")
+        desc = ge.get("description", "")
+        location = ge.get("location", "")
+        start = ge["start"].get("dateTime") or ge["start"].get("date")
+        end = ge["end"].get("dateTime") or ge["end"].get("date")
+        all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
+        color_id = ge.get("colorId")
+        event_color = GOOGLE_COLOR_MAP.get(color_id) if color_id else cal_color
+        prepared.append((title, desc, location, start, end, all_day, member_id, family_flag, gid, event_color, source_id))
+
     conn = get_db()
     try:
-        source_id = source["id"]
-        member_id = source["member_id"]
+        written_ids = {
+            r[0]
+            for r in conn.execute(
+                "SELECT google_event_id FROM events WHERE google_calendar_id IS NOT NULL AND google_event_id IS NOT NULL"
+            ).fetchall()
+        }
+        rows_to_insert = [r for r in prepared if r[8] not in written_ids]
         conn.execute(
-            """DELETE FROM events
-               WHERE external_source_id=? AND google_calendar_id IS NULL""",
+            "DELETE FROM events WHERE external_source_id=? AND google_calendar_id IS NULL",
             (source_id,),
         )
-        synced = 0
-        for ge in google_events:
-            if ge.get("status") == "cancelled":
-                continue
-            gid = ge["id"]
-            written = conn.execute(
-                """SELECT id FROM events
-                   WHERE google_event_id=? AND google_calendar_id IS NOT NULL""",
-                (gid,),
-            ).fetchone()
-            if written:
-                continue
-            title = ge.get("summary", "(No title)")
-            desc = ge.get("description", "")
-            location = ge.get("location", "")
-            start = ge["start"].get("dateTime") or ge["start"].get("date")
-            end = ge["end"].get("dateTime") or ge["end"].get("date")
-            all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
-            color_id = ge.get("colorId")
-            event_color = GOOGLE_COLOR_MAP.get(color_id) if color_id else cal_color
-            family_flag = 1 if source.get("is_family") else 0
-            conn.execute(
+        if rows_to_insert:
+            conn.executemany(
                 """INSERT INTO events
                    (title, description, location, start_datetime, end_datetime, all_day,
                     member_id, is_family, google_event_id, color, external_source_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (title, desc, location, start, end, all_day, member_id, family_flag, gid, event_color, source_id),
+                rows_to_insert,
             )
-            synced += 1
         conn.commit()
-        return synced
+        return len(rows_to_insert)
     finally:
         conn.close()
 
@@ -1064,7 +1073,7 @@ async def _sync_source(source: dict, account: Optional[dict] = None) -> int:
         member_id = None
     color = source.get("color")
     if source.get("account_id"):
-        loaded = _load_account(source["account_id"])
+        loaded = await asyncio.to_thread(_load_account, source["account_id"])
         if loaded:
             account = loaded
 
@@ -1145,13 +1154,12 @@ def _account_from_source_row(source: dict) -> Optional[dict]:
 
 @router.get("/sync/status")
 async def get_sync_status():
-    conn = get_db()
-    last = conn.execute("SELECT value FROM settings WHERE key='google_last_synced'").fetchone()
-    interval = conn.execute("SELECT value FROM settings WHERE key='google_sync_interval'").fetchone()
-    conn.close()
+    s = get_settings_map()
+    last = s.get("google_last_synced")
+    interval = s.get("google_sync_interval")
     return {
-        "last_synced": last["value"] if last else None,
-        "interval_minutes": int(interval["value"]) if interval else 0,
+        "last_synced": last if last else None,
+        "interval_minutes": int(interval) if interval else 0,
     }
 
 def _touch_last_synced():
@@ -1164,6 +1172,7 @@ def _touch_last_synced():
         conn.commit()
     finally:
         conn.close()
+    invalidate_settings_cache()
 
 
 async def run_full_sync():
@@ -1172,11 +1181,14 @@ async def run_full_sync():
     Network and calendar parsing run without holding a database connection,
     and blocking provider calls run off the event loop so page loads stay responsive.
     """
-    conn = get_db()
-    try:
-        sources = _assigned_sources(conn)
-    finally:
-        conn.close()
+    conn = None
+    def _load_sources():
+        c = get_db()
+        try:
+            return _assigned_sources(c)
+        finally:
+            c.close()
+    sources = await asyncio.to_thread(_load_sources)
     total = 0
     for src in sources:
         try:

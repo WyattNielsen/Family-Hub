@@ -211,6 +211,23 @@ def upsert_apple_events(
     Preserves locally-written events (google_calendar_id set) on the same source.
     """
     prefix = f"apple:{source_id}:"
+    family_flag = 1 if is_family else 0
+    rows_to_insert = [
+        (
+            ev["title"],
+            ev.get("description") or "",
+            ev.get("location") or "",
+            ev["start_datetime"],
+            ev["end_datetime"],
+            ev.get("all_day") or 0,
+            member_id,
+            family_flag,
+            ev.get("color"),
+            f"{prefix}{ev['uid']}",
+            source_id,
+        )
+        for ev in events
+    ]
     conn.execute(
         """DELETE FROM events
            WHERE external_source_id=? AND google_calendar_id IS NULL""",
@@ -224,31 +241,15 @@ def upsert_apple_events(
                  AND (external_source_id IS NULL OR external_source_id=?)""",
             (member_id, prefix + "%", source_id),
         )
-    family_flag = 1 if is_family else 0
-    synced = 0
-    for ev in events:
-        ext_id = f"{prefix}{ev['uid']}"
-        conn.execute(
+    if rows_to_insert:
+        conn.executemany(
             """INSERT INTO events
                (title, description, location, start_datetime, end_datetime, all_day,
                 member_id, is_family, color, external_event_id, external_source_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                ev["title"],
-                ev.get("description") or "",
-                ev.get("location") or "",
-                ev["start_datetime"],
-                ev["end_datetime"],
-                ev.get("all_day") or 0,
-                member_id,
-                family_flag,
-                ev.get("color"),
-                ext_id,
-                source_id,
-            ),
+            rows_to_insert,
         )
-        synced += 1
-    return synced
+    return len(rows_to_insert)
 
 
 def _vevent_ical(event_row: dict, uid: str) -> bytes:

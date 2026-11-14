@@ -81,6 +81,17 @@ async def _school_block(member: dict, school_date: str):
     return block
 
 
+def _get_dinner(dinner_date: str) -> dict:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT title, notes FROM family_meals WHERE meal_date = ?", (dinner_date,)
+        ).fetchone()
+        return {"title": row["title"] if row else "", "notes": row["notes"] if row else ""}
+    finally:
+        conn.close()
+
+
 @router.get("/day")
 async def day_menu(
     date: Optional[str] = None,
@@ -95,16 +106,11 @@ async def day_menu(
     hidden = schoolcafe.setting("lunch_hidden", "false") == "true"
     district_id = (schoolcafe.setting("schoolcafe_district_id") or "").strip()
 
-    conn = get_db()
-    row = conn.execute(
-        "SELECT title, notes FROM family_meals WHERE meal_date = ?", (dinner_date,)
-    ).fetchone()
-    conn.close()
-    dinner = {"title": row["title"] if row else "", "notes": row["notes"] if row else ""}
+    dinner = await asyncio.to_thread(_get_dinner, dinner_date)
 
     schools = []
     if include_school and district_id and not hidden:
-        members = _members(member_id)
+        members = await asyncio.to_thread(_members, member_id)
         if members:
             schools = await asyncio.gather(*[_school_block(m, menu_date) for m in members])
 
@@ -151,6 +157,18 @@ async def _school_week(member: dict, dates: list):
     return block
 
 
+def _get_week_dinners(dates: list[str]) -> dict[str, dict]:
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            f"SELECT meal_date, title, notes FROM family_meals WHERE meal_date IN ({','.join('?' * len(dates))})",
+            dates,
+        ).fetchall()
+        return {r["meal_date"]: dict(r) for r in rows}
+    finally:
+        conn.close()
+
+
 @router.get("/week")
 async def week_menu(
     start: Optional[str] = None,
@@ -161,13 +179,7 @@ async def week_menu(
     anchor = _valid_date(start) if start else today
     start_date = schoolcafe.monday_of(anchor)
     dates = [_add_days(start_date, i) for i in range(7)]
-    conn = get_db()
-    rows = conn.execute(
-        f"SELECT meal_date, title, notes FROM family_meals WHERE meal_date IN ({','.join('?' * len(dates))})",
-        dates,
-    ).fetchall()
-    conn.close()
-    by_date = {r["meal_date"]: dict(r) for r in rows}
+    by_date = await asyncio.to_thread(_get_week_dinners, dates)
     days = []
     for iso in dates:
         saved = by_date.get(iso) or {}
@@ -181,7 +193,7 @@ async def week_menu(
     district_id = (schoolcafe.setting("schoolcafe_district_id") or "").strip()
     schools = []
     if include_school and district_id and not hidden:
-        members = _members(member_id)
+        members = await asyncio.to_thread(_members, member_id)
         if members:
             schools = list(await asyncio.gather(*[_school_week(m, dates) for m in members]))
 

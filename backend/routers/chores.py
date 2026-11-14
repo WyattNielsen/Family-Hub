@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from database import get_db
+from database import get_db, get_setting_value
 from datetime import datetime, timedelta
 import pytz
 
@@ -176,8 +176,8 @@ def get_leaderboard():
         done_days.setdefault(row["assigned_to"], set()).add(row["due"])
 
     result = []
-    tz_name = conn.execute("SELECT value FROM settings WHERE key='timezone'").fetchone()
-    tz = pytz.timezone(tz_name["value"] if tz_name and tz_name["value"] else "America/New_York")
+    tz_val = get_setting_value("timezone", "America/New_York") or "America/New_York"
+    tz = pytz.timezone(tz_val)
     today = datetime.now(tz).date()
     for r in rows:
         d = dict(r)

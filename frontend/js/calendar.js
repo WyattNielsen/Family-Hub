@@ -1,401 +1,417 @@
-
-// Returns true if an event occurs on the given dateStr (YYYY-MM-DD)
-// Handles all-day multi-day events and timed events
-function eventOccursOnDate(e, dateStr) {
-  if (!e.start_datetime) return false;
-  const start = e.start_datetime.split('T')[0];
-  // For all-day events, end_datetime is exclusive (Google style) — subtract 1 day
-  let end = e.end_datetime ? e.end_datetime.split('T')[0] : start;
-  if (e.all_day && end > start) {
-    // Move end back one day so we don't show on the day after it ends
-    const endDate = new Date(end + 'T12:00:00');
-    endDate.setDate(endDate.getDate() - 1);
-    end = endDate.toISOString().split('T')[0];
-  }
-  return dateStr >= start && dateStr <= end;
-}
-
-let currentDate = new Date();
-let allEvents = [];
-let members = [];
-let selectedDay = null;
-let editingEventId = null;
-
-// Calendar text comes from Google/Apple and can contain HTML, including
-// links to file:/// paths. Firefox refuses those from an http page and logs
-// "may not load or link to file:///". Turn the text into safe HTML instead
-// of inserting it raw: keep http(s) links, drop every other tag.
-function eventBodyHtml(raw) {
-  let text = String(raw ?? '').replace(/\r\n|\r/g, '\n');
-  text = text.replace(/<a\b[^>]*\bhref\s*=\s*(?:"(https?:\/\/[^"]+)"|'(https?:\/\/[^']+)')[^>]*>([\s\S]*?)<\/a>/gi,
-    (_, href1, href2, label) => {
-      const href = href1 || href2;
-      const visible = label.replace(/<[^>]+>/g, '').trim();
-      return visible && visible !== href ? `${visible} (${href})` : href;
-    });
-  text = text.replace(/<\s*br\s*\/?\s*>/gi, '\n');
-  text = text.replace(/<\s*\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, '\n');
-  text = text.replace(/<[^>]+>/g, '');
-  text = text
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'");
-
-  const re = /https?:\/\/[^\s]+/g;
-  let out = '';
-  let last = 0;
-  for (const m of text.matchAll(re)) {
-    out += escapeHtml(text.slice(last, m.index)).replace(/\n/g, '<br>');
-    let url = m[0];
-    let trail = '';
-    while (url && /[),.;:!?\]"']$/.test(url)) {
-      trail = url.slice(-1) + trail;
-      url = url.slice(0, -1);
+(function () {
+  function eventOccursOnDate(e, dateStr) {
+    if (!e.start_datetime) return false;
+    const start = e.start_datetime.split('T')[0];
+    let end = e.end_datetime ? e.end_datetime.split('T')[0] : start;
+    if (e.all_day && end > start) {
+      const endDate = new Date(end + 'T12:00:00');
+      endDate.setDate(endDate.getDate() - 1);
+      end = endDate.toISOString().split('T')[0];
     }
-    if (/^https?:\/\//i.test(url)) {
-      const safe = escapeHtml(url);
-      out += `<a href="${safe}" target="_blank" rel="noopener">${safe}</a>`;
-    } else {
-      out += escapeHtml(url);
+    return dateStr >= start && dateStr <= end;
+  }
+
+  let currentDate = new Date();
+  let allEvents = [];
+  let members = [];
+  let selectedDay = null;
+  window.selectedDay = null;
+
+  function eventBodyHtml(raw) {
+    let text = String(raw ?? '').replace(/\r\n|\r/g, '\n');
+    text = text.replace(/<a\b[^>]*\bhref\s*=\s*(?:"(https?:\/\/[^"]+)"|'(https?:\/\/[^']+)')[^>]*>([\s\S]*?)<\/a>/gi,
+      (_, href1, href2, label) => {
+        const href = href1 || href2;
+        const visible = label.replace(/<[^>]+>/g, '').trim();
+        return visible && visible !== href ? `${visible} (${href})` : href;
+      });
+    text = text.replace(/<\s*br\s*\/?\s*>/gi, '\n');
+    text = text.replace(/<\s*\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, '\n');
+    text = text.replace(/<[^>]+>/g, '');
+    text = text
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'");
+
+    const re = /https?:\/\/[^\s]+/g;
+    let out = '';
+    let last = 0;
+    for (const m of text.matchAll(re)) {
+      out += escapeHtml(text.slice(last, m.index)).replace(/\n/g, '<br>');
+      let url = m[0];
+      let trail = '';
+      while (url && /[),.;:!?\]"']$/.test(url)) {
+        trail = url.slice(-1) + trail;
+        url = url.slice(0, -1);
+      }
+      if (/^https?:\/\//i.test(url)) {
+        const safe = escapeHtml(url);
+        out += `<a href="${safe}" target="_blank" rel="noopener">${safe}</a>`;
+      } else {
+        out += escapeHtml(url);
+      }
+      out += escapeHtml(trail);
+      last = m.index + m[0].length;
     }
-    out += escapeHtml(trail);
-    last = m.index + m[0].length;
-  }
-  out += escapeHtml(text.slice(last)).replace(/\n/g, '<br>');
-  return out;
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  onPersonFilterChange(() => loadEvents());
-  renderCalendar();
-  initAppTimezone().then(() => {
-    renderCalendar();
-    loadEvents();
-  });
-  API.get('/api/members/').then(rows => {
-    members = rows || [];
-    populateMemberSelect();
-  }).catch(() => {});
-  loadSyncStatus();
-
-  document.getElementById('prevMonth').onclick = () => { currentDate.setMonth(currentDate.getMonth() - 1); renderCalendar(); loadEvents(); };
-  document.getElementById('nextMonth').onclick = () => { currentDate.setMonth(currentDate.getMonth() + 1); renderCalendar(); loadEvents(); };
-  document.getElementById('todayBtn').onclick = () => { currentDate = new Date(); renderCalendar(); loadEvents(); };
-  document.getElementById('addEventBtn').onclick = () => openEventModal();
-  document.getElementById('closeEventModal').onclick = closeEventModal;
-  document.getElementById('cancelEventModal').onclick = closeEventModal;
-  document.getElementById('saveEvent').onclick = saveEvent;
-  document.getElementById('addEventDayBtn').onclick = () => openEventModal(selectedDay);
-  document.getElementById('closeDayPanel').onclick = () => {
-    document.getElementById('dayEventsPanel').style.display = 'none';
-  };
-  document.getElementById('syncBtn').onclick = syncGoogle;
-
-  // Dropping a local file on this page makes Firefox try to open it and log
-  // the same file:/// security error. This page has no file drop target.
-  document.addEventListener('dragover', (e) => {
-    if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
-  });
-  document.addEventListener('drop', (e) => {
-    if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
-  });
-
-  document.getElementById('eventModal').onclick = (e) => {
-    if (e.target.id === 'eventModal') closeEventModal();
-  };
-});
-
-function eventPersonTag(e, color) {
-  let html = '';
-  if (e.member_name) {
-    html += `<div class="event-card-member" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></div>`;
-  }
-  if (e.is_family) html += '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>';
-  return html;
-}
-
-function populateMemberSelect() {
-  const sel = document.getElementById('eventMember');
-  sel.innerHTML = '<option value="">Select who…</option>' +
-    '<option value="family">🏠 Family</option>' +
-    members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${escapeHtml(m.name)}</option>`).join('');
-}
-
-function renderCalendar() {
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-  document.getElementById('calendarTitle').textContent =
-    new Date(year, month).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: TZ });
-
-  const grid = document.getElementById('calendarGrid');
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  let html = days.map(d => `<div class="cal-day-header">${d}</div>`).join('');
-
-  const firstDay = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const prevDays = new Date(year, month, 0).getDate();
-  const today = new Date();
-
-  // Prev month padding
-  for (let i = firstDay - 1; i >= 0; i--) {
-    const d = prevDays - i;
-    html += `<div class="cal-day other-month"><div class="cal-date">${d}</div></div>`;
+    out += escapeHtml(text.slice(last)).replace(/\n/g, '<br>');
+    return out;
   }
 
-  // Current month
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const isToday = d === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-    const isSelected = selectedDay === dateStr;
-    const dayEvents = allEvents.filter(e => eventOccursOnDate(e, dateStr));
-    const hasEvents = dayEvents.length > 0;
-
-    html += `<div class="cal-day ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''} ${hasEvents ? 'has-events' : ''}"
-               data-date="${dateStr}" onclick="selectDay('${dateStr}')">
-      <div class="cal-date">${isToday ? `<span>${d}</span>` : d}</div>
-      <div class="cal-events">
-        ${dayEvents.slice(0, 3).map(e => {
-          const color = eventDisplayColor(e);
-          return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${escapeHtml(e.title)}</div>`;
-        }).join('')}
-        ${dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : ''}
-      </div>
-    </div>`;
+  function eventPersonTag(e, color) {
+    let html = '';
+    if (e.member_name) {
+      html += `<div class="event-card-member" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></div>`;
+    }
+    if (e.is_family) html += '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>';
+    return html;
   }
 
-  // Next month padding
-  const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
-  for (let d = 1; d <= totalCells - firstDay - daysInMonth; d++) {
-    html += `<div class="cal-day other-month"><div class="cal-date">${d}</div></div>`;
+  function populateMemberSelect() {
+    const sel = document.getElementById('eventMember');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Select who…</option>' +
+      '<option value="family">🏠 Family</option>' +
+      members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${escapeHtml(m.name)}</option>`).join('');
   }
 
-  grid.innerHTML = html;
-}
+  function renderCalendar() {
+    const titleEl = document.getElementById('calendarTitle');
+    const grid = document.getElementById('calendarGrid');
+    if (!titleEl || !grid) return;
 
-async function loadEvents() {
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-  const monthNum = String(month + 1).padStart(2, '0');
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  const start = `${year}-${monthNum}-01T00:00:00`;
-  const end = `${year}-${monthNum}-${String(lastDay).padStart(2, '0')}T23:59:59`;
-  try {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    titleEl.textContent =
+      new Date(year, month).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: TZ });
+
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    let html = days.map(d => `<div class="cal-day-header">${d}</div>`).join('');
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const prevDays = new Date(year, month, 0).getDate();
+    const today = new Date();
+
+    for (let i = firstDay - 1; i >= 0; i--) {
+      const d = prevDays - i;
+      html += `<div class="cal-day other-month"><div class="cal-date">${d}</div></div>`;
+    }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const isTodayCell = d === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+      const isSelected = selectedDay === dateStr;
+      const dayEvents = allEvents.filter(e => eventOccursOnDate(e, dateStr));
+      const hasEvents = dayEvents.length > 0;
+
+      html += `<div class="cal-day ${isTodayCell ? 'today' : ''} ${isSelected ? 'selected' : ''} ${hasEvents ? 'has-events' : ''}"
+                 data-date="${dateStr}" onclick="selectDay('${dateStr}')">
+        <div class="cal-date">${isTodayCell ? `<span>${d}</span>` : d}</div>
+        <div class="cal-events">
+          ${dayEvents.slice(0, 3).map(e => {
+            const color = eventDisplayColor(e);
+            return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${escapeHtml(e.title)}</div>`;
+          }).join('')}
+          ${dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : ''}
+        </div>
+      </div>`;
+    }
+
+    const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
+    for (let d = 1; d <= totalCells - firstDay - daysInMonth; d++) {
+      html += `<div class="cal-day other-month"><div class="cal-date">${d}</div></div>`;
+    }
+
+    grid.innerHTML = html;
+  }
+
+  async function loadEvents() {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const monthNum = String(month + 1).padStart(2, '0');
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const start = `${year}-${monthNum}-01T00:00:00`;
+    const end = `${year}-${monthNum}-${String(lastDay).padStart(2, '0')}T23:59:59`;
     let url = `/api/calendar/events?start=${start}&end=${end}`;
     const person = getPersonFilter();
     if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
-    allEvents = await API.get(url);
-    renderCalendar();
-  } catch(e) {
-    showToast('Failed to load events', 'error');
-  }
-}
 
-function selectDay(dateStr) {
-  selectedDay = dateStr;
-  renderCalendar();
-  const panel = document.getElementById('dayEventsPanel');
-  const dayEvents = allEvents.filter(e => eventOccursOnDate(e, dateStr));
-  const date = new Date(dateStr + 'T12:00:00');
-  document.getElementById('dayEventTitle').textContent =
-    date.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', timeZone: TZ });
-
-  if (!dayEvents.length) {
-    document.getElementById('dayEventsList').innerHTML =
-      `<div class="empty-state" style="margin-top:12px">No events. <a href="#" onclick="openEventModal('${dateStr}');return false" style="color:var(--primary);font-weight:800">+ Add one</a></div>`;
-  } else {
-    document.getElementById('dayEventsList').innerHTML = dayEvents.map(e => {
-      const color = eventDisplayColor(e);
-      const descHtml = e.description ? eventBodyHtml(e.description) : '';
-      const descBlock = descHtml.replace(/<br>/g, '').trim()
-        ? `<div style="font-size:13px;color:var(--text2);margin-top:4px">${descHtml}</div>`
-        : '';
-      return `
-        <div class="event-card" style="--event:${color}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <div>
-              <div class="event-card-title">${escapeHtml(e.title)}</div>
-              <div class="event-card-time">${e.all_day ? 'All day' : formatTime(e.start_datetime) + ' – ' + formatTime(e.end_datetime)}</div>
-              ${descBlock}
-            </div>
-            <button onclick="deleteEvent(${e.id})" class="chore-action-btn delete" style="opacity:1">🗑</button>
-          </div>
-          ${eventPersonTag(e, color)}
-        </div>`;
-    }).join('');
-  }
-  panel.style.display = 'block';
-  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-function openEventModal(dateStr) {
-  editingEventId = null;
-  document.getElementById('eventModalTitle').textContent = 'Add Event';
-  document.getElementById('eventTitle').value = '';
-  document.getElementById('eventDesc').value = '';
-  document.getElementById('eventLocation').value = '';
-  document.getElementById('eventAllDay').checked = false;
-  document.getElementById('eventMember').value = '';
-  if (dateStr) {
-    document.getElementById('eventStart').value = dateStr + 'T09:00';
-    document.getElementById('eventEnd').value = dateStr + 'T10:00';
-  } else {
-    const now = new Date();
-    document.getElementById('eventStart').value = toLocalISO(now);
-    document.getElementById('eventEnd').value = toLocalISO(new Date(now.getTime() + 3600000));
-  }
-  document.getElementById('eventModal').style.display = 'flex';
-  document.getElementById('eventTitle').focus();
-}
-
-function closeEventModal() {
-  document.getElementById('eventModal').style.display = 'none';
-}
-
-async function saveEvent() {
-  const title = document.getElementById('eventTitle').value.trim();
-  if (!title) { showToast('Please enter a title', 'error'); return; }
-  const who = document.getElementById('eventMember').value;
-  if (!who) { showToast('Select a person or Family for this event', 'error'); return; }
-  const isFamily = who === 'family';
-  const payload = {
-    title,
-    description: document.getElementById('eventDesc').value.trim(),
-    location: document.getElementById('eventLocation').value.trim(),
-    start_datetime: document.getElementById('eventStart').value,
-    end_datetime: document.getElementById('eventEnd').value,
-    all_day: document.getElementById('eventAllDay').checked,
-    member_id: isFamily ? null : Number(who),
-    is_family: isFamily,
-  };
-  try {
-    await API.post('/api/calendar/events', payload);
-    closeEventModal();
-    if (isFamily) {
-      showToast('✅ Event saved to the family calendar', 'success');
-    } else {
-      const person = members.find(m => String(m.id) === String(who));
-      const name = person ? person.name : 'their';
-      showToast(`✅ Event saved to ${name}'s calendar`, 'success');
+    const cached = API.peek(url);
+    if (cached) {
+      allEvents = cached;
+      renderCalendar();
     }
-    loadEvents();
-  } catch(e) {
-    showToast(e.message || 'Failed to save event', 'error');
-  }
-}
 
-async function deleteEvent(id) {
-  if (!confirm('Delete this event?')) return;
-  try {
-    await API.delete(`/api/calendar/events/${id}`);
-    showToast('Event deleted', '');
-    loadEvents();
-    if (selectedDay) selectDay(selectedDay);
-  } catch(e) {
-    showToast('Failed to delete', 'error');
-  }
-}
-
-function showEventDetail(eventId, domEvent) {
-  domEvent.stopPropagation();
-  const e = allEvents.find(ev => ev.id === eventId);
-  if (!e) return;
-
-  const color = eventDisplayColor(e);
-
-  // Color bar
-  document.getElementById('eventDetailBar').style.background = color;
-
-  // Title
-  document.getElementById('eventDetailTitle').textContent = e.title;
-
-  // Time
-  let timeStr;
-  if (e.all_day) {
-    const start = new Date(e.start_datetime.split('T')[0] + 'T12:00:00');
-    const end   = e.end_datetime ? new Date(e.end_datetime.split('T')[0] + 'T12:00:00') : null;
-    const fmt = d => d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', timeZone: TZ });
-    timeStr = end && e.end_datetime.split('T')[0] !== e.start_datetime.split('T')[0]
-      ? `${fmt(start)} – ${fmt(end)}`
-      : fmt(start);
-    timeStr += ' · All day';
-  } else {
-    const start = new Date(e.start_datetime);
-    timeStr = start.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', timeZone: TZ })
-      + ' · ' + formatTime(e.start_datetime);
-    if (e.end_datetime) timeStr += ' – ' + formatTime(e.end_datetime);
-  }
-  document.getElementById('eventDetailTime').textContent = timeStr;
-
-  // Location
-  const locEl = document.getElementById('eventDetailLocation');
-  if (e.location && e.location.trim()) {
-    const mapsUrl = `https://maps.google.com/?q=${encodeURIComponent(e.location)}`;
-    locEl.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">📍 ${escapeHtml(e.location)}</a>`;
-    locEl.style.display = 'block';
-  } else {
-    locEl.style.display = 'none';
+    try {
+      allEvents = await API.get(url);
+      if (FHRouter.currentRoute() === '/calendar.html') renderCalendar();
+    } catch (e) {
+      if (!cached) showToast('Failed to load events', 'error');
+    }
   }
 
-  // Description
-  const descEl = document.getElementById('eventDetailDesc');
-  const descHtml = e.description ? eventBodyHtml(e.description) : '';
-  if (descHtml.replace(/<br>/g, '').trim()) {
-    descEl.innerHTML = descHtml;
-    descEl.style.display = 'block';
-  } else {
-    descEl.innerHTML = '';
-    descEl.style.display = 'none';
+  function selectDay(dateStr) {
+    selectedDay = dateStr;
+    window.selectedDay = dateStr;
+    renderCalendar();
+    const panel = document.getElementById('dayEventsPanel');
+    if (!panel) return;
+    const dayEvents = allEvents.filter(e => eventOccursOnDate(e, dateStr));
+    const date = new Date(dateStr + 'T12:00:00');
+    document.getElementById('dayEventTitle').textContent =
+      date.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', timeZone: TZ });
+
+    if (!dayEvents.length) {
+      document.getElementById('dayEventsList').innerHTML =
+        `<div class="empty-state" style="margin-top:12px">No events. <a href="#" onclick="openEventModal('${dateStr}');return false" style="color:var(--primary);font-weight:800">+ Add one</a></div>`;
+    } else {
+      document.getElementById('dayEventsList').innerHTML = dayEvents.map(e => {
+        const color = eventDisplayColor(e);
+        const descHtml = e.description ? eventBodyHtml(e.description) : '';
+        const descBlock = descHtml.replace(/<br>/g, '').trim()
+          ? `<div style="font-size:13px;color:var(--text2);margin-top:4px">${descHtml}</div>`
+          : '';
+        return `
+          <div class="event-card" style="--event:${color}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div>
+                <div class="event-card-title">${escapeHtml(e.title)}</div>
+                <div class="event-card-time">${e.all_day ? 'All day' : formatTime(e.start_datetime) + ' – ' + formatTime(e.end_datetime)}</div>
+                ${descBlock}
+              </div>
+              <button onclick="deleteEvent(${e.id})" class="chore-action-btn delete" style="opacity:1">🗑</button>
+            </div>
+            ${eventPersonTag(e, color)}
+          </div>`;
+      }).join('');
+    }
+    panel.style.display = 'block';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  // Tags (member / family)
-  const tagsEl = document.getElementById('eventDetailTags');
-  let tags = '';
-  if (e.member_name) {
-    tags += `<span class="event-detail-tag" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></span>`;
-  } else if (e.is_family) {
-    tags += `<span class="event-detail-tag" style="background:#F6BF2622;color:#c49a00">🏠 Family</span>`;
+  function openEventModal(dateStr) {
+    document.getElementById('eventModalTitle').textContent = 'Add Event';
+    document.getElementById('eventTitle').value = '';
+    document.getElementById('eventDesc').value = '';
+    document.getElementById('eventLocation').value = '';
+    document.getElementById('eventAllDay').checked = false;
+    document.getElementById('eventMember').value = '';
+    if (dateStr) {
+      document.getElementById('eventStart').value = dateStr + 'T09:00';
+      document.getElementById('eventEnd').value = dateStr + 'T10:00';
+    } else {
+      const now = new Date();
+      document.getElementById('eventStart').value = toLocalISO(now);
+      document.getElementById('eventEnd').value = toLocalISO(new Date(now.getTime() + 3600000));
+    }
+    document.getElementById('eventModal').style.display = 'flex';
+    document.getElementById('eventTitle').focus();
   }
-  tagsEl.innerHTML = tags;
 
-  // Delete button
-  document.getElementById('eventDetailDelete').onclick = () => {
-    closeEventDetail();
-    deleteEvent(eventId);
-  };
+  function closeEventModal() {
+    const el = document.getElementById('eventModal');
+    if (el) el.style.display = 'none';
+  }
 
-  document.getElementById('eventDetailModal').style.display = 'flex';
-}
+  async function saveEvent() {
+    const title = document.getElementById('eventTitle').value.trim();
+    if (!title) { showToast('Please enter a title', 'error'); return; }
+    const who = document.getElementById('eventMember').value;
+    if (!who) { showToast('Select a person or Family for this event', 'error'); return; }
+    const isFamily = who === 'family';
+    const payload = {
+      title,
+      description: document.getElementById('eventDesc').value.trim(),
+      location: document.getElementById('eventLocation').value.trim(),
+      start_datetime: document.getElementById('eventStart').value,
+      end_datetime: document.getElementById('eventEnd').value,
+      all_day: document.getElementById('eventAllDay').checked,
+      member_id: isFamily ? null : Number(who),
+      is_family: isFamily,
+    };
+    try {
+      await API.post('/api/calendar/events', payload);
+      closeEventModal();
+      if (isFamily) {
+        showToast('✅ Event saved to the family calendar', 'success');
+      } else {
+        const person = members.find(m => String(m.id) === String(who));
+        const name = person ? person.name : 'their';
+        showToast(`✅ Event saved to ${name}'s calendar`, 'success');
+      }
+      loadEvents();
+    } catch (e) {
+      showToast(e.message || 'Failed to save event', 'error');
+    }
+  }
 
-function closeEventDetail() {
-  document.getElementById('eventDetailModal').style.display = 'none';
-}
+  async function deleteEvent(id) {
+    if (!confirm('Delete this event?')) return;
+    try {
+      await API.delete(`/api/calendar/events/${id}`);
+      showToast('Event deleted', '');
+      await loadEvents();
+      if (selectedDay) selectDay(selectedDay);
+    } catch (e) {
+      showToast('Failed to delete', 'error');
+    }
+  }
 
-async function loadSyncStatus() {
-  try {
-    const data = await API.get('/api/calendar/sync/status');
-    const el = document.getElementById('syncStatus');
-    if (!el || !data.last_synced) return;
-    const mins = Math.round((Date.now() - new Date(data.last_synced + 'Z').getTime()) / 60000);
-    el.textContent = mins < 2 ? 'Synced just now' : `Synced ${mins}m ago`;
-  } catch(e) {}
-}
+  function showEventDetail(eventId, domEvent) {
+    domEvent.stopPropagation();
+    const e = allEvents.find(ev => ev.id === eventId);
+    if (!e) return;
 
-async function syncGoogle() {
-  const btn = document.getElementById('syncBtn');
-  btn.textContent = '⏳ Syncing...';
-  btn.disabled = true;
-  try {
-    const r = await API.post('/api/calendar/sync/all', {});
-    showToast(`✅ Synced ${r.synced || 0} events`, 'success');
-    loadEvents();
+    const color = eventDisplayColor(e);
+    document.getElementById('eventDetailBar').style.background = color;
+    document.getElementById('eventDetailTitle').textContent = e.title;
+
+    let timeStr;
+    if (e.all_day) {
+      const start = new Date(e.start_datetime.split('T')[0] + 'T12:00:00');
+      const end   = e.end_datetime ? new Date(e.end_datetime.split('T')[0] + 'T12:00:00') : null;
+      const fmt = d => d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', timeZone: TZ });
+      timeStr = end && e.end_datetime.split('T')[0] !== e.start_datetime.split('T')[0]
+        ? `${fmt(start)} – ${fmt(end)}`
+        : fmt(start);
+      timeStr += ' · All day';
+    } else {
+      const start = new Date(e.start_datetime);
+      timeStr = start.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', timeZone: TZ })
+        + ' · ' + formatTime(e.start_datetime);
+      if (e.end_datetime) timeStr += ' – ' + formatTime(e.end_datetime);
+    }
+    document.getElementById('eventDetailTime').textContent = timeStr;
+
+    const locEl = document.getElementById('eventDetailLocation');
+    if (e.location && e.location.trim()) {
+      const mapsUrl = `https://maps.google.com/?q=${encodeURIComponent(e.location)}`;
+      locEl.innerHTML = `<a href="${mapsUrl}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">📍 ${escapeHtml(e.location)}</a>`;
+      locEl.style.display = 'block';
+    } else {
+      locEl.style.display = 'none';
+    }
+
+    const descEl = document.getElementById('eventDetailDesc');
+    const descHtml = e.description ? eventBodyHtml(e.description) : '';
+    if (descHtml.replace(/<br>/g, '').trim()) {
+      descEl.innerHTML = descHtml;
+      descEl.style.display = 'block';
+    } else {
+      descEl.innerHTML = '';
+      descEl.style.display = 'none';
+    }
+
+    const tagsEl = document.getElementById('eventDetailTags');
+    let tags = '';
+    if (e.member_name) {
+      tags += `<span class="event-detail-tag" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></span>`;
+    } else if (e.is_family) {
+      tags += `<span class="event-detail-tag" style="background:#F6BF2622;color:#c49a00">🏠 Family</span>`;
+    }
+    tagsEl.innerHTML = tags;
+
+    document.getElementById('eventDetailDelete').onclick = () => {
+      closeEventDetail();
+      deleteEvent(eventId);
+    };
+
+    document.getElementById('eventDetailModal').style.display = 'flex';
+  }
+
+  function closeEventDetail() {
+    const el = document.getElementById('eventDetailModal');
+    if (el) el.style.display = 'none';
+  }
+
+  async function loadSyncStatus() {
+    try {
+      const data = await API.get('/api/calendar/sync/status');
+      const el = document.getElementById('syncStatus');
+      if (!el || !data.last_synced) return;
+      const mins = Math.round((Date.now() - new Date(data.last_synced + 'Z').getTime()) / 60000);
+      el.textContent = mins < 2 ? 'Synced just now' : `Synced ${mins}m ago`;
+    } catch (e) {}
+  }
+
+  async function syncGoogle() {
+    const btn = document.getElementById('syncBtn');
+    if (!btn) return;
+    btn.textContent = '⏳ Syncing...';
+    btn.disabled = true;
+    try {
+      const r = await API.post('/api/calendar/sync/all', {});
+      showToast(`✅ Synced ${r.synced || 0} events`, 'success');
+      loadEvents();
+      loadSyncStatus();
+    } catch (e) {
+      showToast('Sync failed — check calendar connections in Settings', 'error');
+    } finally {
+      btn.textContent = '🔄 Sync Calendars';
+      btn.disabled = false;
+    }
+  }
+
+  function _blockFileDrop(e) {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+  }
+
+  window.openEventModal = openEventModal;
+  window.closeEventDetail = closeEventDetail;
+  window.selectDay = selectDay;
+  window.showEventDetail = showEventDetail;
+  window.deleteEvent = deleteEvent;
+
+  function mount() {
+    onPersonFilterChange(() => loadEvents());
+    renderCalendar();
+
+    initAppTimezone().then(() => {
+      if (FHRouter.currentRoute() !== '/calendar.html') return;
+      renderCalendar();
+      loadEvents();
+    });
+
+    const cachedMembers = API.peek('/api/members/');
+    if (cachedMembers) {
+      members = cachedMembers;
+      populateMemberSelect();
+    }
+    API.get('/api/members/').then(rows => {
+      members = rows || [];
+      if (FHRouter.currentRoute() === '/calendar.html') populateMemberSelect();
+    }).catch(() => {});
     loadSyncStatus();
-  } catch(e) {
-    showToast('Sync failed — check calendar connections in Settings', 'error');
-  } finally {
-    btn.textContent = '🔄 Sync Calendars';
-    btn.disabled = false;
+
+    document.getElementById('prevMonth').onclick = () => { currentDate.setMonth(currentDate.getMonth() - 1); renderCalendar(); loadEvents(); };
+    document.getElementById('nextMonth').onclick = () => { currentDate.setMonth(currentDate.getMonth() + 1); renderCalendar(); loadEvents(); };
+    document.getElementById('todayBtn').onclick = () => { currentDate = new Date(); renderCalendar(); loadEvents(); };
+    document.getElementById('addEventBtn').onclick = () => openEventModal();
+    document.getElementById('closeEventModal').onclick = closeEventModal;
+    document.getElementById('cancelEventModal').onclick = closeEventModal;
+    document.getElementById('saveEvent').onclick = saveEvent;
+    document.getElementById('addEventDayBtn').onclick = () => openEventModal(selectedDay);
+    document.getElementById('closeDayPanel').onclick = () => {
+      document.getElementById('dayEventsPanel').style.display = 'none';
+    };
+    document.getElementById('syncBtn').onclick = syncGoogle;
+    document.getElementById('eventModal').onclick = (e) => {
+      if (e.target.id === 'eventModal') closeEventModal();
+    };
+
+    document.addEventListener('dragover', _blockFileDrop);
+    document.addEventListener('drop', _blockFileDrop);
+
+    return unmount;
   }
-}
+
+  function unmount() {
+    document.removeEventListener('dragover', _blockFileDrop);
+    document.removeEventListener('drop', _blockFileDrop);
+  }
+
+  FHRouter.register('/calendar.html', { mount, unmount });
+})();

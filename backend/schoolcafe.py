@@ -3,6 +3,7 @@
 Weekly menus are a dict keyed by M/D/YYYY, then category, then item list.
 Serving lines come from GetServiceLine (the schools list leaves them blank).
 """
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta
@@ -10,20 +11,22 @@ from urllib.parse import quote
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from database import get_db
+from database import get_db, get_setting_value, invalidate_settings_cache
 import outbound
 
 BASE = "https://webapis.schoolcafe.com/api"
 HEADERS = {"Accept": "application/json", "User-Agent": "FamilyHub/1.0"}
 _CACHE = {}
+_INFLIGHT: dict[str, asyncio.Task] = {}
 _TTL = 6 * 3600
+_STALE_TTL = 48 * 3600
 
 
 class SchoolCafeError(Exception):
     pass
 
 
-def _client(timeout: float = 20.0):
+def _client(timeout: float = 6.0):
     # Shares the process-wide client (IPv4, no env proxy). Headers stay on
     # this call so other APIs are not forced to SchoolCafe's Accept.
     return outbound.client(timeout=timeout, headers=HEADERS)
@@ -39,36 +42,62 @@ def _cache_get(key):
     return value
 
 
+def _cache_get_stale(key):
+    hit = _CACHE.get(key)
+    if not hit:
+        return None
+    ts, value = hit
+    if time.monotonic() - ts > _STALE_TTL:
+        return None
+    return value
+
+
 def _cache_set(key, value):
     _CACHE[key] = (time.monotonic(), value)
     return value
 
 
+async def _cached_fetch(cache_key: str, loader):
+    fresh = _cache_get(cache_key)
+    if fresh is not None:
+        return fresh
+    stale = _cache_get_stale(cache_key)
+    if stale is not None:
+        task = _INFLIGHT.get(cache_key)
+        if task is None or task.done():
+            async def _bg():
+                try:
+                    await loader()
+                except Exception:
+                    pass
+                finally:
+                    _INFLIGHT.pop(cache_key, None)
+            _INFLIGHT[cache_key] = asyncio.create_task(_bg())
+        return stale
+    task = _INFLIGHT.get(cache_key)
+    if task is None or task.done():
+        task = asyncio.create_task(loader())
+        _INFLIGHT[cache_key] = task
+    try:
+        return await task
+    finally:
+        if _INFLIGHT.get(cache_key) is task and task.done():
+            _INFLIGHT.pop(cache_key, None)
+
+
 def app_today():
     import pytz
-    tz_name = "America/New_York"
+    tz_name = get_setting_value("timezone", "America/New_York") or "America/New_York"
     try:
-        conn = get_db()
-        row = conn.execute("SELECT value FROM settings WHERE key = 'timezone'").fetchone()
-        conn.close()
-        if row and row["value"]:
-            tz_name = row["value"]
+        tz = pytz.timezone(tz_name)
     except Exception:
-        pass
-    now = datetime.now(pytz.timezone(tz_name))
+        tz = pytz.timezone("America/New_York")
+    now = datetime.now(tz)
     return now.strftime("%Y-%m-%d"), now.hour
 
 
 def setting(key, default=""):
-    try:
-        conn = get_db()
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        conn.close()
-        if row and row["value"] is not None:
-            return row["value"]
-    except Exception:
-        pass
-    return default
+    return get_setting_value(key, default)
 
 
 def line_overrides():
@@ -97,6 +126,7 @@ def save_line_override(school_id, breakfast, lunch):
     )
     conn.commit()
     conn.close()
+    invalidate_settings_cache()
     return current
 
 
@@ -212,78 +242,81 @@ async def search_districts(query: str):
 
 async def list_schools(district_id: str):
     cache_key = f"schools:{district_id}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-    async with _client() as client:
-        data = await _get_json(client, "GetSchoolsList", {"districtId": district_id})
-    if not isinstance(data, list):
-        return None
-    schools = []
-    seen = set()
-    for row in data:
-        if not isinstance(row, dict):
-            continue
-        sid = row.get("SchoolId")
-        name = (row.get("SchoolName") or "").strip()
-        if not sid or sid in seen or not name:
-            continue
-        seen.add(sid)
-        schools.append({
-            "id": sid,
-            "name": name,
-            "type": row.get("SiteTypeDescription") or "",
-        })
-    schools.sort(key=lambda s: s["name"].lower())
-    return _cache_set(cache_key, schools)
+
+    async def _load():
+        async with _client() as client:
+            data = await _get_json(client, "GetSchoolsList", {"districtId": district_id})
+        if not isinstance(data, list):
+            return None
+        schools = []
+        seen = set()
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            sid = row.get("SchoolId")
+            name = (row.get("SchoolName") or "").strip()
+            if not sid or sid in seen or not name:
+                continue
+            seen.add(sid)
+            schools.append({
+                "id": sid,
+                "name": name,
+                "type": row.get("SiteTypeDescription") or "",
+            })
+        schools.sort(key=lambda s: s["name"].lower())
+        return _cache_set(cache_key, schools)
+
+    return await _cached_fetch(cache_key, _load)
 
 
 async def serving_lines(school_id: str, meal_type: str, iso_date: str):
     monday = monday_of(iso_date)
     sunday = (datetime.strptime(monday, "%Y-%m-%d").date() + timedelta(days=6)).isoformat()
     cache_key = f"lines:{school_id}:{meal_type}:{monday}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-    params = {
-        "schoolid": school_id,
-        "startdate": _mdy(monday),
-        "enddate": _mdy(sunday),
-        "mealtype": meal_type,
-    }
-    async with _client() as client:
-        data = await _get_json(client, "GetServiceLine", params)
-    lines = []
-    if isinstance(data, list):
-        for row in data:
-            if not isinstance(row, dict):
-                continue
-            name = (row.get("ServingLineDescription") or "").strip()
-            if name and name not in lines:
-                lines.append(name)
-    if not lines:
-        return []
-    return _cache_set(cache_key, lines)
+
+    async def _load():
+        params = {
+            "schoolid": school_id,
+            "startdate": _mdy(monday),
+            "enddate": _mdy(sunday),
+            "mealtype": meal_type,
+        }
+        async with _client() as client:
+            data = await _get_json(client, "GetServiceLine", params)
+        lines = []
+        if isinstance(data, list):
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                name = (row.get("ServingLineDescription") or "").strip()
+                if name and name not in lines:
+                    lines.append(name)
+        if not lines:
+            return []
+        return _cache_set(cache_key, lines)
+
+    return await _cached_fetch(cache_key, _load)
 
 
 async def weekly_menu(school_id: str, meal_type: str, serving_line: str, iso_date: str):
     monday = monday_of(iso_date)
     cache_key = f"week:{school_id}:{meal_type}:{serving_line}:{monday}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-    params = {
-        "SchoolId": school_id,
-        "ServingDate": _mdy(monday),
-        "ServingLine": serving_line,
-        "MealType": meal_type,
-        "enabledWeekendMenus": "true",
-    }
-    async with _client() as client:
-        data = await _get_json(client, "CalendarView/GetWeeklyMenuitems", params)
-    if not isinstance(data, dict) or not data:
-        return {}
-    return _cache_set(cache_key, data)
+
+    async def _load():
+        params = {
+            "SchoolId": school_id,
+            "ServingDate": _mdy(monday),
+            "ServingLine": serving_line,
+            "MealType": meal_type,
+            "enabledWeekendMenus": "true",
+        }
+        async with _client() as client:
+            data = await _get_json(client, "CalendarView/GetWeeklyMenuitems", params)
+        if not isinstance(data, dict) or not data:
+            return {}
+        return _cache_set(cache_key, data)
+
+    return await _cached_fetch(cache_key, _load)
 
 
 async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = ""):

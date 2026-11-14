@@ -19,7 +19,7 @@ ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 
 @router.get("/")
-async def get_photos():
+def get_photos():
     """Return list of uploaded photo URLs for the slideshow."""
     try:
         files = [
@@ -28,7 +28,7 @@ async def get_photos():
         ]
         urls = [f"/api/photos/file/{f}" for f in sorted(files)]
         return {"photos": urls, "count": len(urls)}
-    except Exception as e:
+    except Exception:
         return {"photos": [], "count": 0}
 
 

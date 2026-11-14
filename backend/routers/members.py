@@ -179,12 +179,15 @@ def delete_member(member_id: int):
 
 
 @router.get("/avatar/{filename}")
-def serve_avatar(filename: str):
+async def serve_avatar(filename: str):
     filename = os.path.basename(filename)
     path = os.path.join(_avatars_dir(), filename)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Avatar not found")
-    return FileResponse(path)
+    return FileResponse(
+        path,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @router.post("/{member_id}/avatar")

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import os
 
-from database import init_db, get_db
+from database import init_db, get_setting_value
 from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
 import json
 import outbound
@@ -24,12 +24,10 @@ async def _reminder_loop():
                 _fired_today.clear()
                 _last_date = today
             hhmm = now.strftime("%H:%M")
-            conn = get_db()
-            row = conn.execute("SELECT value FROM settings WHERE key='chore_reminders'").fetchone()
-            conn.close()
-            if not row or not row["value"]:
+            raw = get_setting_value("chore_reminders", "")
+            if not raw:
                 continue
-            reminders = json.loads(row["value"])
+            reminders = json.loads(raw)
             for r in reminders:
                 if not r.get("enabled"):
                     continue
@@ -57,10 +55,8 @@ async def _auto_sync_loop():
     await asyncio.sleep(30)  # let the app fully start first
     while True:
         try:
-            conn = get_db()
-            row = conn.execute("SELECT value FROM settings WHERE key='google_sync_interval'").fetchone()
-            conn.close()
-            interval = int(row["value"]) if row and row["value"] else 0
+            raw = get_setting_value("google_sync_interval", "")
+            interval = int(raw) if raw else 0
             if interval > 0:
                 await calendar.run_full_sync()
                 await asyncio.sleep(interval * 60)
@@ -95,7 +91,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Family Hub", lifespan=lifespan)
 
 class _GzipExceptMedia:
-    """Gzip text responses. Leave camera streams and photo files alone."""
+    """Gzip text responses, add immutable Cache-Control on versioned static
+    assets (crucial on LAN HTTP where Service Workers do not run), and leave
+    camera streams, photos, and avatars uncompressed."""
 
     def __init__(self, app, minimum_size: int = 500):
         self.app = app
@@ -104,9 +102,36 @@ class _GzipExceptMedia:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             path = scope.get("path") or ""
-            if path.startswith("/api/security/camera/") or path.startswith("/api/photos/file/"):
+            if (
+                path.startswith("/api/security/camera/")
+                or path.startswith("/api/photos/file/")
+                or path.startswith("/api/members/avatar/")
+            ):
                 await self.app(scope, receive, send)
                 return
+
+            qs = scope.get("query_string") or b""
+            cache_hdr = None
+            if (path.startswith("/js/") or path.startswith("/css/")) and b"v=" in qs:
+                cache_hdr = b"public, max-age=31536000, immutable"
+            elif path.startswith("/icons/") or path == "/favicon.svg":
+                cache_hdr = b"public, max-age=86400"
+
+            if cache_hdr is not None:
+                async def send_with_cache(message):
+                    if message["type"] == "http.response.start" and message.get("status") == 200:
+                        headers = [
+                            (k, v)
+                            for k, v in message.get("headers", [])
+                            if k.lower() != b"cache-control"
+                        ]
+                        headers.append((b"cache-control", cache_hdr))
+                        message = {**message, "headers": headers}
+                    await send(message)
+
+                await self._gzip(scope, receive, send_with_cache)
+                return
+
         await self._gzip(scope, receive, send)
 
 

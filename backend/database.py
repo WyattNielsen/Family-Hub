@@ -1,5 +1,7 @@
 import sqlite3
 import os
+import threading
+import time
 
 _data_dir = os.environ.get("DATA_DIR")
 DB_PATH = (
@@ -8,16 +10,56 @@ DB_PATH = (
     or "/data/familyhub.db"
 )
 
+_settings_lock = threading.Lock()
+_settings_cache: tuple[float, dict[str, str]] | None = None
+_SETTINGS_TTL = 5.0
+
+
 def get_db():
     # WAL is persisted on the database file by init_db. Asking for it again
     # on every connection takes a lock, and a page load opens many connections
     # at once. foreign_keys and synchronous are per connection and cheap.
-    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=15000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-8000")
     return conn
+
+
+def get_settings_map() -> dict[str, str]:
+    """Return all settings from a short-lived in-memory cache to avoid opening
+    SQLite connections on the asyncio event loop during page transitions."""
+    global _settings_cache
+    now = time.monotonic()
+    hit = _settings_cache
+    if hit is not None and now - hit[0] < _SETTINGS_TTL:
+        return hit[1]
+    with _settings_lock:
+        hit = _settings_cache
+        if hit is not None and time.monotonic() - hit[0] < _SETTINGS_TTL:
+            return hit[1]
+        conn = get_db()
+        try:
+            rows = conn.execute("SELECT key, value FROM settings").fetchall()
+            data = {r["key"]: r["value"] for r in rows}
+        finally:
+            conn.close()
+        _settings_cache = (time.monotonic(), data)
+        return data
+
+
+def get_setting_value(key: str, default: str = "") -> str:
+    val = get_settings_map().get(key)
+    return default if val is None else val
+
+
+def invalidate_settings_cache():
+    global _settings_cache
+    with _settings_lock:
+        _settings_cache = None
 
 def init_db():
     conn = get_db()
@@ -218,7 +260,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_datetime);
         CREATE INDEX IF NOT EXISTS idx_events_end ON events(end_datetime);
         CREATE INDEX IF NOT EXISTS idx_events_member ON events(member_id, is_family);
+        CREATE INDEX IF NOT EXISTS idx_events_ext_source ON events(external_source_id);
+        CREATE INDEX IF NOT EXISTS idx_events_google_id ON events(google_event_id);
         CREATE INDEX IF NOT EXISTS idx_chores_assigned ON chores(assigned_to, completed, due_date);
+        CREATE INDEX IF NOT EXISTS idx_chores_completed ON chores(completed, assigned_to);
         CREATE INDEX IF NOT EXISTS idx_chores_due ON chores(due_date);
         CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
         CREATE INDEX IF NOT EXISTS idx_shopping_checked ON shopping_items(checked);
@@ -226,4 +271,5 @@ def init_db():
     conn.commit()
 
     conn.close()
+    invalidate_settings_cache()
     print("Database initialized.")

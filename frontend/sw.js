@@ -1,10 +1,25 @@
-// App shell cache. Versioned JS/CSS (?v=N) can be served from cache.
-// HTML is shown from cache immediately, then refreshed in the background.
-// API calls skip the worker.
-const CACHE = 'familyhub-v3';
+// App shell cache. Versioned JS/CSS (?v=N) are served cache-first.
+// HTML pages are pre-cached on install and served immediately from cache.
+// API calls skip the worker completely.
+const CACHE = 'familyhub-v4';
+const SHELL_HTML = [
+  '/',
+  '/calendar.html',
+  '/chores.html',
+  '/meals.html',
+  '/shopping.html',
+  '/security.html',
+  '/messages.html',
+  '/settings.html',
+];
 
 self.addEventListener('install', e => {
   self.skipWaiting();
+  e.waitUntil(
+    caches.open(CACHE).then(cache =>
+      Promise.allSettled(SHELL_HTML.map(url => cache.add(url)))
+    )
+  );
 });
 
 self.addEventListener('activate', e => {
@@ -15,8 +30,12 @@ self.addEventListener('activate', e => {
   );
 });
 
-function isVersionedAsset(url) {
-  return url.pathname.startsWith('/js/') || url.pathname.startsWith('/css/');
+function isImmutableAsset(url) {
+  return (
+    ((url.pathname.startsWith('/js/') || url.pathname.startsWith('/css/')) && url.search.includes('v=')) ||
+    url.pathname.startsWith('/icons/') ||
+    url.pathname === '/favicon.svg'
+  );
 }
 
 self.addEventListener('fetch', e => {
@@ -25,14 +44,14 @@ self.addEventListener('fetch', e => {
   if (url.origin !== location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
 
-  if (isVersionedAsset(url)) {
+  if (isImmutableAsset(url)) {
     e.respondWith(
       caches.match(e.request).then(hit => {
         if (hit) return hit;
         return fetch(e.request).then(res => {
           if (res && res.ok) {
             const copy = res.clone();
-            caches.open(CACHE).then(c => c.put(e.request, copy));
+            e.waitUntil(caches.open(CACHE).then(c => c.put(e.request, copy)));
           }
           return res;
         });
@@ -43,15 +62,25 @@ self.addEventListener('fetch', e => {
 
   e.respondWith(
     caches.open(CACHE).then(cache => cache.match(e.request).then(hit => {
-      const fresh = fetch(e.request).then(res => {
-        if (res && res.ok) cache.put(e.request, res.clone());
-        return res;
-      });
       if (hit) {
-        fresh.catch(() => {});
+        // Defer background HTML revalidation slightly so initial API requests
+        // never compete with SW background fetches for HTTP/1.1 connections.
+        e.waitUntil(
+          new Promise(r => setTimeout(r, 1500)).then(() =>
+            fetch(e.request).then(res => {
+              if (res && res.ok) return cache.put(e.request, res.clone());
+            }).catch(() => {})
+          )
+        );
         return hit;
       }
-      return fresh;
+      return fetch(e.request).then(res => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          e.waitUntil(cache.put(e.request, copy));
+        }
+        return res;
+      });
     }))
   );
 });

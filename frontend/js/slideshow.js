@@ -6,10 +6,11 @@ const Slideshow = (() => {
   let currentIndex = 0;
   let inactivityTimer = null;
   let slideTimer = null;
+  let slideTimer2 = null;
   let isActive = false;
+  let initialized = false;
   let timeoutMinutes = 2;
   let intervalSeconds = 5;
-  let overlay = null;
 
   async function loadConfig() {
     try {
@@ -22,8 +23,7 @@ const Slideshow = (() => {
   async function loadPhotos() {
     try {
       const data = await API.get('/api/photos/');
-      photos = data.photos || [];
-      // Shuffle photos
+      photos = (data.photos || []).slice();
       for (let i = photos.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [photos[i], photos[j]] = [photos[j], photos[i]];
@@ -55,7 +55,6 @@ const Slideshow = (() => {
       if (!e.target.closest('.slideshow-controls')) stop();
     });
     document.body.appendChild(el);
-    overlay = el;
   }
 
   let bg1Active = true;
@@ -94,7 +93,7 @@ const Slideshow = (() => {
   async function start() {
     if (isActive) return;
     await loadPhotos();
-    if (!photos.length) return; // No photos configured, don't show
+    if (!photos.length) return;
 
     isActive = true;
     currentIndex = 0;
@@ -111,7 +110,6 @@ const Slideshow = (() => {
       showPhoto(currentIndex);
     }, intervalSeconds * 1000);
 
-    // Update clock every second
     slideTimer2 = setInterval(updateClock, 1000);
   }
 
@@ -122,19 +120,19 @@ const Slideshow = (() => {
     clearInterval(slideTimer2);
 
     const el = document.getElementById('slideshowOverlay');
-    if (el) {
-      el.classList.remove('active');
-    }
+    if (el) el.classList.remove('active');
     resetInactivityTimer();
   }
 
   function next() {
+    if (!photos.length) return;
     currentIndex = (currentIndex + 1) % photos.length;
     showPhoto(currentIndex);
     resetSlideTimer();
   }
 
   function prev() {
+    if (!photos.length) return;
     currentIndex = (currentIndex - 1 + photos.length) % photos.length;
     showPhoto(currentIndex);
     resetSlideTimer();
@@ -148,6 +146,7 @@ const Slideshow = (() => {
     }, intervalSeconds * 1000);
   }
 
+  let _lastResetTs = 0;
   function resetInactivityTimer() {
     clearTimeout(inactivityTimer);
     if (isActive) return;
@@ -160,18 +159,21 @@ const Slideshow = (() => {
     loadConfig().then(() => {
       resetInactivityTimer();
     });
+    if (initialized) return;
+    initialized = true;
 
-    // Reset timer on any user activity
     ['mousemove', 'mousedown', 'keypress', 'touchstart', 'scroll', 'click'].forEach(evt => {
       document.addEventListener(evt, () => {
         if (isActive) return;
+        const now = Date.now();
+        if (now - _lastResetTs < 1000) return;
+        _lastResetTs = now;
         resetInactivityTimer();
       }, { passive: true });
     });
   }
 
-  return { init, start, stop, next, prev };
+  return { init, start, stop, next, prev, reloadConfig: loadConfig };
 })();
 
-// Auto-init on page load
 document.addEventListener('DOMContentLoaded', () => Slideshow.init());

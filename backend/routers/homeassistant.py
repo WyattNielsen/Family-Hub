@@ -1,11 +1,38 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+import asyncio
 import json
+import time
 import outbound
-from database import get_db
+from database import get_settings_map
 
 router = APIRouter()
+
+_HA_TTL = 8.0
+_HA_STALE_TTL = 120.0
+_ha_cache: dict = {"key": None, "at": 0.0, "payload": None}
+_ha_inflight: asyncio.Task | None = None
+
+
+def invalidate_ha_cache():
+    _ha_cache["key"] = None
+    _ha_cache["at"] = 0.0
+    _ha_cache["payload"] = None
+
+
+def _optimistic_cache_update(entity_id: str, new_raw_state: str):
+    payload = _ha_cache.get("payload")
+    if not payload or "entities" not in payload:
+        return
+    updated = []
+    for item in payload["entities"]:
+        if item.get("entity_id") == entity_id:
+            updated.append(shape_state(entity_id, item.get("name") or entity_id, new_raw_state))
+        else:
+            updated.append(item)
+    _ha_cache["payload"] = {"entities": updated}
+    _ha_cache["at"] = time.monotonic()
 
 # ── Alarm control panel ───────────────────────────────────────
 
@@ -77,14 +104,35 @@ def shape_state(entity_id: str, name: str, raw: str) -> dict:
 
 # ── Routes ────────────────────────────────────────────────────
 
+async def _fetch_single_entity(client, base_url: str, headers: dict, entity_id: str, name: str) -> dict:
+    try:
+        resp = await client.get(f"{base_url}/api/states/{entity_id}", headers=headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            return shape_state(entity_id, name, data.get("state", "unknown"))
+    except Exception as e:
+        print(f"HA fetch error for {entity_id}: {e}")
+    return _unavailable(entity_id, name)
+
+
+async def _refresh_ha_states(cache_key: tuple, ha_url: str, ha_token: str, named: list[tuple[str, str]]) -> dict:
+    base_url = ha_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
+    async with outbound.client(timeout=4.0) as client:
+        results = await asyncio.gather(
+            *[_fetch_single_entity(client, base_url, headers, eid, name) for eid, name in named if eid]
+        )
+    payload = {"entities": list(results)}
+    _ha_cache["key"] = cache_key
+    _ha_cache["at"] = time.monotonic()
+    _ha_cache["payload"] = payload
+    return payload
+
+
 @router.get("/states")
 async def get_ha_states():
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT key, value FROM settings WHERE key IN ('ha_url', 'ha_token', 'ha_entities')"
-    ).fetchall()
-    conn.close()
-    s = {r["key"]: r["value"] for r in rows}
+    global _ha_inflight
+    s = get_settings_map()
 
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
@@ -101,33 +149,29 @@ async def get_ha_states():
     if not entities:
         return {"error": "not_configured"}
 
-    named = [(e.get("entity_id", ""), e.get("name") or e.get("entity_id", "")) for e in entities]
-    states = {}
-    try:
-        async with outbound.client(timeout=10.0) as client:
-            resp = await client.get(
-                f"{ha_url.rstrip('/')}/api/states",
-                headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
-            )
-        if resp.status_code != 200:
-            raise RuntimeError(f"HA returned {resp.status_code}")
-        for row in resp.json():
-            if isinstance(row, dict) and row.get("entity_id"):
-                states[row["entity_id"]] = row.get("state", "unknown")
-    except Exception as e:
-        print(f"HA states fetch error: {e}")
-        return {"entities": [_unavailable(entity_id, name) for entity_id, name in named if entity_id]}
+    named = [(e.get("entity_id", ""), e.get("name") or e.get("entity_id", "")) for e in entities if e.get("entity_id")]
+    if not named:
+        return {"error": "not_configured"}
 
-    results = []
-    for entity_id, name in named:
-        if not entity_id:
-            continue
-        raw = states.get(entity_id)
-        if raw is None:
-            results.append(_unavailable(entity_id, name))
-        else:
-            results.append(shape_state(entity_id, name, raw))
-    return {"entities": results}
+    cache_key = (ha_url, ha_token, tuple(named))
+    now = time.monotonic()
+    if _ha_cache["payload"] is not None and _ha_cache["key"] == cache_key:
+        age = now - _ha_cache["at"]
+        if age < _HA_TTL:
+            return _ha_cache["payload"]
+        if age < _HA_STALE_TTL:
+            if _ha_inflight is None or _ha_inflight.done():
+                _ha_inflight = asyncio.create_task(_refresh_ha_states(cache_key, ha_url, ha_token, named))
+            return _ha_cache["payload"]
+
+    if _ha_inflight is None or _ha_inflight.done():
+        _ha_inflight = asyncio.create_task(_refresh_ha_states(cache_key, ha_url, ha_token, named))
+    task = _ha_inflight
+    try:
+        return await task
+    finally:
+        if _ha_inflight is task and task.done():
+            _ha_inflight = None
 
 
 class HAActionRequest(BaseModel):
@@ -139,13 +183,7 @@ async def cover_action(action: str, body: HAActionRequest):
     if action not in valid_actions:
         raise HTTPException(status_code=400, detail="Invalid action")
 
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT key, value FROM settings WHERE key IN ('ha_url', 'ha_token')"
-    ).fetchall()
-    conn.close()
-    s = {r["key"]: r["value"] for r in rows}
-
+    s = get_settings_map()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
 
@@ -153,7 +191,7 @@ async def cover_action(action: str, body: HAActionRequest):
         raise HTTPException(status_code=400, detail="HA not configured")
 
     try:
-        async with outbound.client(timeout=10.0) as client:
+        async with outbound.client(timeout=6.0) as client:
             resp = await client.post(
                 f"{ha_url.rstrip('/')}/api/services/cover/{action}",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
@@ -167,6 +205,10 @@ async def cover_action(action: str, body: HAActionRequest):
         print(f"HA cover action error: {e}")
         raise HTTPException(status_code=502, detail="Could not reach Home Assistant")
 
+    if action in ("open_cover", "close_cover"):
+        _optimistic_cache_update(body.entity_id, "opening" if action == "open_cover" else "closing")
+    else:
+        invalidate_ha_cache()
     return {"ok": True}
 
 
@@ -176,13 +218,7 @@ async def alarm_action(action: str, body: HAActionRequest):
     if action not in valid_actions:
         raise HTTPException(status_code=400, detail="Invalid action")
 
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT key, value FROM settings WHERE key IN ('ha_url', 'ha_token', 'ha_alarm_code')"
-    ).fetchall()
-    conn.close()
-    s = {r["key"]: r["value"] for r in rows}
-
+    s = get_settings_map()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
     alarm_code = s.get("ha_alarm_code", "").strip()
@@ -195,7 +231,7 @@ async def alarm_action(action: str, body: HAActionRequest):
         payload["code"] = alarm_code
 
     try:
-        async with outbound.client(timeout=10.0) as client:
+        async with outbound.client(timeout=6.0) as client:
             resp = await client.post(
                 f"{ha_url.rstrip('/')}/api/services/alarm_control_panel/{action}",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
@@ -209,6 +245,13 @@ async def alarm_action(action: str, body: HAActionRequest):
         print(f"HA alarm action error: {e}")
         raise HTTPException(status_code=502, detail="Could not reach Home Assistant")
 
+    expected = {
+        "alarm_disarm": "disarmed",
+        "alarm_arm_away": "armed_away",
+        "alarm_arm_home": "armed_home",
+        "alarm_arm_night": "armed_night",
+    }.get(action, "arming")
+    _optimistic_cache_update(body.entity_id, expected)
     return {"ok": True}
 
 
@@ -221,11 +264,7 @@ class TTSRequest(BaseModel):
 
 @router.post("/tts")
 async def speak_tts(body: TTSRequest):
-    conn = get_db()
-    s = {r["key"]: r["value"] for r in conn.execute(
-        "SELECT key, value FROM settings WHERE key IN ('ha_url', 'ha_token')"
-    ).fetchall()}
-    conn.close()
+    s = get_settings_map()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
     if not ha_url or not ha_token:
@@ -237,7 +276,7 @@ async def speak_tts(body: TTSRequest):
         "message": body.message,
     }
     try:
-        async with outbound.client(timeout=10.0) as client:
+        async with outbound.client(timeout=8.0) as client:
             resp = await client.post(
                 f"{ha_url.rstrip('/')}/api/services/tts/speak",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
@@ -256,17 +295,13 @@ async def speak_tts(body: TTSRequest):
 
 async def fire_tts(message: str, entity_id: str, tts_engine: str = "tts.google_translate_en_com"):
     """Called by the reminder background loop — no HTTP context."""
-    conn = get_db()
-    s = {r["key"]: r["value"] for r in conn.execute(
-        "SELECT key, value FROM settings WHERE key IN ('ha_url', 'ha_token')"
-    ).fetchall()}
-    conn.close()
+    s = get_settings_map()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
     if not ha_url or not ha_token:
         return
     try:
-        async with outbound.client(timeout=10.0) as client:
+        async with outbound.client(timeout=8.0) as client:
             await client.post(
                 f"{ha_url.rstrip('/')}/api/services/tts/speak",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},

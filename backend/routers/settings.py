@@ -1,6 +1,6 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
-from database import get_db
+from database import get_db, get_settings_map, invalidate_settings_cache
 
 router = APIRouter()
 
@@ -20,11 +20,8 @@ def _write_only_flags(stored: dict) -> dict:
 
 
 @router.get("/")
-def get_settings():
-    conn = get_db()
-    rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    conn.close()
-    stored = {r["key"]: r["value"] for r in rows}
+async def get_settings():
+    stored = get_settings_map()
     out = {key: value for key, value in stored.items() if key not in WRITE_ONLY_KEYS}
     out.update(_write_only_flags(stored))
     return out
@@ -57,23 +54,24 @@ def update_settings(payload: dict):
         )
     conn.commit()
     conn.close()
+    invalidate_settings_cache()
     if "stock_symbols" in payload:
         from routers import stocks
         stocks._quote_cache.clear()
     if any(k in payload for k in ("weather_zip", "weather_lat", "weather_lon")):
         from routers import weather
         weather._forecast_cache["payload"] = None
+    if any(k in payload for k in ("ha_url", "ha_token", "ha_entities")):
+        from routers import homeassistant
+        homeassistant.invalidate_ha_cache()
     return {"ok": True}
 
 
 @router.get("/{key}")
-def get_setting(key: str):
-    conn = get_db()
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    conn.close()
+async def get_setting(key: str):
+    stored = get_settings_map()
     if key in WRITE_ONLY_KEYS:
-        value = row["value"] if row else None
-        return {"key": key, "set": _is_set(value)}
-    if not row:
+        return {"key": key, "set": _is_set(stored.get(key))}
+    if key not in stored:
         raise HTTPException(status_code=404, detail="Setting not found")
-    return {"key": key, "value": row["value"]}
+    return {"key": key, "value": stored[key]}

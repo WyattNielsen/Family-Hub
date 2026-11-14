@@ -3,7 +3,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
-import httpx
+import outbound
 import os
 import secrets
 import urllib.parse
@@ -220,7 +220,7 @@ def _store_photos_tokens(access_token: str, refresh_token: Optional[str], expire
 
 
 async def _exchange_code(code: str, redirect_uri: str) -> dict:
-    async with httpx.AsyncClient() as client:
+    async with outbound.client(timeout=10.0) as client:
         resp = await client.post("https://oauth2.googleapis.com/token", data={
             "client_id": GOOGLE_CLIENT_ID,
             "client_secret": GOOGLE_CLIENT_SECRET,
@@ -233,7 +233,7 @@ async def _exchange_code(code: str, redirect_uri: str) -> dict:
         return resp.json()
 
 async def _get_google_email(access_token: str) -> str:
-    async with httpx.AsyncClient() as client:
+    async with outbound.client(timeout=10.0) as client:
         resp = await client.get("https://www.googleapis.com/oauth2/v2/userinfo",
                                 headers={"Authorization": f"Bearer {access_token}"})
         if resp.status_code == 200:
