@@ -111,6 +111,115 @@
       members.map(m => `<option value="${m.id}">${m.avatar || '👤'} ${escapeHtml(m.name)}</option>`).join('');
   }
 
+  const CAL_VISIBLE_LANES = 3;
+
+  function _eventAllDay(e) {
+    return !!(e.all_day || (e.start_datetime && String(e.start_datetime).indexOf('T') === -1));
+  }
+
+  function _eventTimeKey(e) {
+    if (_eventAllDay(e)) return '';
+    const raw = String(e.start_datetime || '');
+    const time = raw.indexOf('T') === -1 ? '' : raw.split('T')[1];
+    return time.slice(0, 5);
+  }
+
+  function _seriesKey(e) {
+    return [
+      _eventAllDay(e) ? '1' : '0',
+      _eventTimeKey(e),
+      e.title || '',
+      e.member_id == null ? '' : String(e.member_id),
+      e.is_family ? '1' : '0',
+    ].join('\u0000');
+  }
+
+  function _cmpSeries(a, b) {
+    if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+    if (b.columns.length !== a.columns.length) return b.columns.length - a.columns.length;
+    if (a.timeKey !== b.timeKey) return a.timeKey < b.timeKey ? -1 : 1;
+    const at = (a.title || '').toLowerCase();
+    const bt = (b.title || '').toLowerCase();
+    if (at !== bt) return at < bt ? -1 : 1;
+    return a.key < b.key ? -1 : 1;
+  }
+
+  // One lane per repeating or multi-day event so the same item stays on the
+  // same row across the week. Single-day events fill the gaps that are left.
+  function _layoutWeekLanes(dateStrs, events) {
+    const byKey = new Map();
+    dateStrs.forEach((dateStr, col) => {
+      if (!dateStr) return;
+      events.forEach(e => {
+        if (!eventOccursOnDate(e, dateStr)) return;
+        const key = _seriesKey(e);
+        let series = byKey.get(key);
+        if (!series) {
+          series = {
+            key,
+            title: e.title,
+            allDay: _eventAllDay(e),
+            timeKey: _eventTimeKey(e),
+            columns: [],
+            eventsByCol: {},
+            extraByCol: {},
+          };
+          byKey.set(key, series);
+        }
+        if (!series.eventsByCol[col]) {
+          series.columns.push(col);
+          series.eventsByCol[col] = e;
+        } else {
+          series.extraByCol[col] = (series.extraByCol[col] || 0) + 1;
+        }
+      });
+    });
+
+    const multi = [];
+    const single = [];
+    byKey.forEach(series => (series.columns.length >= 2 ? multi : single).push(series));
+    multi.sort(_cmpSeries);
+    single.sort(_cmpSeries);
+
+    const laneCols = [];
+    function claim(series) {
+      let lane = 0;
+      while (lane < laneCols.length && series.columns.some(c => laneCols[lane].has(c))) lane += 1;
+      if (!laneCols[lane]) laneCols[lane] = new Set();
+      series.columns.forEach(c => laneCols[lane].add(c));
+      series.lane = lane;
+    }
+    multi.forEach(claim);
+    single.forEach(claim);
+
+    return dateStrs.map((dateStr, col) => {
+      if (!dateStr) return { visible: [], hidden: 0 };
+      const slots = [];
+      let hidden = 0;
+      byKey.forEach(series => {
+        const ev = series.eventsByCol[col];
+        if (!ev) return;
+        const extra = series.extraByCol[col] || 0;
+        if (series.lane < CAL_VISIBLE_LANES) {
+          slots[series.lane] = ev;
+          hidden += extra;
+        } else {
+          hidden += 1 + extra;
+        }
+      });
+      let last = slots.length - 1;
+      while (last >= 0 && !slots[last]) last -= 1;
+      const visible = [];
+      for (let i = 0; i <= last; i++) visible.push(slots[i] || null);
+      return { visible, hidden };
+    });
+  }
+
+  function _eventChipHtml(e) {
+    const color = eventDisplayColor(e);
+    return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${escapeHtml(e.title)}</div>`;
+  }
+
   function renderCalendar() {
     const titleEl = document.getElementById('calendarTitle');
     const grid = document.getElementById('calendarGrid');
@@ -122,42 +231,52 @@
       new Date(year, month).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: TZ });
 
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    let html = days.map(d => `<div class="cal-day-header">${d}</div>`).join('');
+    let html = days.map(d => `<div class="cal-day-header"><span>${d}</span></div>`).join('');
 
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const prevDays = new Date(year, month, 0).getDate();
     const today = new Date();
+    const cells = [];
 
     for (let i = firstDay - 1; i >= 0; i--) {
-      const d = prevDays - i;
-      html += `<div class="cal-day other-month"><div class="cal-date">${d}</div></div>`;
+      cells.push({ inMonth: false, dayNum: prevDays - i });
     }
-
     for (let d = 1; d <= daysInMonth; d++) {
-      const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      const isTodayCell = d === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-      const isSelected = selectedDay === dateStr;
-      const dayEvents = allEvents.filter(e => eventOccursOnDate(e, dateStr));
-      const hasEvents = dayEvents.length > 0;
-
-      html += `<div class="cal-day ${isTodayCell ? 'today' : ''} ${isSelected ? 'selected' : ''} ${hasEvents ? 'has-events' : ''}"
-                 data-date="${dateStr}" onclick="selectDay('${dateStr}')">
-        <div class="cal-date">${isTodayCell ? `<span>${d}</span>` : d}</div>
-        <div class="cal-events">
-          ${dayEvents.slice(0, 3).map(e => {
-            const color = eventDisplayColor(e);
-            return `<div class="cal-event-dot" style="--event:${color}" onclick="showEventDetail(${e.id},event)">${escapeHtml(e.title)}</div>`;
-          }).join('')}
-          ${dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : ''}
-        </div>
-      </div>`;
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      cells.push({
+        inMonth: true,
+        dayNum: d,
+        dateStr,
+        isToday: d === today.getDate() && month === today.getMonth() && year === today.getFullYear(),
+        isSelected: selectedDay === dateStr,
+      });
     }
-
     const totalCells = 42;
-    for (let d = 1; d <= totalCells - firstDay - daysInMonth; d++) {
-      html += `<div class="cal-day other-month"><div class="cal-date">${d}</div></div>`;
+    for (let d = 1; d <= totalCells - cells.length; d++) {
+      cells.push({ inMonth: false, dayNum: d });
     }
+
+    for (let w = 0; w < 6; w++) {
+      const week = cells.slice(w * 7, w * 7 + 7);
+      const laid = _layoutWeekLanes(week.map(c => (c.inMonth ? c.dateStr : null)), allEvents);
+      week.forEach((cell, i) => { cell.lanes = laid[i]; });
+    }
+
+    html += cells.map(cell => {
+      if (!cell.inMonth) {
+        return `<div class="cal-day other-month"><div class="cal-date">${cell.dayNum}</div></div>`;
+      }
+      const lanes = cell.lanes || { visible: [], hidden: 0 };
+      const chips = lanes.visible.map(e => e ? _eventChipHtml(e) : '<div class="cal-event-spacer"></div>').join('');
+      const more = lanes.hidden ? `<div class="cal-more">+${lanes.hidden} more</div>` : '';
+      const hasEvents = lanes.visible.some(Boolean) || lanes.hidden > 0;
+      return `<div class="cal-day ${cell.isToday ? 'today' : ''} ${cell.isSelected ? 'selected' : ''} ${hasEvents ? 'has-events' : ''}"
+                 data-date="${cell.dateStr}" onclick="selectDay('${cell.dateStr}')">
+        <div class="cal-date">${cell.dayNum}</div>
+        <div class="cal-events">${chips}${more}</div>
+      </div>`;
+    }).join('');
 
     grid.innerHTML = html;
   }

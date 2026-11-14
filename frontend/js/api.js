@@ -698,6 +698,31 @@ function _wxRound(n) {
   return Number.isFinite(v) ? Math.round(v) : null;
 }
 
+// Fahrenheit bands: bitter, very cold, freezing, cold, cool, mild, warm, hot, very hot, extreme.
+const _TEMP_EDGES = [10, 25, 32, 45, 58, 68, 78, 88, 98];
+
+function _tempBand(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '';
+  let i = 0;
+  while (i < _TEMP_EDGES.length && v > _TEMP_EDGES[i]) i++;
+  return 'wx-band-' + i;
+}
+
+function _setTempBand(el, n) {
+  if (!el) return;
+  for (let i = 0; i <= _TEMP_EDGES.length; i++) el.classList.remove('wx-band-' + i);
+  const band = _tempBand(n);
+  if (band) el.classList.add(band);
+}
+
+function _wxTempHtml(n, prefix, extraClass) {
+  const v = _wxRound(n);
+  if (v == null) return '';
+  const cls = ['wx-temp', _tempBand(v), extraClass].filter(Boolean).join(' ');
+  return `<span class="${cls}">${prefix || ''}${v}°</span>`;
+}
+
 function _weatherDayLabel(dateStr, index) {
   if (index === 0) return 'Today';
   if (index === 1) return 'Tomorrow';
@@ -753,10 +778,11 @@ function openWeatherModal() {
       const windN = _wxRound(day.wind);
       const precip = precipN == null ? '' : `<span class="weather-modal-precip">💧${precipN}%</span>`;
       const wind = windN == null ? '' : `<span class="weather-modal-wind">${windN} mph</span>`;
-      const hi = high == null ? '' : `<span class="weather-modal-high">↑${high}°</span>`;
-      const lo = low == null ? '' : `<span class="weather-modal-low">↓${low}°</span>`;
+      const hi = _wxTempHtml(high, '↑', 'weather-modal-high');
+      const lo = _wxTempHtml(low, '↓', 'weather-modal-low');
+      const accent = _tempBand(high != null ? high : low);
       return `
-        <div class="weather-modal-day${i === 0 ? ' is-today' : ''}">
+        <div class="weather-modal-day${i === 0 ? ' is-today' : ''}${accent ? ' ' + accent : ''}">
           <div class="weather-modal-icon">${day.icon || ''}</div>
           <div class="weather-modal-when">
             <div class="weather-modal-label">${escapeHtml(_weatherDayLabel(day.date, i))}</div>
@@ -800,29 +826,34 @@ async function loadWeather(force) {
     const data = await API.get('/api/weather/', force ? { force: true } : undefined);
     if (!data || data.error) {
       el.innerHTML = '';
+      _setTempBand(el, null);
       _bindWeatherClick(el, null);
       return;
     }
     const t = data.tomorrow;
     const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
+    const todayHi = _wxTempHtml(data.high, '↑');
+    const todayLo = _wxTempHtml(data.low, '↓');
     el.innerHTML = `
       <div class="weather-now">
         <div class="weather-icon">${data.icon}</div>
-        <span class="weather-temp">${Math.round(data.temp)}°</span>
+        ${_wxTempHtml(data.temp, '', 'weather-temp')}
         <span class="weather-condition">${escapeHtml(data.condition)}</span>
-        <span class="weather-meta">↑${Math.round(data.high)}° ↓${Math.round(data.low)}°</span>
+        <span class="weather-meta">${todayHi}${todayLo}</span>
       </div>
       ${t && t.high != null ? `
         <div class="weather-tomorrow">
           <span class="weather-tmr-label">Tomorrow</span>
           <span class="weather-tmr-icon">${t.icon}</span>
-          <span class="weather-tmr-hilo">↑${Math.round(t.high)}° ↓${Math.round(t.low)}°</span>
+          <span class="weather-tmr-hilo">${_wxTempHtml(t.high, '↑')}${_wxTempHtml(t.low, '↓')}</span>
           ${precipStr}
         </div>` : ''}
     `;
+    _setTempBand(el, data.temp);
     _bindWeatherClick(el, data);
   } catch (e) {
     el.innerHTML = '';
+    _setTempBand(el, null);
     _bindWeatherClick(el, null);
   }
 }
