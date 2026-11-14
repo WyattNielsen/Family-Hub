@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Family Hub">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/css/style.css?v=88">
+<link rel="stylesheet" href="/css/style.css?v=90">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
 <script>(function(){try{var s=+(localStorage.getItem('fh_dark_start')??21),e=+(localStorage.getItem('fh_dark_end')??7),h=new Date().getHours();document.documentElement.setAttribute('data-theme',(s>e?(h>=s||h<e):(h>=s&&h<e))?'dark':'light');}catch(_){}})();</script>
@@ -92,8 +92,18 @@
       <!-- Col 1: Events -->
       <div class="dashboard-col">
         <section class="dashboard-section">
-          <div class="section-header">
-            <h2 class="section-title">📅 Up Next</h2>
+          <div class="section-header dash-events-header">
+            <h2 class="section-title" id="dashEventsTitle">📅 Up Next</h2>
+            <div class="filter-tabs filter-tabs-compact" id="dashCalViewTabs">
+              <button type="button" class="filter-tab active" data-view="upnext">Up Next</button>
+              <button type="button" class="filter-tab" data-view="agenda">Agenda</button>
+            </div>
+            <div class="agenda-day-nav" id="dashAgendaNav" hidden>
+              <button type="button" class="btn btn-icon" id="dashAgendaPrev" aria-label="Previous day">‹</button>
+              <span class="agenda-day-label" id="dashAgendaDate"></span>
+              <button type="button" class="btn btn-icon" id="dashAgendaNext" aria-label="Next day">›</button>
+              <button type="button" class="btn btn-ghost" id="dashAgendaToday">Today</button>
+            </div>
             <a href="/calendar.html" class="section-link">View all →</a>
           </div>
           <div id="todayEvents">
@@ -160,9 +170,10 @@
   </div>
 </div>
 
-<script src="/js/api.js?v=88"></script>
-<script src="/js/dashboard.js?v=88"></script>
-<script src="/js/slideshow.js?v=88"></script>
+<script src="/js/api.js?v=90"></script>
+<script src="/js/agenda.js?v=90"></script>
+<script src="/js/dashboard.js?v=90"></script>
+<script src="/js/slideshow.js?v=90"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 <script>if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script>
 </body>

@@ -720,8 +720,8 @@ async function loadWeather(force) {
 // ── Instant App Shell Router (Zero-Reload Screen Switching) ───
 const FHRouter = (() => {
   const ROUTES = {
-    '/':              { html: '/',              script: '/js/dashboard.js' },
-    '/calendar.html': { html: '/calendar.html', script: '/js/calendar.js' },
+    '/':              { html: '/',              script: '/js/dashboard.js', extras: ['/js/agenda.js'] },
+    '/calendar.html': { html: '/calendar.html', script: '/js/calendar.js', extras: ['/js/agenda.js'] },
     '/chores.html':   { html: '/chores.html',   script: '/js/chores.js' },
     '/meals.html':    { html: '/meals.html',    script: '/js/meals.js' },
     '/shopping.html': { html: '/shopping.html', script: '/js/shopping.js' },
@@ -802,19 +802,50 @@ const FHRouter = (() => {
     return p;
   }
 
+  function _injectScript(path) {
+    if (path.indexOf('agenda.js') !== -1 && typeof renderAgenda === 'function') {
+      return Promise.resolve();
+    }
+    const already = [...document.scripts].some(s => {
+      const src = s.getAttribute('src') || s.src || '';
+      return src.indexOf(path) !== -1;
+    });
+    if (already) return Promise.resolve();
+    const inflightKey = 'extra:' + path;
+    if (_scriptInflight.has(inflightKey)) return _scriptInflight.get(inflightKey);
+    const p = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = path + _assetSuffix();
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load ' + path));
+      document.body.appendChild(s);
+    }).finally(() => _scriptInflight.delete(inflightKey));
+    _scriptInflight.set(inflightKey, p);
+    return p;
+  }
+
   function _loadScript(route) {
-    if (_controllers.has(route)) return Promise.resolve(_controllers.get(route));
     if (_scriptInflight.has(route)) return _scriptInflight.get(route);
     const cfg = ROUTES[route];
     if (!cfg) return Promise.reject(new Error('Unknown route ' + route));
-    const suffix = _assetSuffix();
-    const p = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = cfg.script + suffix;
-      s.async = true;
-      s.onload = () => resolve(_controllers.get(route));
-      s.onerror = () => reject(new Error('Failed to load ' + cfg.script));
-      document.body.appendChild(s);
+    const extras = cfg.extras || [];
+    const extrasReady = extras.every(path => {
+      if (path.indexOf('agenda.js') !== -1) return typeof renderAgenda === 'function';
+      return [...document.scripts].some(s => (s.getAttribute('src') || s.src || '').indexOf(path) !== -1);
+    });
+    if (_controllers.has(route) && extrasReady) return Promise.resolve(_controllers.get(route));
+
+    const p = Promise.all(extras.map(_injectScript)).then(() => {
+      if (_controllers.has(route)) return _controllers.get(route);
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = cfg.script + _assetSuffix();
+        s.async = true;
+        s.onload = () => resolve(_controllers.get(route));
+        s.onerror = () => reject(new Error('Failed to load ' + cfg.script));
+        document.body.appendChild(s);
+      });
     }).finally(() => _scriptInflight.delete(route));
     _scriptInflight.set(route, p);
     return p;

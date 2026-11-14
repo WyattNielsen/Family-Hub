@@ -131,6 +131,16 @@
     return !Number.isNaN(end.getTime()) && end > now;
   }
 
+  function eventWhoHtml(e) {
+    if (e.member_name) {
+      return `${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color: e.member_color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span>`;
+    }
+    if (e.is_family) {
+      return `${memberAvatarHtml({avatar:'🏠', color:'#F6BF26'}, 'avatar-sm')}<span>Family</span>`;
+    }
+    return '';
+  }
+
   function _renderEventsList(el, allFetched, now) {
     const events = allFetched.filter(e => eventStillGoing(e, now));
     if (!events.length) {
@@ -161,45 +171,107 @@
         if (days === 1) dateLabel = 'Tomorrow';
         else if (days > 1 && days <= 14) dateLabel += ` · in ${days} days`;
       }
+      const who = eventWhoHtml(e);
 
       return `
         <div class="event-card" style="--event:${color}">
-          <div class="event-card-title">${e.title}</div>
+          <div class="event-card-head">
+            <div class="event-card-title">${escapeHtml(e.title)}</div>
+            ${who ? `<div class="event-card-who">${who}</div>` : ''}
+          </div>
           <div class="event-card-time">${e.all_day ? `${dateLabel} · All day` : `${dateLabel}${dateLabel ? ' · ' : ''}${formatTime(e.start_datetime)}`}</div>
-          ${e.member_name ? `<div class="event-card-member" style="background:${color}22;color:${color}">${memberAvatarHtml({avatar:e.member_avatar, avatar_photo:e.member_avatar_photo, color}, 'avatar-sm')}<span>${escapeHtml(e.member_name)}</span></div>` : ''}
-          ${e.is_family ? '<div class="event-card-member" style="background:#F6BF2622;color:#c49a00">🏠 Family</div>' : ''}
         </div>`;
     }).join('');
   }
 
   let _lastEventsKey = '';
   let _lastEventsData = null;
+  let dashCalView = localStorage.getItem('fh_dash_cal_view') === 'agenda' ? 'agenda' : 'upnext';
+  let dashAgendaDate = toETDateStr(new Date());
+
+  function dashboardWeekEventsUrl() {
+    const now = new Date();
+    const minuteNow = new Date(Math.floor(now.getTime() / 60000) * 60000);
+    const start = minuteNow.toISOString();
+    const endWeek = new Date(minuteNow.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const person = getPersonFilter();
+    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(endWeek.toISOString())}`;
+    if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
+    return { eventsUrl, now, endWeek, person };
+  }
+
+  function dashboardDayEventsUrl(dateStr, person) {
+    let url = `/api/calendar/events?start=${encodeURIComponent(dateStr + 'T00:00:00')}&end=${encodeURIComponent(dateStr + 'T23:59:59')}`;
+    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
+    return url;
+  }
+
+  function dateInWeekWindow(dateStr, now, endWeek) {
+    return dateStr >= toETDateStr(now) && dateStr <= toETDateStr(endWeek);
+  }
+
+  function applyDashCalView() {
+    const title = document.getElementById('dashEventsTitle');
+    const nav = document.getElementById('dashAgendaNav');
+    const dateEl = document.getElementById('dashAgendaDate');
+    if (title) title.textContent = dashCalView === 'agenda' ? '📅 Agenda' : '📅 Up Next';
+    if (nav) nav.hidden = dashCalView !== 'agenda';
+    if (dateEl) dateEl.textContent = agendaDateLabel(dashAgendaDate, { weekday: 'short', month: 'short', day: 'numeric' });
+    document.querySelectorAll('#dashCalViewTabs [data-view]').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-view') === dashCalView);
+    });
+  }
+
+  function setDashCalView(view) {
+    dashCalView = view === 'agenda' ? 'agenda' : 'upnext';
+    try { localStorage.setItem('fh_dash_cal_view', dashCalView); } catch (_) {}
+    applyDashCalView();
+    loadTodayEvents();
+  }
+
+  function _renderDashAgenda(el, events) {
+    applyDashCalView();
+    renderAgenda(el, events, dashAgendaDate, {});
+  }
 
   async function loadTodayEvents() {
     const el = document.getElementById('todayEvents');
     if (!el) return;
-    const now = new Date();
-    // Bucket start/end to the minute so cache hits cleanly across screen switches!
-    const minuteNow = new Date(Math.floor(now.getTime() / 60000) * 60000);
-    const start = minuteNow.toISOString();
-    const endWeek = new Date(minuteNow.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const end = endWeek.toISOString();
-    const person = getPersonFilter();
-    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-    if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
+    applyDashCalView();
+    const { eventsUrl, now, endWeek, person } = dashboardWeekEventsUrl();
+    const useWeek = dashCalView === 'upnext' || dateInWeekWindow(dashAgendaDate, now, endWeek);
 
-    const cached = API.peek(eventsUrl) || (_lastEventsKey === person ? _lastEventsData : null);
-    if (cached) _renderEventsList(el, cached, now);
+    const paint = (rows, when) => {
+      if (dashCalView === 'agenda') _renderDashAgenda(el, rows);
+      else _renderEventsList(el, rows, when);
+    };
 
+    if (useWeek) {
+      const cached = API.peek(eventsUrl) || (_lastEventsKey === person ? _lastEventsData : null);
+      if (cached) paint(cached, now);
+      try {
+        const allFetched = await API.get(eventsUrl);
+        _lastEventsKey = person;
+        _lastEventsData = allFetched;
+        if (document.getElementById('todayEvents') === el) paint(allFetched, new Date());
+      } catch (e) {
+        if (!cached && document.getElementById('todayEvents') === el) {
+          el.innerHTML = '<div class="empty-state">Failed to load events</div>';
+        }
+      }
+      return;
+    }
+
+    const dayUrl = dashboardDayEventsUrl(dashAgendaDate, person);
+    const cachedDay = API.peek(dayUrl);
+    if (cachedDay) _renderDashAgenda(el, cachedDay);
     try {
-      const allFetched = await API.get(eventsUrl);
-      _lastEventsKey = person;
-      _lastEventsData = allFetched;
-      if (document.getElementById('todayEvents') === el) {
-        _renderEventsList(el, allFetched, new Date());
+      const dayFetched = await API.get(dayUrl);
+      if (document.getElementById('todayEvents') === el && dashCalView === 'agenda') {
+        _renderDashAgenda(el, dayFetched);
       }
     } catch (e) {
-      if (!cached && document.getElementById('todayEvents') === el) {
+      if (!cachedDay && document.getElementById('todayEvents') === el) {
         el.innerHTML = '<div class="empty-state">Failed to load events</div>';
       }
     }
@@ -586,6 +658,17 @@
       showToast('✅ Family Google Calendar connected!', 'success');
       history.replaceState({}, '', '/');
     }
+
+    document.querySelectorAll('#dashCalViewTabs [data-view]').forEach(btn => {
+      btn.onclick = () => setDashCalView(btn.getAttribute('data-view'));
+    });
+    const prev = document.getElementById('dashAgendaPrev');
+    const next = document.getElementById('dashAgendaNext');
+    const todayBtn = document.getElementById('dashAgendaToday');
+    if (prev) prev.onclick = () => { dashAgendaDate = shiftDateStr(dashAgendaDate, -1); loadTodayEvents(); };
+    if (next) next.onclick = () => { dashAgendaDate = shiftDateStr(dashAgendaDate, 1); loadTodayEvents(); };
+    if (todayBtn) todayBtn.onclick = () => { dashAgendaDate = toETDateStr(new Date()); loadTodayEvents(); };
+    applyDashCalView();
 
     initAppTimezone().then(() => {
       if (FHRouter.currentRoute() !== '/') return;

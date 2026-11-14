@@ -1,21 +1,52 @@
 (function () {
-  function eventOccursOnDate(e, dateStr) {
-    if (!e.start_datetime) return false;
-    const start = e.start_datetime.split('T')[0];
-    let end = e.end_datetime ? e.end_datetime.split('T')[0] : start;
-    if (e.all_day && end > start) {
-      const endDate = new Date(end + 'T12:00:00');
-      endDate.setDate(endDate.getDate() - 1);
-      end = endDate.toISOString().split('T')[0];
-    }
-    return dateStr >= start && dateStr <= end;
-  }
-
   let currentDate = new Date();
   let allEvents = [];
   let members = [];
   let selectedDay = null;
   window.selectedDay = null;
+  let currentView = localStorage.getItem('fh_cal_view') === 'agenda' ? 'agenda' : 'month';
+
+  function dateStrFromCurrent() {
+    return `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
+  }
+
+  function applyCalView() {
+    const wrapper = document.getElementById('calendarWrapper');
+    const agendaEl = document.getElementById('agendaView');
+    const panel = document.getElementById('dayEventsPanel');
+    if (wrapper) wrapper.hidden = currentView !== 'month';
+    if (agendaEl) agendaEl.hidden = currentView !== 'agenda';
+    if (panel && currentView === 'agenda') panel.style.display = 'none';
+    document.querySelectorAll('#calViewTabs [data-view]').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-view') === currentView);
+    });
+  }
+
+  function setCalView(view) {
+    currentView = view === 'agenda' ? 'agenda' : 'month';
+    try { localStorage.setItem('fh_cal_view', currentView); } catch (_) {}
+    applyCalView();
+    renderActiveView();
+    loadEvents();
+  }
+
+  function renderAgendaView() {
+    const el = document.getElementById('agendaView');
+    const titleEl = document.getElementById('calendarTitle');
+    if (!el) return;
+    const dateStr = dateStrFromCurrent();
+    if (titleEl) titleEl.textContent = agendaDateLabel(dateStr);
+    renderAgenda(el, allEvents, dateStr, {
+      onEventClick: (ev, domEvent) => showEventDetail(ev.id, domEvent),
+      onAdd: (d) => openEventModal(d),
+    });
+  }
+
+  function renderActiveView() {
+    applyCalView();
+    if (currentView === 'agenda') renderAgendaView();
+    else renderCalendar();
+  }
 
   function eventBodyHtml(raw) {
     let text = String(raw ?? '').replace(/\r\n|\r/g, '\n');
@@ -129,6 +160,8 @@
   }
 
   async function loadEvents() {
+    // Always fetch the month window so Month and Agenda share one cache key
+    // (peek / 10s fresh / inflight dedupe) and day switches stay in-memory.
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const monthNum = String(month + 1).padStart(2, '0');
@@ -142,12 +175,12 @@
     const cached = API.peek(url);
     if (cached) {
       allEvents = cached;
-      renderCalendar();
+      renderActiveView();
     }
 
     try {
       allEvents = await API.get(url);
-      if (FHRouter.currentRoute() === '/calendar.html') renderCalendar();
+      if (FHRouter.currentRoute() === '/calendar.html') renderActiveView();
     } catch (e) {
       if (!cached) showToast('Failed to load events', 'error');
     }
@@ -156,40 +189,9 @@
   function selectDay(dateStr) {
     selectedDay = dateStr;
     window.selectedDay = dateStr;
-    renderCalendar();
-    const panel = document.getElementById('dayEventsPanel');
-    if (!panel) return;
-    const dayEvents = allEvents.filter(e => eventOccursOnDate(e, dateStr));
-    const date = new Date(dateStr + 'T12:00:00');
-    document.getElementById('dayEventTitle').textContent =
-      date.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', timeZone: TZ });
-
-    if (!dayEvents.length) {
-      document.getElementById('dayEventsList').innerHTML =
-        `<div class="empty-state" style="margin-top:12px">No events. <a href="#" onclick="openEventModal('${dateStr}');return false" style="color:var(--primary);font-weight:800">+ Add one</a></div>`;
-    } else {
-      document.getElementById('dayEventsList').innerHTML = dayEvents.map(e => {
-        const color = eventDisplayColor(e);
-        const descHtml = e.description ? eventBodyHtml(e.description) : '';
-        const descBlock = descHtml.replace(/<br>/g, '').trim()
-          ? `<div style="font-size:13px;color:var(--text2);margin-top:4px">${descHtml}</div>`
-          : '';
-        return `
-          <div class="event-card" style="--event:${color}">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start">
-              <div>
-                <div class="event-card-title">${escapeHtml(e.title)}</div>
-                <div class="event-card-time">${e.all_day ? 'All day' : formatTime(e.start_datetime) + ' – ' + formatTime(e.end_datetime)}</div>
-                ${descBlock}
-              </div>
-              <button onclick="deleteEvent(${e.id})" class="chore-action-btn delete" style="opacity:1">🗑</button>
-            </div>
-            ${eventPersonTag(e, color)}
-          </div>`;
-      }).join('');
-    }
-    panel.style.display = 'block';
-    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const [y, m, d] = dateStr.split('-').map(Number);
+    currentDate = new Date(y, m - 1, d);
+    setCalView('agenda');
   }
 
   function openEventModal(dateStr) {
@@ -254,14 +256,13 @@
       await API.delete(`/api/calendar/events/${id}`);
       showToast('Event deleted', '');
       await loadEvents();
-      if (selectedDay) selectDay(selectedDay);
     } catch (e) {
       showToast('Failed to delete', 'error');
     }
   }
 
   function showEventDetail(eventId, domEvent) {
-    domEvent.stopPropagation();
+    if (domEvent && domEvent.stopPropagation) domEvent.stopPropagation();
     const e = allEvents.find(ev => ev.id === eventId);
     if (!e) return;
 
@@ -367,11 +368,13 @@
 
   function mount() {
     onPersonFilterChange(() => loadEvents());
-    renderCalendar();
+    applyCalView();
+    renderActiveView();
+    loadEvents();
 
     initAppTimezone().then(() => {
       if (FHRouter.currentRoute() !== '/calendar.html') return;
-      renderCalendar();
+      renderActiveView();
       loadEvents();
     });
 
@@ -386,9 +389,26 @@
     }).catch(() => {});
     loadSyncStatus();
 
-    document.getElementById('prevMonth').onclick = () => { currentDate.setMonth(currentDate.getMonth() - 1); renderCalendar(); loadEvents(); };
-    document.getElementById('nextMonth').onclick = () => { currentDate.setMonth(currentDate.getMonth() + 1); renderCalendar(); loadEvents(); };
-    document.getElementById('todayBtn').onclick = () => { currentDate = new Date(); renderCalendar(); loadEvents(); };
+    document.getElementById('prevMonth').onclick = () => {
+      if (currentView === 'agenda') currentDate.setDate(currentDate.getDate() - 1);
+      else currentDate.setMonth(currentDate.getMonth() - 1);
+      renderActiveView();
+      loadEvents();
+    };
+    document.getElementById('nextMonth').onclick = () => {
+      if (currentView === 'agenda') currentDate.setDate(currentDate.getDate() + 1);
+      else currentDate.setMonth(currentDate.getMonth() + 1);
+      renderActiveView();
+      loadEvents();
+    };
+    document.getElementById('todayBtn').onclick = () => {
+      currentDate = new Date();
+      renderActiveView();
+      loadEvents();
+    };
+    document.querySelectorAll('#calViewTabs [data-view]').forEach(btn => {
+      btn.onclick = () => setCalView(btn.getAttribute('data-view'));
+    });
     document.getElementById('addEventBtn').onclick = () => openEventModal();
     document.getElementById('closeEventModal').onclick = closeEventModal;
     document.getElementById('cancelEventModal').onclick = closeEventModal;
