@@ -10,6 +10,7 @@ import outbound
 import os as _os
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 router = APIRouter()
 
@@ -71,6 +72,85 @@ class CalendarSourceUpdate(BaseModel):
     color: Optional[str] = None
     enabled: Optional[bool] = None
 
+def _zone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name or "America/New_York")
+    except Exception:
+        return ZoneInfo("America/New_York")
+
+
+def _clamp_day(year: int, month: int, day: int) -> datetime:
+    """November is queried through the 31st. Clamp that to a real date."""
+    month = min(max(month, 1), 12)
+    for candidate in range(min(max(day, 1), 31), 0, -1):
+        try:
+            return datetime(year, month, candidate)
+        except ValueError:
+            continue
+    return datetime(year, month, 1)
+
+
+def _real_date_prefix(value: str) -> str:
+    year, month, day = (int(part) for part in value.strip()[:10].split("-"))
+    return _clamp_day(year, month, day).date().isoformat()
+
+
+def _parse_bound(value: Optional[str], tz: ZoneInfo) -> Optional[datetime]:
+    """Parse a query or event timestamp. Naive values use the app timezone."""
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        text = _real_date_prefix(text) + text[10:]
+    except (ValueError, IndexError):
+        return None
+    if "T" not in text:
+        day = datetime.fromisoformat(text[:10])
+        return day.replace(tzinfo=tz)
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    return dt
+
+
+def _event_interval(row: dict, tz: ZoneInfo):
+    """Return (start, end) as aware datetimes. All-day ends are exclusive."""
+    start_raw = row.get("start_datetime") or ""
+    end_raw = row.get("end_datetime") or start_raw
+    all_day = bool(row.get("all_day")) or "T" not in start_raw
+    if all_day:
+        try:
+            start_day = datetime.fromisoformat(start_raw[:10]).date()
+            end_day = datetime.fromisoformat(end_raw[:10]).date()
+        except ValueError:
+            return None, None
+        if end_day <= start_day:
+            end_day = start_day + timedelta(days=1)
+        start = datetime(start_day.year, start_day.month, start_day.day, tzinfo=tz)
+        end = datetime(end_day.year, end_day.month, end_day.day, tzinfo=tz)
+        return start, end
+    return _parse_bound(start_raw, tz), _parse_bound(end_raw, tz)
+
+
+def _event_in_range(row: dict, range_start: Optional[datetime], range_end: Optional[datetime], tz: ZoneInfo) -> bool:
+    start, end = _event_interval(row, tz)
+    if start is None or end is None:
+        return False
+    if range_start and end <= range_start:
+        return False
+    if range_end and start > range_end:
+        return False
+    return True
+
+
+def _date_shift(value: str, days: int) -> str:
+    day = datetime.fromisoformat(_real_date_prefix(value))
+    return (day + timedelta(days=days)).date().isoformat()
+
+
 @router.get("/events")
 def get_events(
     start: Optional[str] = Query(None),
@@ -78,6 +158,10 @@ def get_events(
     member_id: Optional[int] = Query(None)
 ):
     conn = get_db()
+    tz = _zone(get_app_tz(conn))
+    # Date prefixes only. Full timestamps mix UTC "Z", offsets, and all-day
+    # dates, and SQLite compares those as text, which drops events that are
+    # still ahead.
     query = """
         SELECT e.*, m.name as member_name, m.color as member_color,
                m.avatar as member_avatar, m.avatar_photo as member_avatar_photo
@@ -87,11 +171,11 @@ def get_events(
     """
     params = []
     if start:
-        query += " AND e.end_datetime >= ?"
-        params.append(start)
+        query += " AND substr(e.end_datetime, 1, 10) >= ?"
+        params.append(_date_shift(start, -2))
     if end:
-        query += " AND e.start_datetime <= ?"
-        params.append(end)
+        query += " AND substr(e.start_datetime, 1, 10) <= ?"
+        params.append(_date_shift(end, 2))
     if member_id:
         # Person view: that member's events plus shared family calendars
         query += " AND (e.member_id = ? OR e.is_family = 1)"
@@ -99,9 +183,13 @@ def get_events(
     query += " ORDER BY e.start_datetime"
     events = conn.execute(query, params).fetchall()
     conn.close()
+    range_start = _parse_bound(start, tz)
+    range_end = _parse_bound(end, tz)
     rows = []
     for e in events:
         row = dict(e)
+        if not _event_in_range(row, range_start, range_end, tz):
+            continue
         if row.get("member_color") and not row.get("is_family"):
             row["color"] = row["member_color"]
         rows.append(row)
@@ -754,6 +842,18 @@ def patch_calendar_source(source_id: int, payload: CalendarSourceUpdate):
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         conn.execute(f"UPDATE calendar_sources SET {set_clause} WHERE id=?", (*updates.values(), source_id))
+        if "member_id" in updates or "is_family" in updates:
+            # Events already synced from this calendar follow the new assignment
+            # immediately, instead of waiting for the next sync.
+            conn.execute(
+                """UPDATE events SET member_id=?, is_family=?
+                   WHERE external_source_id=?""",
+                (
+                    updates.get("member_id", existing["member_id"]),
+                    updates.get("is_family", existing["is_family"]),
+                    source_id,
+                ),
+            )
         conn.commit()
 
     row = _source_row(conn, source_id)
@@ -913,22 +1013,34 @@ async def _sync_google_source(access_token: str, source: dict) -> int:
                     break
 
         window_start, window_end = apple_sync.sync_window()
-        resp = await client.get(
-            f"https://www.googleapis.com/calendar/v3/calendars/{encoded_cal_id}/events",
-            headers=headers,
-            params={
+        google_events = []
+        page_token = None
+        # Google returns at most 2500 per page, oldest first. A busy calendar
+        # needs the following pages or later events never get stored.
+        for _ in range(20):
+            params = {
                 "timeMin": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "timeMax": window_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "singleEvents": "true",
                 "orderBy": "startTime",
                 "maxResults": "2500",
                 "timeZone": get_app_tz(),
-            },
-        )
-        if resp.status_code != 200:
-            print(f"Calendar fetch failed for {cal_id}: {resp.status_code} {resp.text[:200]}")
-            return 0
-        google_events = resp.json().get("items", [])
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await client.get(
+                f"https://www.googleapis.com/calendar/v3/calendars/{encoded_cal_id}/events",
+                headers=headers,
+                params=params,
+            )
+            if resp.status_code != 200:
+                print(f"Calendar fetch failed for {cal_id}: {resp.status_code} {resp.text[:200]}")
+                return 0
+            body = resp.json()
+            google_events.extend(body.get("items") or [])
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                break
 
     return await asyncio.to_thread(_store_google_events, source, google_events, cal_color)
 

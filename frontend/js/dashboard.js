@@ -142,21 +142,33 @@ async function postQuickMessage() {
   }
 }
 
+function eventStillGoing(e, now) {
+  const endRaw = e.end_datetime || e.start_datetime;
+  if (!endRaw) return false;
+  // All-day end dates are exclusive. new Date("YYYY-MM-DD") is UTC midnight,
+  // which hides the event on the evening before it is actually over.
+  if (e.all_day || endRaw.indexOf('T') === -1) {
+    const [y, m, d] = endRaw.slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, d).getTime() > now.getTime();
+  }
+  const end = new Date(endRaw);
+  return !Number.isNaN(end.getTime()) && end > now;
+}
+
 async function loadTodayEvents() {
   const el = document.getElementById('todayEvents');
   try {
     const now = new Date();
-    const start = now.toISOString().replace('.000', '');
-    const end48 = new Date(now.getTime() + 48 * 60 * 60 * 1000);
-    const end = end48.toISOString().replace('.000', '');
+    const start = now.toISOString();
+    // A week, so a person's other calendars still show when their next
+    // events are past tomorrow.
+    const endWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const end = endWeek.toISOString();
     let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
     const person = getPersonFilter();
     if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
     const allFetched = await API.get(eventsUrl);
-    const events = allFetched.filter(e => {
-      const endTime = e.end_datetime ? new Date(e.end_datetime) : new Date(e.start_datetime);
-      return endTime > now;
-    });
+    const events = allFetched.filter(e => eventStillGoing(e, now));
     if (!events.length) {
       el.innerHTML = '<div class="empty-state">🎉 Nothing coming up!</div>';
       return;

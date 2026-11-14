@@ -178,8 +178,10 @@ function renderCalendar() {
 async function loadEvents() {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
-  const start = `${year}-${String(month+1).padStart(2,'0')}-01T00:00:00`;
-  const end = `${year}-${String(month+1).padStart(2,'0')}-31T23:59:59`;
+  const monthNum = String(month + 1).padStart(2, '0');
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const start = `${year}-${monthNum}-01T00:00:00`;
+  const end = `${year}-${monthNum}-${String(lastDay).padStart(2, '0')}T23:59:59`;
   try {
     let url = `/api/calendar/events?start=${start}&end=${end}`;
     const person = getPersonFilter();
