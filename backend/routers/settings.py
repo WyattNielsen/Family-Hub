@@ -57,6 +57,12 @@ def update_settings(payload: dict):
         )
     conn.commit()
     conn.close()
+    if "stock_symbols" in payload:
+        from routers import stocks
+        stocks._quote_cache.clear()
+    if any(k in payload for k in ("weather_zip", "weather_lat", "weather_lon")):
+        from routers import weather
+        weather._forecast_cache["payload"] = None
     return {"ok": True}
 
 

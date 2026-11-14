@@ -391,18 +391,13 @@ async function connectIcloudAccount() {
   }
 }
 
-function copyGoogleAccountOAuthHelp() {
-  const text = [
-    'Connect a shared Google account (Proxmox / LAN):',
-    '1. In Google Cloud Console, add redirect URI: http://127.0.0.1:8765/callback',
-    '2. On your PC run:',
-    '   python tools/google-oauth-local/oauth_local.py --hub http://YOUR_HUB:3000 --target account',
-    '3. Or with public HTTPS, use Connect Google Account in Settings (links to /api/auth/google/connect/account).',
-  ].join('\n');
-  navigator.clipboard.writeText(text).then(
-    () => showToast('OAuth instructions copied', 'success'),
-    () => showToast(text, 'info')
-  );
+function toggleGoogleAccountOAuthHelp() {
+  const panel = document.getElementById('googleOAuthHelp');
+  const btn = document.getElementById('googleOAuthHelpBtn');
+  if (!panel) return;
+  const show = panel.hidden;
+  panel.hidden = !show;
+  if (btn) btn.setAttribute('aria-expanded', show ? 'true' : 'false');
 }
 
 async function loadAvailableCalendars(accountId) {

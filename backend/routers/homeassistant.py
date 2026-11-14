@@ -1,8 +1,6 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import httpx
-import asyncio
 import json
 import outbound
 from database import get_db
@@ -49,42 +47,32 @@ def state_visuals(entity_id: str, state: str) -> tuple[str, str]:
     return ("❓", "ha-state-unknown")
 
 
-async def fetch_entity(client: httpx.AsyncClient, ha_url: str, token: str, entity: dict) -> dict:
-    entity_id = entity["entity_id"]
-    name = entity.get("name", entity_id)
-    is_alarm = entity_id.startswith("alarm_control_panel.")
-    try:
-        resp = await client.get(
-            f"{ha_url.rstrip('/')}/api/states/{entity_id}",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            timeout=5.0,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            raw = data.get("state", "unknown")
-            if is_alarm:
-                icon, css_class, label = alarm_visuals(raw)
-                return {
-                    "entity_id": entity_id, "name": name,
-                    "state": raw, "state_label": label,
-                    "icon": icon, "css_class": css_class,
-                    "entity_type": "alarm",
-                }
-            else:
-                state = normalize_state(entity_id, raw)
-                icon, css_class = state_visuals(entity_id, state)
-                return {
-                    "entity_id": entity_id, "name": name,
-                    "state": state, "state_label": state,
-                    "icon": icon, "css_class": css_class,
-                    "entity_type": "generic",
-                }
-        return {"entity_id": entity_id, "name": name, "state": "unavailable", "state_label": "Unavailable",
-                "icon": "❓", "css_class": "ha-state-unknown", "entity_type": "alarm" if is_alarm else "generic"}
-    except Exception as e:
-        print(f"HA fetch error for {entity_id}: {e}")
-        return {"entity_id": entity_id, "name": name, "state": "unavailable", "state_label": "Unavailable",
-                "icon": "❓", "css_class": "ha-state-unknown", "entity_type": "alarm" if is_alarm else "generic"}
+def _unavailable(entity_id: str, name: str) -> dict:
+    return {
+        "entity_id": entity_id, "name": name,
+        "state": "unavailable", "state_label": "Unavailable",
+        "icon": "❓", "css_class": "ha-state-unknown",
+        "entity_type": "alarm" if entity_id.startswith("alarm_control_panel.") else "generic",
+    }
+
+
+def shape_state(entity_id: str, name: str, raw: str) -> dict:
+    if entity_id.startswith("alarm_control_panel."):
+        icon, css_class, label = alarm_visuals(raw)
+        return {
+            "entity_id": entity_id, "name": name,
+            "state": raw, "state_label": label,
+            "icon": icon, "css_class": css_class,
+            "entity_type": "alarm",
+        }
+    state = normalize_state(entity_id, raw)
+    icon, css_class = state_visuals(entity_id, state)
+    return {
+        "entity_id": entity_id, "name": name,
+        "state": state, "state_label": state,
+        "icon": icon, "css_class": css_class,
+        "entity_type": "generic",
+    }
 
 
 # ── Routes ────────────────────────────────────────────────────
@@ -113,12 +101,33 @@ async def get_ha_states():
     if not entities:
         return {"error": "not_configured"}
 
-    async with outbound.client() as client:
-        results = await asyncio.gather(*[
-            fetch_entity(client, ha_url, ha_token, e) for e in entities
-        ])
+    named = [(e.get("entity_id", ""), e.get("name") or e.get("entity_id", "")) for e in entities]
+    states = {}
+    try:
+        async with outbound.client(timeout=10.0) as client:
+            resp = await client.get(
+                f"{ha_url.rstrip('/')}/api/states",
+                headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"},
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"HA returned {resp.status_code}")
+        for row in resp.json():
+            if isinstance(row, dict) and row.get("entity_id"):
+                states[row["entity_id"]] = row.get("state", "unknown")
+    except Exception as e:
+        print(f"HA states fetch error: {e}")
+        return {"entities": [_unavailable(entity_id, name) for entity_id, name in named if entity_id]}
 
-    return {"entities": list(results)}
+    results = []
+    for entity_id, name in named:
+        if not entity_id:
+            continue
+        raw = states.get(entity_id)
+        if raw is None:
+            results.append(_unavailable(entity_id, name))
+        else:
+            results.append(shape_state(entity_id, name, raw))
+    return {"entities": results}
 
 
 class HAActionRequest(BaseModel):

@@ -8,11 +8,10 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
-import httpx
-
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from database import get_db
+import outbound
 
 BASE = "https://webapis.schoolcafe.com/api"
 HEADERS = {"Accept": "application/json", "User-Agent": "FamilyHub/1.0"}
@@ -24,17 +23,10 @@ class SchoolCafeError(Exception):
     pass
 
 
-def _client(timeout: float = 20.0) -> httpx.AsyncClient:
-    # LXC containers often have a broken IPv6 route. Pinning the local address
-    # to IPv4 avoids a hang that would otherwise look like an empty menu.
-    # trust_env is off so a stray proxy in the service environment is ignored.
-    return httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=True,
-        trust_env=False,
-        headers=HEADERS,
-        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
-    )
+def _client(timeout: float = 20.0):
+    # Shares the process-wide client (IPv4, no env proxy). Headers stay on
+    # this call so other APIs are not forced to SchoolCafe's Accept.
+    return outbound.client(timeout=timeout, headers=HEADERS)
 
 
 def _cache_get(key):
@@ -179,7 +171,7 @@ def items_for_date(payload, iso_date: str):
     return items
 
 
-async def _get_json(client: httpx.AsyncClient, path: str, params=None):
+async def _get_json(client, path: str, params=None):
     url = path if path.startswith("http") else f"{BASE}/{path.lstrip('/')}"
     try:
         resp = await client.get(url, params=params)

@@ -1,11 +1,19 @@
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+import asyncio
 import json
+import time
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
 from database import get_db
 
 router = APIRouter()
+
+# Dashboard tiles refresh every 10s. Share one JPEG across screens for a bit less than that.
+_SNAP_TTL = 8.0
+_snap_cache: dict[str, tuple[float, str, bytes]] = {}
+_snap_inflight: dict[str, asyncio.Task] = {}
+_snap_lock = asyncio.Lock()
 
 
 def get_ha_config():
@@ -43,9 +51,15 @@ async def proxy_camera_stream(entity_id: str):
     )
 
 
-@router.get("/camera/{entity_id}/snapshot")
-async def proxy_camera_snapshot(entity_id: str):
-    """Return a single JPEG snapshot from HA."""
+def _snapshot_response(media: str, body: bytes) -> Response:
+    return Response(
+        content=body,
+        media_type=media,
+        headers={"Cache-Control": "private, max-age=8"},
+    )
+
+
+async def _load_snapshot(entity_id: str):
     ha_url, ha_token = get_ha_config()
     if not ha_url or not ha_token:
         raise HTTPException(status_code=503, detail="Home Assistant not configured")
@@ -54,10 +68,42 @@ async def proxy_camera_snapshot(entity_id: str):
             f"{ha_url}/api/camera_proxy/{entity_id}",
             headers={"Authorization": f"Bearer {ha_token}"},
         )
-    return StreamingResponse(
-        iter([resp.content]),
-        media_type=resp.headers.get("content-type", "image/jpeg"),
-    )
+    if resp.status_code != 200 or not resp.content:
+        raise HTTPException(status_code=502, detail="Camera snapshot failed")
+    media = resp.headers.get("content-type", "image/jpeg").split(";")[0]
+    return media, resp.content
+
+
+@router.get("/camera/{entity_id}/snapshot")
+async def proxy_camera_snapshot(entity_id: str):
+    """Return a single JPEG snapshot from HA, reused for a few seconds."""
+    now = time.monotonic()
+    hit = _snap_cache.get(entity_id)
+    if hit and now - hit[0] < _SNAP_TTL:
+        return _snapshot_response(hit[1], hit[2])
+
+    async with _snap_lock:
+        hit = _snap_cache.get(entity_id)
+        if hit and time.monotonic() - hit[0] < _SNAP_TTL:
+            return _snapshot_response(hit[1], hit[2])
+        task = _snap_inflight.get(entity_id)
+        if task is None:
+            task = asyncio.create_task(_load_snapshot(entity_id))
+            _snap_inflight[entity_id] = task
+
+    try:
+        media, body = await task
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Camera snapshot error for {entity_id}: {e}")
+        raise HTTPException(status_code=502, detail="Camera snapshot failed")
+    else:
+        _snap_cache[entity_id] = (time.monotonic(), media, body)
+        return _snapshot_response(media, body)
+    finally:
+        if _snap_inflight.get(entity_id) is task:
+            _snap_inflight.pop(entity_id, None)
 
 
 @router.get("/cameras")

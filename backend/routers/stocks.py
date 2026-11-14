@@ -1,10 +1,16 @@
 from fastapi import APIRouter
 import asyncio
+import time
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
 from database import get_db
 
 router = APIRouter()
+
+# Quotes move, but not every few seconds. Share one fetch across screens.
+_QUOTE_TTL = 120
+_quote_cache: dict[str, tuple[float, list]] = {}
+_quote_lock = asyncio.Lock()
 
 # CoinGecko IDs for crypto symbols
 CRYPTO_IDS = {
@@ -22,9 +28,38 @@ def format_price(price: float) -> str:
     else:
         return f"{price:.4f}"
 
+def configured_symbols() -> str:
+    conn = get_db()
+    row = conn.execute("SELECT value FROM settings WHERE key='stock_symbols'").fetchone()
+    conn.close()
+    return row["value"] if row and row["value"] else "BTC,TSLA,SPY"
+
+
 @router.get("/")
-async def get_stocks(symbols: str = "BTC,TSLA,SPY"):
+async def get_stocks(symbols: str | None = None):
+    """Quotes for the saved ticker, or for `symbols` when a caller passes them."""
+    if symbols is None or not symbols.strip():
+        symbols = configured_symbols()
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not symbol_list:
+        return []
+    cache_key = ",".join(symbol_list)
+    now = time.monotonic()
+    hit = _quote_cache.get(cache_key)
+    if hit and now - hit[0] < _QUOTE_TTL:
+        return hit[1]
+
+    async with _quote_lock:
+        hit = _quote_cache.get(cache_key)
+        if hit and time.monotonic() - hit[0] < _QUOTE_TTL:
+            return hit[1]
+        payload = await _fetch_quotes(symbol_list)
+        if payload:
+            _quote_cache[cache_key] = (time.monotonic(), payload)
+        return payload
+
+
+async def _fetch_quotes(symbol_list: list[str]) -> list:
     crypto_syms = [s for s in symbol_list if s in CRYPTO_IDS]
     stock_syms = [s for s in symbol_list if s not in CRYPTO_IDS]
     results = {}
@@ -86,7 +121,4 @@ async def get_stocks(symbols: str = "BTC,TSLA,SPY"):
 
 @router.get("/settings")
 def get_stock_settings():
-    conn = get_db()
-    row = conn.execute("SELECT value FROM settings WHERE key='stock_symbols'").fetchone()
-    conn.close()
-    return {"symbols": row["value"] if row and row["value"] else "BTC,TSLA,SPY"}
+    return {"symbols": configured_symbols()}

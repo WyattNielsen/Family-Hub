@@ -64,7 +64,10 @@ async def serve_photo(filename: str):
     path = os.path.join(PHOTOS_DIR, filename)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Photo not found")
-    return FileResponse(path)
+    return FileResponse(
+        path,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @router.delete("/file/{filename}")

@@ -40,7 +40,6 @@ def get_chores(
     since_days: Optional[int] = Query(None)
 ):
     conn = get_db()
-    _advance_recurring_to_today(conn)
     today = datetime.now().date().isoformat()
     query = """
         SELECT c.*, m.name as member_name, m.color as member_color
@@ -193,6 +192,18 @@ def get_leaderboard():
 
     conn.close()
     return result
+
+def advance_recurring_chores():
+    """Create missed recurring occurrences. Runs from the background loop.
+
+    Doing this inside GET took the write lock on every chores page load.
+    """
+    conn = get_db()
+    try:
+        _advance_recurring_to_today(conn)
+    finally:
+        conn.close()
+
 
 def _advance_recurring_to_today(conn):
     """Create any missing recurring chore occurrences up to today.

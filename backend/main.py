@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 import os
@@ -8,6 +9,7 @@ import os
 from database import init_db, get_db
 from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
 import json
+import outbound
 
 async def _reminder_loop():
     _fired_today = set()  # track (time_str) already fired today so we don't double-fire
@@ -40,6 +42,17 @@ async def _reminder_loop():
         except Exception as e:
             print(f"Reminder loop error: {e}")
 
+async def _chore_advance_loop():
+    """Catch up recurring chores away from request handlers."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await asyncio.to_thread(chores.advance_recurring_chores)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Chore advance error: {e}")
+
 async def _auto_sync_loop():
     await asyncio.sleep(30)  # let the app fully start first
     while True:
@@ -61,18 +74,41 @@ async def _auto_sync_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    try:
+        await asyncio.to_thread(chores.advance_recurring_chores)
+    except Exception as e:
+        print(f"Chore advance error: {e}")
     sync_task = asyncio.create_task(_auto_sync_loop())
     reminder_task = asyncio.create_task(_reminder_loop())
+    advance_task = asyncio.create_task(_chore_advance_loop())
     yield
     sync_task.cancel()
     reminder_task.cancel()
-    for t in (sync_task, reminder_task):
+    advance_task.cancel()
+    for t in (sync_task, reminder_task, advance_task):
         try:
             await t
         except asyncio.CancelledError:
             pass
+    await outbound.aclose()
 
 app = FastAPI(title="Family Hub", lifespan=lifespan)
+
+class _GzipExceptMedia:
+    """Gzip text responses. Leave camera streams and photo files alone."""
+
+    def __init__(self, app, minimum_size: int = 500):
+        self.app = app
+        self._gzip = GZipMiddleware(app, minimum_size=minimum_size)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path") or ""
+            if path.startswith("/api/security/camera/") or path.startswith("/api/photos/file/"):
+                await self.app(scope, receive, send)
+                return
+        await self._gzip(scope, receive, send)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -81,6 +117,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(_GzipExceptMedia)
 
 app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"])
 app.include_router(chores.router, prefix="/api/chores", tags=["chores"])

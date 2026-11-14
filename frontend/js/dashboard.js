@@ -324,9 +324,7 @@ async function loadStocks() {
   const el = document.getElementById('stockTicker');
   if (!el) return;
   try {
-    const settingsRes = await API.get('/api/stocks/settings');
-    const symbols = settingsRes.symbols || 'BTC,TSLA,SPY';
-    const stocks = await API.get(`/api/stocks/?symbols=${encodeURIComponent(symbols)}`);
+    const stocks = await API.get('/api/stocks/');
     if (!stocks.length) { el.style.display = 'none'; return; }
     el.style.display = 'flex';
     const items = stocks.map(s => {
