@@ -193,13 +193,14 @@
 
   function dashboardWeekEventsUrl() {
     const now = new Date();
-    const minuteNow = new Date(Math.floor(now.getTime() / 60000) * 60000);
-    const start = minuteNow.toISOString();
-    const endWeek = new Date(minuteNow.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const todayStr = toETDateStr(now);
+    const endStr = addDays(todayStr, 7);
+    const [ey, em, ed] = endStr.split('-').map(Number);
+    const endWeek = new Date(ey, em - 1, ed, 23, 59, 59);
     const person = getPersonFilter();
-    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(endWeek.toISOString())}`;
+    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(todayStr + 'T00:00:00')}&end=${encodeURIComponent(endStr + 'T23:59:59')}`;
     if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
-    return { eventsUrl, now, endWeek, person };
+    return { eventsUrl, now, endWeek, person, todayStr, endStr };
   }
 
   function dashboardDayEventsUrl(dateStr, person) {
@@ -604,33 +605,21 @@
     }
 
     try {
-      const [data, requests] = await Promise.all([
-        API.get(url + '&include_school=false', { timeout: 45000 }),
+      const [menus, requests] = await Promise.all([
+        API.get(url),
         API.get(reqUrl).catch(() => []),
       ]);
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-      const wantsSchool = data.configured && !data.school_menus_hidden;
-      const fullCached = API.peek(url);
-      if (fullCached && wantsSchool) {
-        paintDinner(el, data, requests, dinnerDate, mealsSchoolHtml(fullCached, person, dinnerDate, false));
-      } else {
-        paintDinner(el, data, requests, dinnerDate, mealsSchoolHtml(data, person, dinnerDate, wantsSchool));
-      }
-      if (!wantsSchool) return;
-      try {
-        const menus = await API.get(url, { timeout: 45000 });
-        if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-        const slot = document.getElementById('mealsSchool');
-        if (slot) slot.innerHTML = mealsSchoolHtml(menus, person, dinnerDate, false);
-      } catch (e) {
-        const slot = document.getElementById('mealsSchool');
-        if (slot && gen === _mealsGen) {
-          _schoolPaint = null;
-          slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
-        }
+      const wantsSchool = menus.configured && !menus.school_menus_hidden;
+      paintDinner(el, menus, requests, dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(wantsSchool && menus.warming)));
+      if (wantsSchool && menus.warming) {
+        setTimeout(() => {
+          if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals();
+        }, 3500);
       }
     } catch (e) {
-      if (!cachedFast && gen === _mealsGen && document.getElementById('mealsBody') === el) {
+      if (isAbortError(e)) return;
+      if (!cachedFast && !cachedFull && gen === _mealsGen && document.getElementById('mealsBody') === el) {
         el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
       }
     }
@@ -676,12 +665,115 @@
   window.toggleDashboardChore = toggleDashboardChore;
   window.checkShoppingItem = checkShoppingItem;
 
+  let _dashBundleGen = 0;
+  let _dashBundleInflight = null;
+
+  function _dashboardBundleUrl() {
+    const dinnerDate = toETDateStr(new Date());
+    const schoolDate = schoolMenuDate(dinnerDate);
+    const { person, todayStr, endStr } = dashboardWeekEventsUrl();
+    let url = `/api/dashboard?date=${encodeURIComponent(dinnerDate)}&school_date=${encodeURIComponent(schoolDate)}`
+      + `&events_start=${encodeURIComponent(todayStr + 'T00:00:00')}`
+      + `&events_end=${encodeURIComponent(endStr + 'T23:59:59')}`;
+    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
+    return { url, dinnerDate, schoolDate, person, todayStr, endStr };
+  }
+
+  function _seedDashboardBundle(data, meta) {
+    if (!data) return;
+    const choresUrl = '/api/chores/?hide_future=true&completed=false&since_days=0';
+    const { eventsUrl } = dashboardWeekEventsUrl();
+    const mealsUrl = `/api/meals/day?date=${meta.dinnerDate}&school_date=${meta.schoolDate}`
+      + (meta.person !== 'all' ? `&member_id=${encodeURIComponent(meta.person)}` : '');
+    const reqUrl = meta.person === 'all'
+      ? '/api/meals/requests'
+      : `/api/meals/requests?member_id=${encodeURIComponent(meta.person)}`;
+
+    if (data.events) API.seed(eventsUrl, data.events);
+    if (data.chores) API.seed(choresUrl, data.chores);
+    if (data.leaderboard) API.seed('/api/chores/leaderboard', data.leaderboard);
+    if (data.members) API.seed('/api/members/', data.members);
+    if (data.shopping) API.seed('/api/shopping/', data.shopping);
+    if (data.messages) API.seed('/api/messages/', data.messages);
+    if (data.stocks) API.seed('/api/stocks/', data.stocks);
+    if (data.meals) API.seed(mealsUrl, data.meals);
+    if (data.meal_requests) API.seed(reqUrl, data.meal_requests);
+  }
+
+  async function _paintDashboardBundle(data, meta) {
+    if (!data || FHRouter.currentRoute() !== '/') return;
+    const now = new Date();
+    const eventsEl = document.getElementById('todayEvents');
+    if (eventsEl && data.events) {
+      _lastEventsKey = meta.person;
+      _lastEventsData = data.events;
+      if (dashCalView === 'agenda') _renderDashAgenda(eventsEl, data.events);
+      else _renderEventsList(eventsEl, data.events, now);
+    }
+    const choresEl = document.getElementById('upcomingChores');
+    if (choresEl && data.chores && data.members) {
+      await _paintUpcomingChores(choresEl, data.chores, data.members);
+    }
+    const mealsEl = document.getElementById('mealsBody');
+    if (mealsEl && data.meals) {
+      const gen = ++_mealsGen;
+      paintDinner(
+        mealsEl,
+        data.meals,
+        data.meal_requests || [],
+        meta.dinnerDate,
+        mealsSchoolHtml(data.meals, meta.person, meta.dinnerDate, Boolean(data.meals.warming))
+      );
+      if (data.meals.warming && gen === _mealsGen) {
+        setTimeout(() => { if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals(); }, 2500);
+      }
+    }
+    const shopEl = document.getElementById('shoppingStrip');
+    if (shopEl && data.shopping) _paintShoppingStrip(shopEl, data.shopping);
+    if (data.messages) _renderMessagePreviewList(data.messages);
+    const stockEl = document.getElementById('stockTicker');
+    if (stockEl && data.stocks) {
+      _cachedStocks = data.stocks;
+      _paintStocks(stockEl, data.stocks);
+    }
+  }
+
+  async function loadDashboardBundle() {
+    if (FHRouter.currentRoute() !== '/') return;
+    const gen = ++_dashBundleGen;
+    const meta = _dashboardBundleUrl();
+    const cached = API.peek(meta.url);
+    if (cached) {
+      _seedDashboardBundle(cached, meta);
+      await _paintDashboardBundle(cached, meta);
+    }
+    const request = API.get(meta.url).then(async (data) => {
+      if (gen !== _dashBundleGen || FHRouter.currentRoute() !== '/') return;
+      _seedDashboardBundle(data, meta);
+      await _paintDashboardBundle(data, meta);
+      return data;
+    }).catch((e) => {
+      if (isAbortError(e)) return;
+      // Fall back to individual loaders if the aggregate endpoint fails
+      if (!cached && gen === _dashBundleGen) {
+        loadTodayEvents();
+        loadUpcomingChores();
+        loadMeals();
+        loadShoppingStrip();
+        loadMessagePreview();
+        loadStocks();
+      }
+    });
+    const tracked = request.finally(() => {
+      if (_dashBundleInflight === tracked) _dashBundleInflight = null;
+    });
+    _dashBundleInflight = tracked;
+    return request;
+  }
+
   function mount() {
     onPersonFilterChange(() => {
-      loadTodayEvents();
-      loadUpcomingChores();
-      loadMeals();
-      loadMessagePreview();
+      loadDashboardBundle();
     });
     setDashboardDate();
 
@@ -705,24 +797,15 @@
     initAppTimezone().then(() => {
       if (FHRouter.currentRoute() !== '/') return;
       setDashboardDate();
-      loadTodayEvents();
-      loadUpcomingChores();
-      loadMeals();
-      loadShoppingStrip();
-      loadMessagePreview();
+      loadDashboardBundle();
     });
-    afterPagePaint(loadStocks);
 
     _stocksTimer = setInterval(loadStocks, 5 * 60 * 1000);
     _refreshTimer = setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || _dashBundleInflight) return;
       setDashboardDate();
-      loadTodayEvents();
-      loadUpcomingChores();
-      loadMeals();
-      loadShoppingStrip();
+      loadDashboardBundle();
       loadWeather();
-      loadMessagePreview();
       loadMessageBadge();
     }, 5 * 60 * 1000);
 
@@ -735,6 +818,8 @@
     _stocksTimer = null;
     _refreshTimer = null;
     _mealsGen += 1;
+    _dashBundleGen += 1;
+    _dashBundleInflight = null;
   }
 
   FHRouter.register('/', { mount, unmount });

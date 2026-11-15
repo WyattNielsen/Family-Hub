@@ -815,7 +815,7 @@
       let cameras = [];
       try { cameras = s.cameras ? JSON.parse(s.cameras) : []; } catch (_) {}
       camList.innerHTML = '';
-      cameras.forEach(c => addCameraRow(c.name, c.ha_entity_id || ''));
+      cameras.forEach(c => addCameraRow(c.name, c.ha_entity_id || '', c.stream_url || c.rtsp_url || ''));
     }
 
     const remEl = document.getElementById('reminderRows');
@@ -1166,7 +1166,7 @@
     }
   }
 
-  function addCameraRow(name = '', haEntityId = '') {
+  function addCameraRow(name = '', haEntityId = '', streamUrl = '') {
     const list = document.getElementById('cameraList');
     if (!list) return;
     const row = document.createElement('div');
@@ -1174,8 +1174,9 @@
     row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px;background:var(--bg2);border-radius:10px;cursor:default';
     row.innerHTML = `
       <span class="cam-drag-handle" title="Drag to reorder" style="cursor:grab;font-size:18px;color:var(--text-muted);padding:0 4px;flex-shrink:0">⠿</span>
-      <input type="text" class="form-input cam-name" placeholder="Camera name (e.g. Driveway)" value="${name}" style="flex:1;min-width:160px">
-      <input type="text" class="form-input cam-ha-entity" placeholder="HA Entity ID (e.g. camera.driveway)" value="${haEntityId}" style="flex:1;min-width:200px">
+      <input type="text" class="form-input cam-name" placeholder="Camera name (e.g. Driveway)" value="${_escapeHtml(name)}" style="flex:1;min-width:140px">
+      <input type="text" class="form-input cam-ha-entity" placeholder="HA Entity ID (e.g. camera.driveway)" value="${_escapeHtml(haEntityId)}" style="flex:1;min-width:180px">
+      <input type="text" class="form-input cam-stream-url" placeholder="Optional RTSP URL" value="${_escapeHtml(streamUrl)}" style="flex:1;min-width:200px">
       <button class="btn btn-danger-ghost" onclick="this.closest('div[draggable]').remove()" style="padding:8px 10px">✕</button>
     `;
     _bindCameraDrag(row);
@@ -1216,7 +1217,12 @@
     rows.forEach(row => {
       const name = row.querySelector('.cam-name')?.value.trim();
       const haEntity = row.querySelector('.cam-ha-entity')?.value.trim();
-      if (name && haEntity) cameras.push({ name, ha_entity_id: haEntity });
+      const streamUrl = row.querySelector('.cam-stream-url')?.value.trim();
+      if (name && (haEntity || streamUrl)) {
+        const entry = { name, ha_entity_id: haEntity };
+        if (streamUrl) entry.stream_url = streamUrl;
+        cameras.push(entry);
+      }
     });
     try {
       await API.post('/api/security/cameras', { cameras });

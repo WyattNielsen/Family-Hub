@@ -8,17 +8,19 @@ import pytz
 
 router = APIRouter()
 
+
 class ChoreCreate(BaseModel):
     title: str
     description: str = ""
     assigned_to: Optional[int] = None
-    assign_to_members: Optional[list] = None  # list of member IDs for multi-assign
+    assign_to_members: Optional[list] = None
     due_date: Optional[str] = None
-    recurrence: Optional[str] = None  # daily, weekdays, weekly, monthly, None
-    recurrence_days: Optional[str] = None  # comma-separated days e.g. "Mon,Tue,Wed"
+    recurrence: Optional[str] = None
+    recurrence_days: Optional[str] = None
     recurrence_interval: int = 1
     points: int = 1
-    time_of_day: Optional[str] = None  # morning, afternoon, evening
+    time_of_day: Optional[str] = None
+
 
 class ChoreUpdate(BaseModel):
     title: Optional[str] = None
@@ -32,15 +34,24 @@ class ChoreUpdate(BaseModel):
     points: Optional[int] = None
     time_of_day: Optional[str] = None
 
+
+def _today_str() -> str:
+    tz_val = get_setting_value("timezone", "America/New_York") or "America/New_York"
+    try:
+        tz = pytz.timezone(tz_val)
+    except Exception:
+        tz = pytz.timezone("America/New_York")
+    return datetime.now(tz).date().isoformat()
+
+
 @router.get("/")
 def get_chores(
     assigned_to: Optional[int] = Query(None),
     completed: Optional[bool] = Query(None),
     hide_future: Optional[bool] = Query(False),
-    since_days: Optional[int] = Query(None)
+    since_days: Optional[int] = Query(None),
 ):
-    conn = get_db()
-    today = datetime.now().date().isoformat()
+    today = _today_str()
     query = """
         SELECT c.*, m.name as member_name, m.color as member_color
         FROM chores c
@@ -49,136 +60,147 @@ def get_chores(
     """
     params = []
     if assigned_to is not None:
-        query += " AND c.assigned_to = ?"
+        query += " AND c.assigned_to = %s"
         params.append(assigned_to)
     if completed is not None:
-        query += " AND c.completed = ?"
+        query += " AND c.completed = %s"
         params.append(1 if completed else 0)
     if hide_future:
-        query += " AND (c.due_date IS NULL OR c.due_date <= ?)"
+        query += " AND (c.due_date IS NULL OR c.due_date <= %s)"
         params.append(today)
     if since_days is not None:
-        cutoff = (datetime.now().date() - timedelta(days=since_days)).isoformat()
-        query += " AND (c.due_date IS NULL OR c.due_date >= ?)"
+        cutoff = (datetime.fromisoformat(today).date() - timedelta(days=since_days)).isoformat()
+        query += " AND (c.due_date IS NULL OR c.due_date >= %s)"
         params.append(cutoff)
     query += " ORDER BY c.completed ASC, c.due_date ASC NULLS LAST, c.created_at DESC"
-    chores = conn.execute(query, params).fetchall()
-    conn.close()
+    with get_db() as conn:
+        chores = conn.execute(query, params).fetchall()
     return [dict(c) for c in chores]
+
 
 @router.post("/")
 def create_chore(chore: ChoreCreate):
-    conn = get_db()
     results = []
-    today = datetime.now().date().isoformat()
-    # Recurring chores must have a due_date so recurrence engine works correctly
+    today = _today_str()
     due_date = chore.due_date or (today if chore.recurrence else None)
-    # Determine list of members to assign to
     member_ids = chore.assign_to_members if chore.assign_to_members else [chore.assigned_to]
-    for mid in member_ids:
-        cur = conn.execute("""
-            INSERT INTO chores (title, description, assigned_to, due_date, recurrence, recurrence_days, recurrence_interval, points, time_of_day)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (chore.title, chore.description, mid, due_date,
-              chore.recurrence, chore.recurrence_days, chore.recurrence_interval, chore.points, chore.time_of_day))
-        new_id = cur.lastrowid
-        row = conn.execute("""
-            SELECT c.*, m.name as member_name, m.color as member_color
-            FROM chores c LEFT JOIN members m ON c.assigned_to = m.id WHERE c.id=?
-        """, (new_id,)).fetchone()
-        results.append(dict(row))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        for mid in member_ids:
+            inserted = conn.execute(
+                """
+                INSERT INTO chores
+                    (title, description, assigned_to, due_date, recurrence,
+                     recurrence_days, recurrence_interval, points, time_of_day)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    chore.title, chore.description, mid, due_date,
+                    chore.recurrence, chore.recurrence_days,
+                    chore.recurrence_interval, chore.points, chore.time_of_day,
+                ),
+            ).fetchone()
+            row = conn.execute(
+                """
+                SELECT c.*, m.name as member_name, m.color as member_color
+                FROM chores c LEFT JOIN members m ON c.assigned_to = m.id WHERE c.id=%s
+                """,
+                (inserted["id"],),
+            ).fetchone()
+            results.append(dict(row))
+        conn.commit()
     return results[0] if len(results) == 1 else results
+
 
 @router.put("/{chore_id}")
 def update_chore(chore_id: int, chore: ChoreUpdate):
-    conn = get_db()
-    existing = conn.execute("SELECT * FROM chores WHERE id=?", (chore_id,)).fetchone()
-    if not existing:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Chore not found")
+    with get_db() as conn:
+        existing = conn.execute("SELECT * FROM chores WHERE id=%s", (chore_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Chore not found")
 
-    updates = {}
-    data = chore.dict()
-    for k, v in data.items():
-        if v is not None:
-            updates[k] = v
+        updates = {}
+        data = chore.dict()
+        for k, v in data.items():
+            if v is not None:
+                updates[k] = v
 
-    # Handle completion
-    if "completed" in updates:
-        was_completed = bool(existing["completed"])
-        now_completed = updates["completed"]
-        updates["completed"] = 1 if now_completed else 0
-        if now_completed and not was_completed:
-            updates["completed_at"] = datetime.now().isoformat()
-            # Auto-create next occurrence for recurring chores
-            if existing["recurrence"]:
-                _create_next_recurrence(conn, dict(existing))
-        elif not now_completed:
-            updates["completed_at"] = None
+        if "completed" in updates:
+            was_completed = bool(existing["completed"])
+            now_completed = updates["completed"]
+            updates["completed"] = 1 if now_completed else 0
+            if now_completed and not was_completed:
+                updates["completed_at"] = datetime.now().isoformat()
+                if existing["recurrence"]:
+                    _create_next_recurrence(conn, dict(existing))
+            elif not now_completed:
+                updates["completed_at"] = None
 
-    if updates:
-        set_clause = ", ".join(f"{k}=?" for k in updates)
-        conn.execute(f"UPDATE chores SET {set_clause} WHERE id=?", (*updates.values(), chore_id))
-        conn.commit()
+        if updates:
+            set_clause = ", ".join(f"{k}=%s" for k in updates)
+            conn.execute(f"UPDATE chores SET {set_clause} WHERE id=%s", (*updates.values(), chore_id))
+            conn.commit()
 
-    row = conn.execute("""
-        SELECT c.*, m.name as member_name, m.color as member_color
-        FROM chores c LEFT JOIN members m ON c.assigned_to = m.id WHERE c.id=?
-    """, (chore_id,)).fetchone()
-    conn.close()
+        row = conn.execute(
+            """
+            SELECT c.*, m.name as member_name, m.color as member_color
+            FROM chores c LEFT JOIN members m ON c.assigned_to = m.id WHERE c.id=%s
+            """,
+            (chore_id,),
+        ).fetchone()
     return dict(row)
+
 
 @router.delete("/{chore_id}")
 def delete_chore(chore_id: int):
-    conn = get_db()
-    conn.execute("DELETE FROM chores WHERE id=?", (chore_id,))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        conn.execute("DELETE FROM chores WHERE id=%s", (chore_id,))
+        conn.commit()
     return {"ok": True}
+
 
 @router.post("/reset")
 def reset_chores(mode: str = Query("points")):
-    """Reset chore points for a new season.
-    mode=points: delete completed chore rows only (zeroes scores, keeps chore list)
-    mode=all: delete every chore row (full fresh start)
-    """
-    conn = get_db()
-    if mode == "all":
-        conn.execute("DELETE FROM chores")
-    else:
-        conn.execute("DELETE FROM chores WHERE completed=1")
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        if mode == "all":
+            conn.execute("DELETE FROM chores")
+        else:
+            conn.execute("DELETE FROM chores WHERE completed=1")
+        conn.commit()
     return {"ok": True}
+
 
 @router.get("/leaderboard")
 def get_leaderboard():
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT m.id, m.name, m.color, m.avatar, m.avatar_photo,
-               SUM(CASE WHEN c.completed=1 THEN c.points ELSE 0 END) as points
-        FROM members m
-        LEFT JOIN chores c ON c.assigned_to = m.id
-        GROUP BY m.id
-        ORDER BY points DESC, m.sort_order, m.name
-    """).fetchall()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT m.id, m.name, m.color, m.avatar, m.avatar_photo,
+                   COALESCE(SUM(CASE WHEN c.completed=1 THEN c.points ELSE 0 END), 0) as points
+            FROM members m
+            LEFT JOIN chores c ON c.assigned_to = m.id
+            GROUP BY m.id
+            ORDER BY points DESC, m.sort_order, m.name
+            """
+        ).fetchall()
 
-    # One read of completed days, then walk each streak in memory.
-    # The old loop queried once per member per day.
-    done_days = {}
-    for row in conn.execute(
-        """SELECT assigned_to, date(due_date) AS due FROM chores
-           WHERE completed=1 AND assigned_to IS NOT NULL AND due_date IS NOT NULL
-           GROUP BY assigned_to, date(due_date)"""
-    ):
-        done_days.setdefault(row["assigned_to"], set()).add(row["due"])
+        done_days: dict[int, set[str]] = {}
+        for row in conn.execute(
+            """SELECT assigned_to, SUBSTRING(due_date FROM 1 FOR 10) AS due
+               FROM chores
+               WHERE completed=1 AND assigned_to IS NOT NULL AND due_date IS NOT NULL
+               GROUP BY assigned_to, SUBSTRING(due_date FROM 1 FOR 10)"""
+        ):
+            done_days.setdefault(row["assigned_to"], set()).add(row["due"])
+
+    tz_val = get_setting_value("timezone", "America/New_York") or "America/New_York"
+    try:
+        tz = pytz.timezone(tz_val)
+    except Exception:
+        tz = pytz.timezone("America/New_York")
+    today = datetime.now(tz).date()
 
     result = []
-    tz_val = get_setting_value("timezone", "America/New_York") or "America/New_York"
-    tz = pytz.timezone(tz_val)
-    today = datetime.now(tz).date()
     for r in rows:
         d = dict(r)
         days = done_days.get(d["id"], ())
@@ -189,37 +211,34 @@ def get_leaderboard():
             check -= timedelta(days=1)
         d["streak"] = streak
         result.append(d)
-
-    conn.close()
     return result
 
-def advance_recurring_chores():
-    """Create missed recurring occurrences. Runs from the background loop.
 
-    Doing this inside GET took the write lock on every chores page load.
-    """
-    conn = get_db()
-    try:
+def advance_recurring_chores():
+    """Create missed recurring occurrences. Runs from worker.py."""
+    with get_db() as conn:
         _advance_recurring_to_today(conn)
-    finally:
-        conn.close()
 
 
 def _advance_recurring_to_today(conn):
-    """Create any missing recurring chore occurrences up to today.
-    Handles the case where a chore was missed (not completed) so
-    _create_next_recurrence was never called."""
-    today = datetime.now().date()
-    rows = conn.execute("""
-        SELECT *, MAX(due_date) as max_due FROM chores
+    today_str = _today_str()
+    today = datetime.fromisoformat(today_str).date()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT ON (title, COALESCE(assigned_to, -1)) *
+        FROM chores
         WHERE recurrence IS NOT NULL AND due_date IS NOT NULL
-        GROUP BY title, COALESCE(assigned_to, -1)
-        HAVING date(MAX(due_date)) < date('now')
-    """).fetchall()
+        ORDER BY title, COALESCE(assigned_to, -1), SUBSTRING(due_date FROM 1 FOR 10) DESC
+        """
+    ).fetchall()
+
     created = False
     for row in rows:
         chore = dict(row)
-        chore["due_date"] = chore["max_due"]
+        max_due_prefix = str(chore["due_date"])[:10]
+        if max_due_prefix >= today_str:
+            continue
+        chore["due_date"] = max_due_prefix
         for _ in range(60):
             due = datetime.fromisoformat(chore["due_date"]).date()
             interval = chore.get("recurrence_interval") or 1
@@ -239,7 +258,9 @@ def _advance_recurring_to_today(conn):
                 next_due = due.replace(year=year, month=month)
             elif rec == "custom_days":
                 day_map = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
-                selected = sorted([day_map[d.strip()] for d in (chore.get("recurrence_days") or "").split(",") if d.strip() in day_map])
+                selected = sorted(
+                    [day_map[d.strip()] for d in (chore.get("recurrence_days") or "").split(",") if d.strip() in day_map]
+                )
                 if not selected:
                     break
                 current_wd = due.weekday()
@@ -251,28 +272,33 @@ def _advance_recurring_to_today(conn):
                 break
             next_due_str = next_due.isoformat()
             existing = conn.execute(
-                "SELECT id FROM chores WHERE title=? AND assigned_to IS ? AND due_date=?",
-                (chore["title"], chore["assigned_to"], next_due_str)
+                "SELECT id FROM chores WHERE title=%s AND assigned_to IS NOT DISTINCT FROM %s AND due_date=%s",
+                (chore["title"], chore["assigned_to"], next_due_str),
             ).fetchone()
             if not existing:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO chores (title, description, assigned_to, due_date, recurrence,
-                                       recurrence_days, recurrence_interval, points, time_of_day)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (chore["title"], chore.get("description"), chore["assigned_to"],
-                      next_due_str, chore["recurrence"], chore.get("recurrence_days"),
-                      interval, chore["points"], chore.get("time_of_day")))
+                                        recurrence_days, recurrence_interval, points, time_of_day)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        chore["title"], chore.get("description"), chore["assigned_to"],
+                        next_due_str, chore["recurrence"], chore.get("recurrence_days"),
+                        interval, chore["points"], chore.get("time_of_day"),
+                    ),
+                )
                 created = True
             chore["due_date"] = next_due_str
     if created:
         conn.commit()
 
+
 def _create_next_recurrence(conn, chore: dict):
-    """When a recurring chore is completed, create the next one."""
     if not chore["due_date"] or not chore["recurrence"]:
         return
     try:
-        due = datetime.fromisoformat(chore["due_date"])
+        due = datetime.fromisoformat(str(chore["due_date"])[:10])
         interval = chore.get("recurrence_interval", 1) or 1
         rec = chore["recurrence"]
         if rec == "daily":
@@ -301,19 +327,24 @@ def _create_next_recurrence(conn, chore: dict):
         else:
             return
         next_due_str = next_due.date().isoformat()
-        # Dedup: don't create if a matching incomplete occurrence already exists
-        existing = conn.execute("""
+        existing = conn.execute(
+            """
             SELECT id FROM chores
-            WHERE title=? AND assigned_to IS ? AND due_date=? AND completed=0
-        """, (chore["title"], chore["assigned_to"], next_due_str)).fetchone()
-        if existing:
-            return
-        conn.execute("""
-            INSERT INTO chores (title, description, assigned_to, due_date, recurrence, recurrence_days, recurrence_interval, points, time_of_day)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (chore["title"], chore["description"], chore["assigned_to"],
-              next_due_str, chore["recurrence"],
-              chore.get("recurrence_days"), interval, chore["points"],
-              chore.get("time_of_day")))
+            WHERE title=%s AND assigned_to IS NOT DISTINCT FROM %s AND due_date=%s AND completed=0
+            """,
+            (chore["title"], chore["assigned_to"], next_due_str),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                """
+                INSERT INTO chores (title, description, assigned_to, due_date, recurrence, recurrence_days, recurrence_interval, points, time_of_day)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    chore["title"], chore["description"], chore["assigned_to"], next_due_str,
+                    chore["recurrence"], chore.get("recurrence_days"), interval,
+                    chore["points"], chore.get("time_of_day"),
+                ),
+            )
     except Exception as e:
-        print(f"Error creating recurrence: {e}")
+        print(f"Recurrence error: {e}")

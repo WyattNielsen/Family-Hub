@@ -1,8 +1,9 @@
-"""Apple Calendar sync helpers (ICS/webcal feeds + iCloud CalDAV)."""
+"""Apple Calendar sync helpers (ICS/webcal feeds + iCloud CalDAV) with ETag/hash & row diffing."""
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import hashlib
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -10,6 +11,7 @@ import asyncio
 
 from icalendar import Calendar
 
+from migrate_sqlite import compute_is_multiday
 import outbound
 
 try:
@@ -44,7 +46,6 @@ def _as_utc_naive_iso(value) -> tuple[str, int]:
         return value.isoformat(timespec="seconds"), 0
     if isinstance(value, date):
         return value.isoformat(), 1
-    # icalendar sometimes returns strings
     text = str(value)
     if "T" in text:
         return text.replace("Z", ""), 0
@@ -72,8 +73,6 @@ def _event_fields_from_component(component, fallback_color: Optional[str] = None
     else:
         end = None
 
-    # All-day iCal DTEND is exclusive (same as Google). Normalize so single-day
-    # events use start+1 day, matching Google sync + frontend display logic.
     if all_day:
         try:
             start_d = date.fromisoformat(str(start)[:10])
@@ -81,7 +80,6 @@ def _event_fields_from_component(component, fallback_color: Optional[str] = None
                 end_d = date.fromisoformat(str(end)[:10])
             else:
                 end_d = start_d
-            # Missing or inclusive-looking end → exclusive next day
             if end_d <= start_d:
                 end_d = start_d + timedelta(days=1)
             end = end_d.isoformat()
@@ -115,7 +113,6 @@ def _events_from_ics(text: str, color: Optional[str] = None) -> list[dict]:
         for component in recurring_ical_events.of(cal).between(start, end):
             fields = _event_fields_from_component(component, color)
             if fields:
-                # Recurring expansions share UID — disambiguate with occurrence start
                 fields["uid"] = f"{fields['uid']}@{fields['start_datetime']}"
                 events.append(fields)
         return events
@@ -127,25 +124,50 @@ def _events_from_ics(text: str, color: Optional[str] = None) -> list[dict]:
     return events
 
 
-async def fetch_ics_events(url: str, color: Optional[str] = None) -> list[dict]:
+async def fetch_ics_events(
+    url: str,
+    color: Optional[str] = None,
+    etag: Optional[str] = None,
+    content_hash: Optional[str] = None,
+) -> tuple[bool, list[dict], Optional[str], Optional[str]]:
+    """Fetch ICS feed with ETag/SHA-256 skip.
+
+    Returns (changed, events, new_etag, new_hash).
+    When changed is False, callers skip parsing and DB writes completely.
+    """
     url = normalize_ics_url(url)
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("ICS URL must be http(s) or webcal")
 
-    async with outbound.client(timeout=60.0, headers={"User-Agent": "FamilyHub/1.0"}) as client:
+    req_headers = {"User-Agent": "FamilyHub/1.0"}
+    if etag:
+        req_headers["If-None-Match"] = etag
+
+    async with outbound.client(timeout=45.0, headers=req_headers) as client:
         resp = await client.get(url)
+        if resp.status_code == 304:
+            return False, [], etag, content_hash
         if resp.status_code != 200:
             raise ValueError(f"ICS fetch failed ({resp.status_code})")
+        raw_bytes = resp.content
+        new_etag = resp.headers.get("etag")
         text = resp.text
 
-    return await asyncio.to_thread(_events_from_ics, text, color)
+    # Hash includes the window day + color so daily rolling windows still advance once/day
+    day_bucket = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    digest = hashlib.sha256(raw_bytes + f"|{day_bucket}|{color or ''}".encode("utf-8")).hexdigest()
+    if content_hash and digest == content_hash:
+        return False, [], new_etag or etag, digest
+
+    events = await asyncio.to_thread(_events_from_ics, text, color)
+    return True, events, new_etag, digest
 
 
 def list_icloud_calendars(apple_id: str, app_password: str) -> list[dict]:
     from caldav import DAVClient
 
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=20)
     principal = client.principal()
     calendars = []
     for cal in principal.calendars():
@@ -155,11 +177,13 @@ def list_icloud_calendars(apple_id: str, app_password: str) -> list[dict]:
         except Exception:
             pass
         url = str(cal.url)
-        calendars.append({
-            "id": url,
-            "url": url,
-            "name": name or url.rstrip("/").split("/")[-1] or "Calendar",
-        })
+        calendars.append(
+            {
+                "id": url,
+                "url": url,
+                "name": name or url.rstrip("/").split("/")[-1] or "Calendar",
+            }
+        )
     return calendars
 
 
@@ -167,14 +191,12 @@ def fetch_caldav_events(apple_id: str, app_password: str, calendar_url: str, col
     from caldav import DAVClient
 
     client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=20)
-    # Re-bind to the specific calendar URL
     cal = client.calendar(url=calendar_url)
     start, end = sync_window()
     events: list[dict] = []
     try:
         results = cal.search(start=start, end=end, event=True, expand=True)
     except TypeError:
-        # Older caldav API
         results = cal.date_search(start=start, end=end, expand=True)
     except Exception:
         results = cal.events()
@@ -189,7 +211,6 @@ def fetch_caldav_events(apple_id: str, app_password: str, calendar_url: str, col
                 fields = _event_fields_from_component(component, color)
                 if not fields:
                     continue
-                # Keep occurrence-stable id when expand gives same UID
                 fields["uid"] = f"{fields['uid']}@{fields['start_datetime']}"
                 events.append(fields)
         except Exception as exc:
@@ -206,50 +227,101 @@ def upsert_apple_events(
     *,
     is_family: bool = False,
 ) -> int:
-    """Replace synced Apple/ICS inbound events for a source with the fresh set.
-
-    Preserves locally-written events (google_calendar_id set) on the same source.
-    """
+    """Diff-sync Apple/ICS inbound events for a source so unchanged rows stay untouched."""
     prefix = f"apple:{source_id}:"
     family_flag = 1 if is_family else 0
-    rows_to_insert = [
-        (
-            ev["title"],
-            ev.get("description") or "",
-            ev.get("location") or "",
-            ev["start_datetime"],
-            ev["end_datetime"],
-            ev.get("all_day") or 0,
-            member_id,
-            family_flag,
-            ev.get("color"),
-            f"{prefix}{ev['uid']}",
-            source_id,
-        )
-        for ev in events
-    ]
-    conn.execute(
-        """DELETE FROM events
-           WHERE external_source_id=? AND google_calendar_id IS NULL""",
-        (source_id,),
-    )
-    # Legacy rows keyed only by the apple: prefix
+
+    # Clean up any legacy rows without external_source_id once
     if member_id is not None:
         conn.execute(
             """DELETE FROM events
-               WHERE member_id=? AND external_event_id LIKE ? AND google_calendar_id IS NULL
-                 AND (external_source_id IS NULL OR external_source_id=?)""",
-            (member_id, prefix + "%", source_id),
+               WHERE member_id=%s AND external_event_id LIKE %s
+                 AND google_calendar_id IS NULL AND external_source_id IS NULL""",
+            (member_id, prefix + "%"),
         )
-    if rows_to_insert:
+
+    existing_rows = conn.execute(
+        """SELECT id, external_event_id, title, description, location,
+                  start_datetime, end_datetime, all_day, member_id, is_family,
+                  color, is_multiday
+           FROM events
+           WHERE external_source_id=%s AND google_calendar_id IS NULL""",
+        (source_id,),
+    ).fetchall()
+
+    existing_by_ext: dict[str, dict] = {}
+    duplicate_ids: list[int] = []
+    for row in existing_rows:
+        ext_id = row.get("external_event_id")
+        if not ext_id or ext_id in existing_by_ext:
+            duplicate_ids.append(row["id"])
+        else:
+            existing_by_ext[ext_id] = row
+
+    seen_ext_ids: set[str] = set()
+    to_insert: list[tuple] = []
+    to_update: list[tuple] = []
+
+    for ev in events:
+        ext_id = f"{prefix}{ev['uid']}"
+        if ext_id in seen_ext_ids:
+            continue
+        seen_ext_ids.add(ext_id)
+        title = ev["title"]
+        desc = ev.get("description") or ""
+        loc = ev.get("location") or ""
+        start_dt = ev["start_datetime"]
+        end_dt = ev["end_datetime"]
+        all_day = int(ev.get("all_day") or 0)
+        color = ev.get("color")
+        multiday = compute_is_multiday(start_dt, end_dt)
+
+        prev = existing_by_ext.get(ext_id)
+        if prev is None:
+            to_insert.append(
+                (title, desc, loc, start_dt, end_dt, all_day, member_id, family_flag, color, ext_id, source_id, multiday)
+            )
+        else:
+            changed = (
+                prev["title"] != title
+                or (prev["description"] or "") != desc
+                or (prev["location"] or "") != loc
+                or prev["start_datetime"] != start_dt
+                or prev["end_datetime"] != end_dt
+                or int(prev["all_day"] or 0) != all_day
+                or prev["member_id"] != member_id
+                or int(prev["is_family"] or 0) != family_flag
+                or prev["color"] != color
+                or int(prev["is_multiday"] or 0) != multiday
+            )
+            if changed:
+                to_update.append(
+                    (title, desc, loc, start_dt, end_dt, all_day, member_id, family_flag, color, multiday, prev["id"])
+                )
+
+    removed_ids = duplicate_ids + [
+        row["id"] for ext_id, row in existing_by_ext.items() if ext_id not in seen_ext_ids
+    ]
+
+    if removed_ids:
+        conn.execute("DELETE FROM events WHERE id = ANY(%s)", (removed_ids,))
+    if to_update:
+        conn.executemany(
+            """UPDATE events
+               SET title=%s, description=%s, location=%s, start_datetime=%s, end_datetime=%s,
+                   all_day=%s, member_id=%s, is_family=%s, color=%s, is_multiday=%s
+               WHERE id=%s""",
+            to_update,
+        )
+    if to_insert:
         conn.executemany(
             """INSERT INTO events
                (title, description, location, start_datetime, end_datetime, all_day,
-                member_id, is_family, color, external_event_id, external_source_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows_to_insert,
+                member_id, is_family, color, external_event_id, external_source_id, is_multiday)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            to_insert,
         )
-    return len(rows_to_insert)
+    return len(seen_ext_ids)
 
 
 def _vevent_ical(event_row: dict, uid: str) -> bytes:
@@ -293,7 +365,7 @@ def create_caldav_event(apple_id: str, app_password: str, calendar_url: str, eve
 
     uid = str(uuid.uuid4())
     ical = _vevent_ical(event_row, uid)
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=20)
     cal = client.calendar(url=calendar_url)
     cal.save_event(ical)
     return uid
@@ -305,7 +377,7 @@ def update_caldav_event(
     """Update an existing CalDAV event by UID. Returns True on success."""
     from caldav import DAVClient
 
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=20)
     cal = client.calendar(url=calendar_url)
     try:
         existing = cal.event_by_uid(uid)
@@ -326,7 +398,7 @@ def delete_caldav_event(apple_id: str, app_password: str, calendar_url: str, uid
     """Delete a CalDAV event by UID. Returns True if deleted."""
     from caldav import DAVClient
 
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=20)
     cal = client.calendar(url=calendar_url)
     try:
         existing = cal.event_by_uid(uid)

@@ -51,7 +51,7 @@ A self-hosted family dashboard built for a wall-mounted touchscreen. Combines ca
 - Color-coded cards with each person's color
 
 ### Security
-- **Camera feeds** — live MJPEG streams via Home Assistant proxy (no go2rtc required)
+- **Camera feeds** — live WebRTC via go2rtc (zero persistent HTTP sockets; optional direct RTSP URLs)
 - Fullscreen camera modal with prev/next arrows, dot indicators, keyboard arrow keys, and swipe gestures
 - **Garage doors** — open/close control with live state
 - **Alarm panel** — arm home, arm away, disarm with optional PIN
@@ -140,9 +140,11 @@ https://your-host/api/auth/google/callback/account
 docker compose up -d --build
 ```
 
+This starts four services: `postgres`, `go2rtc`, `familyhub` (web), and `worker`. WebRTC camera media uses host port **8555** (TCP + UDP).
+
 **Option B — Single Proxmox LXC (no Docker):**
 
-See [Running in a Proxmox LXC](#running-in-a-proxmox-lxc) below.
+See [Running in a Proxmox LXC](#running-in-a-proxmox-lxc) below. The installer sets up PostgreSQL, go2rtc, and separate systemd units for web + worker.
 
 ### 4. Open the app
 
@@ -204,11 +206,11 @@ From a browser, go to `http://<lxc-ip>:3000` (or whatever port you set). Set **`
 
 | Item   | Path or command |
 |--------|------------------|
-| App    | `/opt/familyhub/` (backend, frontend, venv) |
-| Data   | `/opt/familyhub/data/` (SQLite DB + photos) |
+| App    | `/opt/familyhub/` (backend, frontend, venv, bin/go2rtc) |
+| Data   | `/opt/familyhub/data/` (photos + go2rtc config) + PostgreSQL `familyhub` DB |
 | Config | `/opt/familyhub/.env` |
-| Logs   | `journalctl -u familyhub -f` |
-| Restart| `systemctl restart familyhub` |
+| Logs   | `journalctl -u familyhub -u familyhub-worker -u familyhub-go2rtc -f` |
+| Restart| `systemctl restart familyhub familyhub-worker familyhub-go2rtc` |
 
 ### Updating (LXC)
 
@@ -240,7 +242,7 @@ Add each person — name, color, avatar emoji. They appear in the sidebar and ca
 3. **Entities** — add entity IDs to monitor:
    - `cover.garage_door` — garage door
    - `alarm_control_panel.home` — alarm panel
-4. **Cameras** — add HA camera entity IDs (e.g. `camera.driveway`) for live feeds on the Security page
+4. **Cameras** — add HA camera entity IDs (e.g. `camera.driveway`) and/or optional RTSP URLs for live WebRTC feeds on the Security page
 
 ### Night Mode
 In **Settings → General → Night Mode**:
@@ -282,10 +284,12 @@ Enter your Nutrislice school domain (e.g. `bcps`) in Settings → Integrations �
 
 ## Data & Backups
 
-- **Docker:** Data is in `./data/familyhub.db` and `./data/photos/`.
-- **LXC:** Data is in `/opt/familyhub/data/familyhub.db` and `/opt/familyhub/data/photos/`.
+Family Hub stores app data in **PostgreSQL**. Photos/avatars stay on disk.
 
-Back up the SQLite file and photos folder regularly.
+- **Docker:** Postgres data is in the `pgdata` named volume. Photos are in `./data/photos/`. An existing `./data/familyhub.db` (legacy SQLite) is imported automatically on first boot, then left as a backup.
+- **LXC:** Postgres is local (`familyhub` database). Photos are in `/opt/familyhub/data/photos/`.
+
+Back up Postgres regularly (`pg_dump`) plus the photos folder.
 
 ---
 

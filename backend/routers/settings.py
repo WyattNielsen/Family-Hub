@@ -1,6 +1,12 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
-from database import get_db, get_settings_map, invalidate_settings_cache
+from database import (
+    get_db,
+    get_settings_map_async,
+    invalidate_settings_cache,
+    notify_worker,
+    upsert_setting_sync,
+)
 
 router = APIRouter()
 
@@ -19,57 +25,67 @@ def _write_only_flags(stored: dict) -> dict:
     return {f"{key}_set": _is_set(stored.get(key)) for key in WRITE_ONLY_KEYS}
 
 
-@router.get("/")
-async def get_settings():
-    stored = get_settings_map()
-    out = {key: value for key, value in stored.items() if key not in WRITE_ONLY_KEYS}
+def sanitize_settings(stored: dict) -> dict:
+    out = {
+        key: value
+        for key, value in stored.items()
+        if key not in WRITE_ONLY_KEYS and not key.startswith("_")
+    }
     out.update(_write_only_flags(stored))
     return out
 
 
+@router.get("/")
+async def get_settings():
+    stored = await get_settings_map_async()
+    return sanitize_settings(stored)
+
+
 @router.post("/")
 def update_settings(payload: dict):
-    conn = get_db()
-    for key, value in payload.items():
-        if key in WRITE_ONLY_KEYS:
-            # null clears. Blank or the old mask leaves the stored secret alone,
-            # so saving the rest of the form cannot wipe it.
-            if value is None:
-                conn.execute("DELETE FROM settings WHERE key=?", (key,))
+    with get_db() as conn:
+        for key, value in payload.items():
+            if key in WRITE_ONLY_KEYS:
+                if value is None:
+                    upsert_setting_sync(conn, key, None)
+                    continue
+                text = str(value).strip()
+                if not text or text == MASK_PLACEHOLDER:
+                    continue
+                upsert_setting_sync(conn, key, text)
                 continue
-            text = str(value).strip()
-            if not text or text == MASK_PLACEHOLDER:
+            if key.endswith("_set") and key[: -len("_set")] in WRITE_ONLY_KEYS:
                 continue
-            conn.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (key, text),
-            )
-            continue
-        # Flags are derived. Don't persist them if a client echoes the GET body.
-        if key.endswith("_set") and key[: -len("_set")] in WRITE_ONLY_KEYS:
-            continue
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            (key, str(value)),
-        )
-    conn.commit()
-    conn.close()
-    invalidate_settings_cache()
+            upsert_setting_sync(conn, key, str(value))
+        conn.commit()
+
+    invalidate_settings_cache(broadcast=True)
+
     if "stock_symbols" in payload:
-        from routers import stocks
-        stocks._quote_cache.clear()
+        notify_worker("refresh_stocks")
     if any(k in payload for k in ("weather_zip", "weather_lat", "weather_lon")):
-        from routers import weather
-        weather._forecast_cache["payload"] = None
+        notify_worker("refresh_weather")
     if any(k in payload for k in ("ha_url", "ha_token", "ha_entities")):
-        from routers import homeassistant
-        homeassistant.invalidate_ha_cache()
+        notify_worker("refresh_ha")
+        notify_worker("sync_cameras")
+    if any(
+        k in payload
+        for k in (
+            "schoolcafe_district_id",
+            "schoolcafe_lines",
+            "lunch_district",
+            "lunch_school_slug",
+            "lunch_menu_type",
+            "lunch_hidden",
+        )
+    ):
+        notify_worker("refresh_meals")
     return {"ok": True}
 
 
 @router.get("/{key}")
 async def get_setting(key: str):
-    stored = get_settings_map()
+    stored = await get_settings_map_async()
     if key in WRITE_ONLY_KEYS:
         return {"key": key, "set": _is_set(stored.get(key))}
     if key not in stored:

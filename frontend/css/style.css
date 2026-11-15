@@ -1202,8 +1202,10 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 
 /* ── Camera Loading Placeholder ────────────────────────────── */
 .camera-feed-card { position: relative; }
-.camera-feed-card .camera-feed-img { display: none; }
-.camera-feed-card .camera-feed-img.loaded { display: block; }
+.camera-feed-card .camera-feed-img,
+.camera-feed-card .camera-feed-video { display: none; }
+.camera-feed-card .camera-feed-img.loaded,
+.camera-feed-card .camera-feed-video.loaded { display: block; }
 .camera-placeholder {
   width: 100%;
   aspect-ratio: 16/9;
@@ -1784,7 +1786,8 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 .camera-feed-card:hover { transform: scale(1.01); box-shadow: var(--shadow-lg); }
 .camera-feed-label { padding: 10px 14px; font-weight: 700; font-size: 14px; border-bottom: 1px solid var(--border); }
 .camera-feed-iframe { width: 100%; aspect-ratio: 16/9; border: none; display: block; background: #000; }
-.camera-feed-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #000; }
+.camera-feed-img,
+.camera-feed-video { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #000; }
 
 /* ── Camera Fullscreen Modal ────────────────────────────────── */
 .camera-modal-overlay {
@@ -1822,7 +1825,8 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   transition: background 0.15s;
 }
 .camera-modal-nav:hover { background: rgba(255,255,255,0.22); }
-.camera-modal-img { width: 100%; display: block; background: #000; max-height: 72vh; object-fit: contain; cursor: grab; }
+.camera-modal-img,
+.camera-modal-video { width: 100%; display: block; background: #000; max-height: 72vh; object-fit: contain; cursor: grab; }
 .camera-modal-dots { display: flex; justify-content: center; gap: 6px; padding: 10px 0 6px; }
 .cam-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.3); transition: background 0.2s; }
 .cam-dot.active { background: #fff; }

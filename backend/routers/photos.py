@@ -1,4 +1,5 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import asyncio
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from typing import List
@@ -7,7 +8,6 @@ import uuid
 
 router = APIRouter()
 
-# Prefer DATA_DIR/photos for LXC/native (single data dir); else backend/data/photos
 _data_dir = os.environ.get("DATA_DIR")
 if _data_dir:
     PHOTOS_DIR = os.path.join(_data_dir, "photos")
@@ -20,7 +20,6 @@ ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 @router.get("/")
 def get_photos():
-    """Return list of uploaded photo URLs for the slideshow."""
     try:
         files = [
             f for f in os.listdir(PHOTOS_DIR)
@@ -32,9 +31,13 @@ def get_photos():
         return {"photos": [], "count": 0}
 
 
+def _copy_upload_sync(src_file, dest: str):
+    with open(dest, "wb") as f:
+        shutil.copyfileobj(src_file, f)
+
+
 @router.post("/upload")
 async def upload_photos(files: List[UploadFile] = File(...)):
-    """Upload one or more photos."""
     uploaded = []
     errors = []
 
@@ -43,13 +46,12 @@ async def upload_photos(files: List[UploadFile] = File(...)):
             errors.append(f"{file.filename}: unsupported type {file.content_type}")
             continue
 
-        ext = os.path.splitext(file.filename)[1].lower() or ".jpg"
+        ext = os.path.splitext(file.filename or "")[1].lower() or ".jpg"
         filename = f"{uuid.uuid4().hex}{ext}"
         dest = os.path.join(PHOTOS_DIR, filename)
 
         try:
-            with open(dest, "wb") as f:
-                shutil.copyfileobj(file.file, f)
+            await asyncio.to_thread(_copy_upload_sync, file.file, dest)
             uploaded.append(filename)
         except Exception as e:
             errors.append(f"{file.filename}: {str(e)}")
@@ -59,7 +61,6 @@ async def upload_photos(files: List[UploadFile] = File(...)):
 
 @router.get("/file/{filename}")
 async def serve_photo(filename: str):
-    """Serve a photo file."""
     filename = os.path.basename(filename)
     path = os.path.join(PHOTOS_DIR, filename)
     if not os.path.exists(path):
@@ -72,10 +73,9 @@ async def serve_photo(filename: str):
 
 @router.delete("/file/{filename}")
 async def delete_photo(filename: str):
-    """Delete a photo."""
     filename = os.path.basename(filename)
     path = os.path.join(PHOTOS_DIR, filename)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Photo not found")
-    os.remove(path)
+    await asyncio.to_thread(os.remove, path)
     return {"deleted": filename}

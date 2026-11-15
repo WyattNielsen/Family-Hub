@@ -2,9 +2,10 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
 import sys, os, uuid, shutil
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from database import get_db
+from database import get_db, notify_worker
 
 router = APIRouter()
 
@@ -51,8 +52,10 @@ class MemberCreate(BaseModel):
     school_id: Optional[str] = None
     school_name: Optional[str] = None
 
+
 class MemberOrder(BaseModel):
     ids: list[int]
+
 
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
@@ -63,11 +66,12 @@ class MemberUpdate(BaseModel):
     school_id: Optional[str] = None
     school_name: Optional[str] = None
 
+
 def _validate_write_source(conn, member_id: int, source_id: Optional[int]):
     if source_id is None:
         return
     source = conn.execute(
-        "SELECT id, member_id, kind FROM calendar_sources WHERE id=?", (source_id,)
+        "SELECT id, member_id, kind FROM calendar_sources WHERE id=%s", (source_id,)
     ).fetchone()
     if not source:
         raise HTTPException(status_code=400, detail="Write calendar source not found")
@@ -82,97 +86,106 @@ def _validate_write_source(conn, member_id: int, source_id: Optional[int]):
             detail="Write calendar must be Google or iCloud CalDAV",
         )
 
+
 @router.get("/")
 def get_members():
-    conn = get_db()
-    members = conn.execute(f"{MEMBER_SELECT} {MEMBER_ORDER}").fetchall()
-    conn.close()
+    with get_db() as conn:
+        members = conn.execute(f"{MEMBER_SELECT} {MEMBER_ORDER}").fetchall()
     return [dict(m) for m in members]
+
 
 @router.put("/order")
 def set_member_order(body: MemberOrder):
-    conn = get_db()
-    existing = {row["id"] for row in conn.execute("SELECT id FROM members").fetchall()}
-    if len(body.ids) != len(set(body.ids)) or set(body.ids) != existing:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Order must include every family member once")
-    for index, member_id in enumerate(body.ids):
-        conn.execute("UPDATE members SET sort_order=? WHERE id=?", (index, member_id))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        existing = {row["id"] for row in conn.execute("SELECT id FROM members").fetchall()}
+        if len(body.ids) != len(set(body.ids)) or set(body.ids) != existing:
+            raise HTTPException(status_code=400, detail="Order must include every family member once")
+        for index, member_id in enumerate(body.ids):
+            conn.execute("UPDATE members SET sort_order=%s WHERE id=%s", (index, member_id))
+        conn.commit()
     return {"ok": True}
+
 
 @router.post("/")
 def create_member(member: MemberCreate):
-    conn = get_db()
     school_id = (member.school_id or "").strip() or None
     school_name = (member.school_name or "").strip() or None
     if not school_id:
         school_name = None
-    next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM members").fetchone()[0]
-    cur = conn.execute(
-        "INSERT INTO members (name, color, avatar, is_admin, school_id, school_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (member.name, member.color, member.avatar, 1 if member.is_admin else 0, school_id, school_name, next_order)
-    )
-    conn.commit()
-    new_id = cur.lastrowid
-    row = conn.execute(f"{MEMBER_SELECT} WHERE id=?", (new_id,)).fetchone()
-    conn.close()
+    with get_db() as conn:
+        next_order = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM members"
+        ).fetchone()["next_order"]
+        inserted = conn.execute(
+            """INSERT INTO members (name, color, avatar, is_admin, school_id, school_name, sort_order)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (member.name, member.color, member.avatar, 1 if member.is_admin else 0, school_id, school_name, next_order),
+        ).fetchone()
+        conn.commit()
+        row = conn.execute(f"{MEMBER_SELECT} WHERE id=%s", (inserted["id"],)).fetchone()
+    if school_id:
+        notify_worker("refresh_meals")
     return dict(row)
+
 
 def _apply_member_update(member_id: int, member: MemberUpdate):
-    conn = get_db()
-    existing = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
-    if not existing:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Member not found")
+    school_changed = False
+    with get_db() as conn:
+        existing = conn.execute("SELECT * FROM members WHERE id=%s", (member_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Member not found")
 
-    data = member.dict(exclude_unset=True)
-    updates = {}
-    if "name" in data and data["name"] is not None:
-        updates["name"] = data["name"]
-    if "color" in data and data["color"] is not None:
-        updates["color"] = data["color"]
-    if "avatar" in data:
-        updates["avatar"] = data["avatar"]
-    if "is_admin" in data and data["is_admin"] is not None:
-        updates["is_admin"] = 1 if data["is_admin"] else 0
-    if "write_calendar_source_id" in data:
-        _validate_write_source(conn, member_id, data["write_calendar_source_id"])
-        updates["write_calendar_source_id"] = data["write_calendar_source_id"]
-    if "school_id" in data:
-        school_id = (data.get("school_id") or "").strip() or None
-        updates["school_id"] = school_id
-        if school_id:
+        data = member.dict(exclude_unset=True)
+        updates = {}
+        if "name" in data and data["name"] is not None:
+            updates["name"] = data["name"]
+        if "color" in data and data["color"] is not None:
+            updates["color"] = data["color"]
+        if "avatar" in data:
+            updates["avatar"] = data["avatar"]
+        if "is_admin" in data and data["is_admin"] is not None:
+            updates["is_admin"] = 1 if data["is_admin"] else 0
+        if "write_calendar_source_id" in data:
+            _validate_write_source(conn, member_id, data["write_calendar_source_id"])
+            updates["write_calendar_source_id"] = data["write_calendar_source_id"]
+        if "school_id" in data:
+            school_id = (data.get("school_id") or "").strip() or None
+            updates["school_id"] = school_id
+            school_changed = school_id != existing.get("school_id")
+            if school_id:
+                updates["school_name"] = (data.get("school_name") or "").strip() or None
+            else:
+                updates["school_name"] = None
+        elif "school_name" in data:
             updates["school_name"] = (data.get("school_name") or "").strip() or None
-        else:
-            updates["school_name"] = None
-    elif "school_name" in data:
-        updates["school_name"] = (data.get("school_name") or "").strip() or None
 
-    if updates:
-        set_clause = ", ".join(f"{k}=?" for k in updates)
-        conn.execute(f"UPDATE members SET {set_clause} WHERE id=?", (*updates.values(), member_id))
-        conn.commit()
-    row = conn.execute(f"{MEMBER_SELECT} WHERE id=?", (member_id,)).fetchone()
-    conn.close()
+        if updates:
+            set_clause = ", ".join(f"{k}=%s" for k in updates)
+            conn.execute(f"UPDATE members SET {set_clause} WHERE id=%s", (*updates.values(), member_id))
+            conn.commit()
+        row = conn.execute(f"{MEMBER_SELECT} WHERE id=%s", (member_id,)).fetchone()
+    if school_changed:
+        notify_worker("refresh_meals")
     return dict(row)
+
 
 @router.put("/{member_id}")
 def update_member(member_id: int, member: MemberUpdate):
     return _apply_member_update(member_id, member)
 
+
 @router.patch("/{member_id}")
 def patch_member(member_id: int, member: MemberUpdate):
     return _apply_member_update(member_id, member)
 
+
 @router.delete("/{member_id}")
 def delete_member(member_id: int):
-    conn = get_db()
-    row = conn.execute("SELECT avatar_photo FROM members WHERE id=?", (member_id,)).fetchone()
-    conn.execute("DELETE FROM members WHERE id=?", (member_id,))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        row = conn.execute("SELECT avatar_photo FROM members WHERE id=%s", (member_id,)).fetchone()
+        conn.execute("DELETE FROM members WHERE id=%s", (member_id,))
+        conn.commit()
     if row:
         _remove_avatar_file(row["avatar_photo"])
     return {"ok": True}
@@ -190,6 +203,17 @@ async def serve_avatar(filename: str):
     )
 
 
+def _lookup_member_avatar(member_id: int):
+    with get_db() as conn:
+        return conn.execute("SELECT avatar_photo FROM members WHERE id=%s", (member_id,)).fetchone()
+
+
+def _save_avatar_db(member_id: int, filename: str):
+    with get_db() as conn:
+        conn.execute("UPDATE members SET avatar_photo=%s WHERE id=%s", (filename, member_id))
+        conn.commit()
+
+
 @router.post("/{member_id}/avatar")
 async def upload_avatar(member_id: int, file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -202,52 +226,52 @@ async def upload_avatar(member_id: int, file: UploadFile = File(...)):
             "image/gif": ".gif",
             "image/webp": ".webp",
         }.get(file.content_type, ".jpg")
-    conn = get_db()
-    row = conn.execute("SELECT avatar_photo FROM members WHERE id=?", (member_id,)).fetchone()
+    row = await asyncio.to_thread(_lookup_member_avatar, member_id)
     if not row:
-        conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
     filename = f"{uuid.uuid4().hex}{ext}"
     dest = os.path.join(_avatars_dir(), filename)
-    try:
+
+    def _write_file():
         with open(dest, "wb") as out:
             shutil.copyfileobj(file.file, out)
+        return os.path.getsize(dest)
+
+    try:
+        size = await asyncio.to_thread(_write_file)
     except Exception as e:
-        conn.close()
         raise HTTPException(status_code=500, detail=str(e))
-    if os.path.getsize(dest) > MAX_AVATAR_BYTES:
-        os.remove(dest)
-        conn.close()
+    if size > MAX_AVATAR_BYTES:
+        await asyncio.to_thread(os.remove, dest)
         raise HTTPException(status_code=400, detail="Image must be under 8 MB")
-    conn.execute("UPDATE members SET avatar_photo=? WHERE id=?", (filename, member_id))
-    conn.commit()
-    conn.close()
-    _remove_avatar_file(row["avatar_photo"])
+    await asyncio.to_thread(_save_avatar_db, member_id, filename)
+    await asyncio.to_thread(_remove_avatar_file, row["avatar_photo"])
     return {"ok": True, "avatar_photo": filename}
 
 
 @router.delete("/{member_id}/avatar")
 def delete_avatar(member_id: int):
-    conn = get_db()
-    row = conn.execute("SELECT avatar_photo FROM members WHERE id=?", (member_id,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Member not found")
-    conn.execute("UPDATE members SET avatar_photo=NULL WHERE id=?", (member_id,))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        row = conn.execute("SELECT avatar_photo FROM members WHERE id=%s", (member_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Member not found")
+        conn.execute("UPDATE members SET avatar_photo=NULL WHERE id=%s", (member_id,))
+        conn.commit()
     _remove_avatar_file(row["avatar_photo"])
     return {"ok": True}
 
+
 @router.get("/{member_id}/chore-stats")
 def get_chore_stats(member_id: int):
-    conn = get_db()
-    stats = conn.execute("""
-        SELECT 
-            COUNT(*) as total,
-            SUM(completed) as completed,
-            SUM(CASE WHEN completed=1 THEN points ELSE 0 END) as points
-        FROM chores WHERE assigned_to=?
-    """, (member_id,)).fetchone()
-    conn.close()
+    with get_db() as conn:
+        stats = conn.execute(
+            """
+            SELECT
+                COUNT(*) as total,
+                COALESCE(SUM(completed), 0) as completed,
+                COALESCE(SUM(CASE WHEN completed=1 THEN points ELSE 0 END), 0) as points
+            FROM chores WHERE assigned_to=%s
+            """,
+            (member_id,),
+        ).fetchone()
     return dict(stats)

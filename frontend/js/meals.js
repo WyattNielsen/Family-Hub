@@ -425,26 +425,19 @@
     }
 
     try {
-      const data = await API.get(url + '&include_school=false', { timeout: 45000 });
+      const menus = await API.get(url);
       if (gen !== _weekGen || document.getElementById('weekPlan') !== el) return;
-      _paintWeekPlan(el, data, start);
-      const wantsSchool = data.configured && !data.school_menus_hidden;
-      const fullHit = API.peek(url);
-      renderSchools(fullHit || data, wantsSchool && !fullHit);
-      if (!wantsSchool) return;
-      try {
-        const menus = await API.get(url, { timeout: 45000 });
-        if (gen !== _weekGen || document.getElementById('weekPlan') !== el) return;
-        renderSchools(menus, false);
-      } catch (e) {
-        if (gen !== _weekGen) return;
-        schoolMenus = [];
-        closeMealPlan();
-        const school = document.getElementById('schoolWeek');
-        if (school) school.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+      _paintWeekPlan(el, menus, start);
+      const wantsSchool = menus.configured && !menus.school_menus_hidden;
+      renderSchools(menus, Boolean(wantsSchool && menus.warming));
+      if (wantsSchool && menus.warming) {
+        setTimeout(() => {
+          if (gen === _weekGen && FHRouter.currentRoute() === '/meals.html') loadWeek();
+        }, 3500);
       }
     } catch (e) {
-      if (!cachedFast && gen === _weekGen && document.getElementById('weekPlan') === el) {
+      if (typeof isAbortError === 'function' && isAbortError(e)) return;
+      if (!cachedFast && !cachedFull && gen === _weekGen && document.getElementById('weekPlan') === el) {
         weekDays = [];
         schoolMenus = [];
         closeMealPlan();

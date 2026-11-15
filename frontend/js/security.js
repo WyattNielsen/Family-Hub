@@ -4,6 +4,7 @@
   let _modalCameras = [];
   let _modalIndex = 0;
   let _swipeStartX = null;
+  let _gridEpoch = 0;
 
   function _paintSecurityDevices(data) {
     const notCfg = document.getElementById('haNotConfigured');
@@ -31,6 +32,7 @@
       const data = await API.get('/api/homeassistant/states', force ? { force: true } : undefined);
       if (FHRouter.currentRoute() === '/security.html') _paintSecurityDevices(data);
     } catch (e) {
+      if (isAbortError(e)) return;
       const notCfg = document.getElementById('haNotConfigured');
       if (!cached && notCfg) notCfg.style.display = 'block';
     }
@@ -139,6 +141,54 @@
     }
   }
 
+  function _showSnapshotFallback(entityId, name) {
+    const ph = document.getElementById('ph-' + entityId);
+    const video = document.getElementById('vid-' + entityId);
+    const snap = document.getElementById('snap-' + entityId);
+    if (video) {
+      try {
+        if (video._fhPeer) unregisterPeerConnection(video._fhPeer);
+        video._fhPeer = null;
+        video.srcObject = null;
+      } catch (_) {}
+      video.style.display = 'none';
+    }
+    if (snap) {
+      snap.style.display = 'block';
+      snap.src = `/api/security/camera/${encodeURIComponent(entityId)}/snapshot?t=${Date.now()}`;
+      snap.onload = () => {
+        snap.classList.add('loaded');
+        if (ph) ph.remove();
+      };
+      snap.onerror = () => {
+        if (ph) ph.innerHTML = '<div class="camera-placeholder-icon">⚠️</div><div>Feed unavailable</div>';
+      };
+    } else if (ph) {
+      ph.innerHTML = '<div class="camera-placeholder-icon">⚠️</div><div>Feed unavailable</div>';
+    }
+  }
+
+  async function _startGridWebRTC(cam, epoch) {
+    const entityId = cam.ha_entity_id;
+    const video = document.getElementById('vid-' + entityId);
+    const ph = document.getElementById('ph-' + entityId);
+    if (!video || epoch !== _gridEpoch || FHRouter.currentRoute() !== '/security.html') return;
+    try {
+      await connectCameraWebRTC(entityId, video);
+      if (epoch !== _gridEpoch) {
+        if (video._fhPeer) unregisterPeerConnection(video._fhPeer);
+        return;
+      }
+      video.style.display = 'block';
+      video.classList.add('loaded');
+      if (ph) ph.remove();
+    } catch (e) {
+      if (epoch !== _gridEpoch) return;
+      console.warn('WebRTC failed for', entityId, e);
+      _showSnapshotFallback(entityId, cam.name);
+    }
+  }
+
   async function loadCameraFeeds() {
     const section = document.getElementById('cameraSection');
     const notConfigured = document.getElementById('cameraNotConfigured');
@@ -155,57 +205,86 @@
       }
       notConfigured.style.display = 'none';
       section.style.display = 'block';
+      const epoch = ++_gridEpoch;
       grid.innerHTML = cameras.map(cam => {
-        const streamUrl = `/api/security/camera/${encodeURIComponent(cam.ha_entity_id)}/stream`;
-        const safeUrl = streamUrl.replace(/'/g, "\\'");
-        const safeName = cam.name.replace(/'/g, "\\'");
+        const id = cam.ha_entity_id;
+        const safeId = encodeURIComponent(id);
+        const safeName = String(cam.name || id).replace(/'/g, "\\'");
         return `
-          <div class="camera-feed-card" onclick="openCameraModal('${safeName}','${safeUrl}')">
-            <div class="camera-feed-label">${cam.name}</div>
-            <div class="camera-placeholder" id="ph-${cam.ha_entity_id}">
+          <div class="camera-feed-card" data-entity="${escapeHtml(id)}" data-name="${escapeHtml(cam.name || id)}"
+               onclick="openCameraModal('${safeName}','${safeId}')">
+            <div class="camera-feed-label">${escapeHtml(cam.name || id)}</div>
+            <div class="camera-placeholder" id="ph-${id}">
               <div class="camera-placeholder-icon">📷</div>
-              <div>Connecting to ${cam.name}…</div>
+              <div>Connecting to ${escapeHtml(cam.name || id)}…</div>
             </div>
-            <img src="${streamUrl}" class="camera-feed-img" alt="${cam.name}"
-                 onload="this.classList.add('loaded');document.getElementById('ph-${cam.ha_entity_id}')?.remove()"
-                 onerror="const p=document.getElementById('ph-${cam.ha_entity_id}');if(p)p.innerHTML='<div class=camera-placeholder-icon>⚠️</div><div>Feed unavailable</div>'">
+            <video id="vid-${id}" class="camera-feed-video" autoplay muted playsinline></video>
+            <img id="snap-${id}" class="camera-feed-img" alt="${escapeHtml(cam.name || id)}" style="display:none"
+                 src="/api/security/camera/${safeId}/snapshot?t=${Date.now()}">
           </div>`;
       }).join('');
+
+      // Stagger WebRTC connects so ICE/signaling does not spike all at once
+      cameras.forEach((cam, idx) => {
+        setTimeout(() => {
+          if (epoch === _gridEpoch) _startGridWebRTC(cam, epoch);
+        }, idx * 200);
+      });
     } catch (e) {
+      if (isAbortError(e)) return;
       section.style.display = 'none';
       notConfigured.style.display = 'block';
     }
   }
 
-  function openCameraModal(name, _streamUrl) {
+  function openCameraModal(name, entityId) {
     const cards = document.querySelectorAll('.camera-feed-card');
     _modalCameras = Array.from(cards).map(card => ({
-      name: card.querySelector('.camera-feed-label').textContent,
-      url:  card.querySelector('.camera-feed-img')?.src || ''
-    }));
-    _modalIndex = _modalCameras.findIndex(c => c.name === name);
+      name: card.getAttribute('data-name') || card.querySelector('.camera-feed-label')?.textContent || '',
+      entityId: card.getAttribute('data-entity') || '',
+    })).filter(c => c.entityId);
+    _modalIndex = _modalCameras.findIndex(c => c.entityId === entityId || c.name === name);
     if (_modalIndex < 0) _modalIndex = 0;
     _showModalCamera(_modalIndex);
     document.getElementById('cameraModal').style.display = 'flex';
     document.addEventListener('keydown', _modalKeyHandler);
-    const img = document.getElementById('cameraModalImg');
-    img.addEventListener('touchstart', _swipeStart, { passive: true });
-    img.addEventListener('touchend',   _swipeEnd,   { passive: true });
+    const video = document.getElementById('cameraModalVideo');
+    if (video) {
+      video.addEventListener('touchstart', _swipeStart, { passive: true });
+      video.addEventListener('touchend', _swipeEnd, { passive: true });
+    }
   }
 
-  function _showModalCamera(idx) {
+  async function _showModalCamera(idx) {
     const cam = _modalCameras[idx];
+    if (!cam) return;
     document.getElementById('cameraModalTitle').textContent = cam.name;
-    document.getElementById('cameraModalImg').src = cam.url;
     const dots = document.getElementById('cameraModalDots');
     dots.innerHTML = _modalCameras.map((_, i) =>
       `<span class="cam-dot ${i === idx ? 'active' : ''}"></span>`
     ).join('');
     document.getElementById('camPrev').style.visibility = _modalCameras.length > 1 ? 'visible' : 'hidden';
     document.getElementById('camNext').style.visibility = _modalCameras.length > 1 ? 'visible' : 'hidden';
+
+    const video = document.getElementById('cameraModalVideo');
+    if (!video) return;
+    if (video._fhPeer) {
+      unregisterPeerConnection(video._fhPeer);
+      video._fhPeer = null;
+    }
+    video.srcObject = null;
+    video.classList.remove('loaded');
+    try {
+      await connectCameraWebRTC(cam.entityId, video);
+    } catch (e) {
+      console.warn('Modal WebRTC failed', e);
+      // Fall back to snapshot as a still frame
+      video.poster = `/api/security/camera/${encodeURIComponent(cam.entityId)}/snapshot?t=${Date.now()}`;
+    }
   }
 
   function cycleCameraModal(dir) {
+    if (!_modalCameras.length) return;
     _modalIndex = (_modalIndex + dir + _modalCameras.length) % _modalCameras.length;
     _showModalCamera(_modalIndex);
   }
@@ -213,12 +292,19 @@
   function closeCameraModal() {
     const modal = document.getElementById('cameraModal');
     if (modal) modal.style.display = 'none';
-    const img = document.getElementById('cameraModalImg');
-    if (img) {
-      img.removeAttribute('src');
-      img.src = '';
-      img.removeEventListener('touchstart', _swipeStart);
-      img.removeEventListener('touchend',   _swipeEnd);
+    const video = document.getElementById('cameraModalVideo');
+    if (video) {
+      if (video._fhPeer) {
+        unregisterPeerConnection(video._fhPeer);
+        video._fhPeer = null;
+      }
+      try {
+        video.pause();
+        video.srcObject = null;
+        video.removeAttribute('poster');
+      } catch (_) {}
+      video.removeEventListener('touchstart', _swipeStart);
+      video.removeEventListener('touchend', _swipeEnd);
     }
     document.removeEventListener('keydown', _modalKeyHandler);
   }
@@ -257,6 +343,7 @@
   }
 
   function unmount() {
+    _gridEpoch += 1;
     clearInterval(_secTimer);
     _secTimer = null;
     closeCameraModal();

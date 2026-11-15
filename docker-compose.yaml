@@ -1,10 +1,39 @@
-version: '3.8'
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: family-hub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-familyhub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-familyhub}
+      POSTGRES_DB: ${POSTGRES_DB:-familyhub}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-familyhub} -d $${POSTGRES_DB:-familyhub}"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    container_name: family-hub-go2rtc
+    restart: unless-stopped
+    ports:
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    volumes:
+      - ./data/go2rtc:/config
+
   familyhub:
     build: .
     container_name: family-hub
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      go2rtc:
+        condition: service_started
     ports:
       - "3000:3000"
     volumes:
@@ -13,8 +42,35 @@ services:
     env_file:
       - .env
     environment:
-      # ── Database ──
+      DATABASE_URL: ${DATABASE_URL:-postgresql://familyhub:familyhub@postgres:5432/familyhub}
       DB_PATH: /data/familyhub.db
-
-      # ── Timezone ──
+      DATA_DIR: /data
+      GO2RTC_URL: ${GO2RTC_URL:-http://go2rtc:1984}
+      GO2RTC_CONFIG_PATH: /data/go2rtc/go2rtc.yaml
       TZ: America/New_York
+
+  worker:
+    build: .
+    container_name: family-hub-worker
+    restart: unless-stopped
+    command: ["python", "-m", "worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      go2rtc:
+        condition: service_started
+    volumes:
+      - ./data:/data
+      - ./data/photos:/app/backend/data/photos
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://familyhub:familyhub@postgres:5432/familyhub}
+      DB_PATH: /data/familyhub.db
+      DATA_DIR: /data
+      GO2RTC_URL: ${GO2RTC_URL:-http://go2rtc:1984}
+      GO2RTC_CONFIG_PATH: /data/go2rtc/go2rtc.yaml
+      TZ: America/New_York
+
+volumes:
+  pgdata:

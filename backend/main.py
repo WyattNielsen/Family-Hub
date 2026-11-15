@@ -5,103 +5,84 @@ from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 import os
+import time
 
-from database import init_db, get_setting_value
-from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
-import json
+from database import close_pools, init_db, listen_cache_events_loop
+from routers import (
+    auth,
+    bootstrap,
+    calendar,
+    chores,
+    homeassistant,
+    lunch,
+    meals,
+    members,
+    messages,
+    photos,
+    schoolcafe,
+    security,
+    settings,
+    shopping,
+    stocks,
+    weather,
+)
 import outbound
 
-async def _reminder_loop():
-    _fired_today = set()  # track (time_str) already fired today so we don't double-fire
-    _last_date = None
-    while True:
-        try:
-            await asyncio.sleep(30)
-            from datetime import datetime as _dt
-            now = _dt.now()
-            today = now.date().isoformat()
-            if _last_date != today:
-                _fired_today.clear()
-                _last_date = today
-            hhmm = now.strftime("%H:%M")
-            raw = get_setting_value("chore_reminders", "")
-            if not raw:
-                continue
-            reminders = json.loads(raw)
-            for r in reminders:
-                if not r.get("enabled"):
-                    continue
-                t = r.get("time", "")
-                if t == hhmm and t not in _fired_today:
-                    _fired_today.add(t)
-                    await homeassistant.fire_tts(r.get("message", ""), r.get("entity_id", ""), r.get("tts_engine", "tts.google_translate_en_com"))
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"Reminder loop error: {e}")
 
-async def _chore_advance_loop():
-    """Catch up recurring chores away from request handlers."""
+async def _loop_lag_watchdog():
+    """Log if the web worker's asyncio event loop ever stalls > 300ms."""
+    expected = time.monotonic() + 1.0
     while True:
         try:
-            await asyncio.sleep(60)
-            await asyncio.to_thread(chores.advance_recurring_chores)
+            await asyncio.sleep(1.0)
+            now = time.monotonic()
+            lag = now - expected
+            if lag > 0.3:
+                print(f"[watchdog] Web event-loop lag: {lag * 1000:.0f}ms (pid={os.getpid()})")
+            expected = now + 1.0
         except asyncio.CancelledError:
             break
-        except Exception as e:
-            print(f"Chore advance error: {e}")
 
-async def _auto_sync_loop():
-    await asyncio.sleep(30)  # let the app fully start first
-    while True:
-        try:
-            raw = get_setting_value("google_sync_interval", "")
-            interval = int(raw) if raw else 0
-            if interval > 0:
-                await calendar.run_full_sync()
-                await asyncio.sleep(interval * 60)
-            else:
-                await asyncio.sleep(60)  # check again in 1 min
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            await asyncio.sleep(300)  # back off 5 min on error
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    try:
-        await asyncio.to_thread(chores.advance_recurring_chores)
-    except Exception as e:
-        print(f"Chore advance error: {e}")
-    sync_task = asyncio.create_task(_auto_sync_loop())
-    reminder_task = asyncio.create_task(_reminder_loop())
-    advance_task = asyncio.create_task(_chore_advance_loop())
+    cache_listener = asyncio.create_task(listen_cache_events_loop())
+    watchdog_task = asyncio.create_task(_loop_lag_watchdog())
     yield
-    sync_task.cancel()
-    reminder_task.cancel()
-    advance_task.cancel()
-    for t in (sync_task, reminder_task, advance_task):
+    cache_listener.cancel()
+    watchdog_task.cancel()
+    for t in (cache_listener, watchdog_task):
         try:
             await t
         except asyncio.CancelledError:
             pass
+    await security.close_camera_http()
     await outbound.aclose()
+    await close_pools()
+
 
 app = FastAPI(title="Family Hub", lifespan=lifespan)
 
-class _GzipExceptMedia:
+
+class _GzipAndTelemetryMiddleware:
     """Gzip text responses, add immutable Cache-Control on versioned static
-    assets (crucial on LAN HTTP where Service Workers do not run), and leave
-    camera streams, photos, and avatars uncompressed."""
+    assets (crucial on LAN HTTP where Service Workers do not run), leave
+    camera streams/photos/avatars uncompressed, and log slow API calls."""
 
     def __init__(self, app, minimum_size: int = 500):
         self.app = app
         self._gzip = GZipMiddleware(app, minimum_size=minimum_size)
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            path = scope.get("path") or ""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path") or ""
+        t0 = time.monotonic()
+
+        try:
             if (
                 path.startswith("/api/security/camera/")
                 or path.startswith("/api/photos/file/")
@@ -132,7 +113,12 @@ class _GzipExceptMedia:
                 await self._gzip(scope, receive, send_with_cache)
                 return
 
-        await self._gzip(scope, receive, send)
+            await self._gzip(scope, receive, send)
+        finally:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            if elapsed_ms > 500 and not path.endswith("/stream"):
+                method = scope.get("method", "GET")
+                print(f"[slow] {method} {path} took {elapsed_ms:.0f}ms")
 
 
 app.add_middleware(
@@ -142,8 +128,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(_GzipExceptMedia)
+app.add_middleware(_GzipAndTelemetryMiddleware)
 
+app.include_router(bootstrap.router, prefix="/api", tags=["bootstrap"])
 app.include_router(calendar.router, prefix="/api/calendar", tags=["calendar"])
 app.include_router(chores.router, prefix="/api/chores", tags=["chores"])
 app.include_router(members.router, prefix="/api/members", tags=["members"])
@@ -160,6 +147,5 @@ app.include_router(meals.router, prefix="/api/meals", tags=["meals"])
 app.include_router(schoolcafe.router, prefix="/api/schoolcafe", tags=["schoolcafe"])
 app.include_router(shopping.router, prefix="/api/shopping", tags=["shopping"])
 
-# Serve frontend static files (configurable for LXC/native installs)
 FRONTEND_DIR = os.environ.get("FRONTEND_DIR", "/app/frontend")
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

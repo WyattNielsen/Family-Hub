@@ -1,0 +1,32 @@
+[Unit]
+Description=Family Hub - background sync & polling worker
+After=network.target postgresql.service familyhub-go2rtc.service
+Wants=network.target postgresql.service familyhub-go2rtc.service
+
+[Service]
+Type=simple
+User=familyhub
+Group=familyhub
+
+WorkingDirectory=/opt/familyhub/backend
+EnvironmentFile=-/opt/familyhub/.env
+
+Environment=DATA_DIR=/opt/familyhub/data
+Environment=DATABASE_URL=postgresql://familyhub:familyhub@127.0.0.1:5432/familyhub
+Environment=GO2RTC_URL=http://127.0.0.1:1984
+Environment=GO2RTC_CONFIG_PATH=/opt/familyhub/data/go2rtc/go2rtc.yaml
+
+ExecStart=/opt/familyhub/venv/bin/python -m worker
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/familyhub/data
+
+[Install]
+WantedBy=multi-user.target

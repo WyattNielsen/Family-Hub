@@ -1,25 +1,92 @@
-// ── API Helper (In-Memory Cache + Stale-While-Revalidate + Deduplication) ──
+// ── API Helper (In-Memory Cache + Route Abort + Concurrency Cap + Deduplication) ──
 const _getCache = new Map();
 const _getInflight = new Map();
 let _getCacheGen = 0;
 const GET_CACHE_MS = 10000;       // Fresh hit window across rapid screen switches
 const GET_STALE_MAX_MS = 600000;  // Up to 10m for instant optimistic paint via API.peek()
 const FETCH_TIMEOUT_MS = 12000;
+const MAX_CONCURRENT_API = 4;     // Leave 2 of 6 HTTP/1.1 sockets free for assets/snapshots
+
+let _activeApiCount = 0;
+const _apiWaitQueue = [];
+let _routeAbort = new AbortController();
+
+function _acquireApiSlot(signal) {
+  if (_activeApiCount < MAX_CONCURRENT_API) {
+    _activeApiCount += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const entry = { resolve, reject };
+    if (signal) {
+      if (signal.aborted) {
+        reject(new DOMException('Navigation aborted', 'AbortError'));
+        return;
+      }
+      entry.onAbort = () => {
+        const idx = _apiWaitQueue.indexOf(entry);
+        if (idx >= 0) _apiWaitQueue.splice(idx, 1);
+        reject(new DOMException('Navigation aborted', 'AbortError'));
+      };
+      signal.addEventListener('abort', entry.onAbort, { once: true });
+    }
+    _apiWaitQueue.push(entry);
+  });
+}
+
+function _releaseApiSlot() {
+  _activeApiCount = Math.max(0, _activeApiCount - 1);
+  while (_apiWaitQueue.length && _activeApiCount < MAX_CONCURRENT_API) {
+    const next = _apiWaitQueue.shift();
+    if (next.onAbort && next.signal) {
+      next.signal.removeEventListener('abort', next.onAbort);
+    }
+    _activeApiCount += 1;
+    next.resolve();
+  }
+}
+
+function abortRouteRequests() {
+  try { _routeAbort.abort(); } catch (_) {}
+  _routeAbort = new AbortController();
+}
+
+function isAbortError(err) {
+  return Boolean(err && (err.name === 'AbortError' || err.code === 20));
+}
 
 function _bustGetCache() {
   _getCacheGen += 1;
   _getCache.clear();
 }
 
-function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS, parentSignal = null) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  return fetch(path, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, timeoutMs);
+
+  const onParentAbort = () => ctrl.abort();
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      clearTimeout(timer);
+      return Promise.reject(new DOMException('Navigation aborted', 'AbortError'));
+    }
+    parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+
+  return fetch(path, { ...options, signal: ctrl.signal }).finally(() => {
+    clearTimeout(timer);
+    if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+    void timedOut;
+  });
 }
 
 async function _send(path, options) {
   _bustGetCache();
-  const r = await _fetchWithTimeout(path, options, 20000);
+  const r = await _fetchWithTimeout(path, options, 20000, null);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -30,29 +97,89 @@ const API = {
     if (hit && Date.now() - hit.at < GET_STALE_MAX_MS) return hit.data;
     return undefined;
   },
+  seed(path, data) {
+    if (data !== undefined) {
+      _getCache.set(path, { at: Date.now(), data });
+    }
+  },
   async get(path, opts) {
     const force = opts && opts.force;
+    const isShell = Boolean(opts && opts.shell);
     const timeoutMs = (opts && opts.timeout) || FETCH_TIMEOUT_MS;
+    const navSignal = isShell ? null : _routeAbort.signal;
+
+    if (navSignal && navSignal.aborted) {
+      throw new DOMException('Navigation aborted', 'AbortError');
+    }
+
     if (!force) {
       const hit = _getCache.get(path);
       if (hit && Date.now() - hit.at < GET_CACHE_MS) return hit.data;
     }
-    const pending = _getInflight.get(path);
-    if (pending) return pending;
-    const gen = _getCacheGen;
-    const request = (async () => {
-      const r = await _fetchWithTimeout(path, {}, timeoutMs);
-      if (!r.ok) throw new Error(await r.text());
-      const data = await r.json();
-      if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
-      return data;
-    })();
-    _getInflight.set(path, request);
-    try {
-      return await request;
-    } finally {
-      if (_getInflight.get(path) === request) _getInflight.delete(path);
+
+    let entry = _getInflight.get(path);
+    if (!entry) {
+      const gen = _getCacheGen;
+      const netCtrl = new AbortController();
+      const promise = (async () => {
+        await _acquireApiSlot(netCtrl.signal);
+        try {
+          const r = await _fetchWithTimeout(path, {}, timeoutMs, netCtrl.signal);
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
+          return data;
+        } finally {
+          _releaseApiSlot();
+        }
+      })();
+      entry = { promise, netCtrl, refCount: 0, shellPinned: false };
+      _getInflight.set(path, entry);
+      promise.finally(() => {
+        if (_getInflight.get(path) === entry) _getInflight.delete(path);
+      }).catch(() => {});
     }
+
+    if (isShell) entry.shellPinned = true;
+    entry.refCount += 1;
+
+    if (!navSignal) {
+      try {
+        return await entry.promise;
+      } finally {
+        entry.refCount = Math.max(0, entry.refCount - 1);
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        entry.refCount = Math.max(0, entry.refCount - 1);
+        if (entry.refCount === 0 && !entry.shellPinned) {
+          try { entry.netCtrl.abort(); } catch (_) {}
+        }
+        reject(new DOMException('Navigation aborted', 'AbortError'));
+      };
+      navSignal.addEventListener('abort', onAbort, { once: true });
+      entry.promise.then(
+        val => {
+          if (settled) return;
+          settled = true;
+          navSignal.removeEventListener('abort', onAbort);
+          entry.refCount = Math.max(0, entry.refCount - 1);
+          resolve(val);
+        },
+        err => {
+          if (settled) return;
+          settled = true;
+          navSignal.removeEventListener('abort', onAbort);
+          entry.refCount = Math.max(0, entry.refCount - 1);
+          reject(err);
+        }
+      );
+    });
   },
   post(path, body) {
     return _send(path, {
@@ -185,7 +312,7 @@ async function mountPersonFilter(onChange) {
   if (cached) _renderPersonFilterChips(el, cached);
   let members = [];
   try {
-    members = await API.get('/api/members/');
+    members = await API.get('/api/members/', { shell: true });
   } catch (e) {
     if (!cached) el.innerHTML = '';
     return cached || [];
@@ -196,17 +323,23 @@ async function mountPersonFilter(onChange) {
 }
 
 // ── Sidebar Members ───────────────────────────────────────────
+function _paintSidebarMembers(members) {
+  const el = document.getElementById('sidebarMembers');
+  if (!el || getComputedStyle(el).display === 'none') return;
+  el.innerHTML = (members || []).map(m => `
+    <div class="sidebar-member-chip">
+      ${memberAvatarHtml(m)}
+      <span>${escapeHtml(m.name)}</span>
+    </div>
+  `).join('');
+}
+
 async function loadSidebarMembers() {
   const el = document.getElementById('sidebarMembers');
   if (!el || getComputedStyle(el).display === 'none') return;
   try {
-    const members = await API.get('/api/members/');
-    el.innerHTML = members.map(m => `
-      <div class="sidebar-member-chip">
-        ${memberAvatarHtml(m)}
-        <span>${escapeHtml(m.name)}</span>
-      </div>
-    `).join('');
+    const members = await API.get('/api/members/', { shell: true });
+    _paintSidebarMembers(members);
   } catch(e) {}
 }
 
@@ -215,7 +348,7 @@ let TZ = localStorage.getItem('fh_tz') || 'America/New_York';
 let _tzLoaded = !!localStorage.getItem('fh_tz');
 
 function loadAppSettings(force) {
-  return API.get('/api/settings/', force ? { force: true } : undefined);
+  return API.get('/api/settings/', force ? { force: true, shell: true } : { shell: true });
 }
 
 function _syncCachedSettings(s) {
@@ -240,7 +373,6 @@ function _syncCachedSettings(s) {
 
 async function initAppTimezone(force) {
   if (_tzLoaded && !force) {
-    // Refresh silently in background if not already cached in API
     if (!API.peek('/api/settings/')) {
       loadAppSettings().then(_syncCachedSettings).catch(() => {});
     }
@@ -329,13 +461,15 @@ async function initTheme(force) {
     );
   }
   _resetDim();
-  try {
-    const s = await loadAppSettings(force);
-    _syncCachedSettings(s);
-    _applyTheme();
-    _lastDimReset = 0;
-    _resetDim();
-  } catch(e) {}
+  if (force || API.peek('/api/settings/')) {
+    try {
+      const s = await loadAppSettings(force);
+      _syncCachedSettings(s);
+      _applyTheme();
+      _lastDimReset = 0;
+      _resetDim();
+    } catch(e) {}
+  }
 }
 
 function paintCountBadge(el, n) {
@@ -348,29 +482,36 @@ function paintCountBadge(el, n) {
   }
 }
 
+function _paintMessageBadges(msgs) {
+  const chips = document.querySelectorAll('#personFilter .person-chip');
+  const nav = document.getElementById('msgNavBadge');
+  if ((!chips.length && !nav) || !Array.isArray(msgs)) return;
+  const counts = { all: 0 };
+  for (const m of msgs) {
+    if (!m.recipient_id) counts.all += 1;
+    else {
+      const id = String(m.recipient_id);
+      counts[id] = (counts[id] || 0) + 1;
+    }
+  }
+  chips.forEach(chip => {
+    paintCountBadge(chip.querySelector('.person-badge'), counts[chip.dataset.person] || 0);
+  });
+  const person = getPersonFilter();
+  const navCount = person === 'all'
+    ? msgs.length
+    : msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person)).length;
+  paintCountBadge(nav, navCount);
+}
+
 // ── Message badges on person names and the Messages icon ─────
 async function loadMessageBadge() {
   const chips = document.querySelectorAll('#personFilter .person-chip');
   const nav = document.getElementById('msgNavBadge');
   if (!chips.length && !nav) return;
   try {
-    const msgs = await API.get('/api/messages/');
-    const counts = { all: 0 };
-    for (const m of msgs) {
-      if (!m.recipient_id) counts.all += 1;
-      else {
-        const id = String(m.recipient_id);
-        counts[id] = (counts[id] || 0) + 1;
-      }
-    }
-    chips.forEach(chip => {
-      paintCountBadge(chip.querySelector('.person-badge'), counts[chip.dataset.person] || 0);
-    });
-    const person = getPersonFilter();
-    const navCount = person === 'all'
-      ? msgs.length
-      : msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person)).length;
-    paintCountBadge(nav, navCount);
+    const msgs = await API.get('/api/messages/', { shell: true });
+    _paintMessageBadges(msgs);
   } catch(e) {}
 }
 
@@ -444,19 +585,25 @@ function renderHAStatus() {
   }).join('');
 }
 
+function _applyHAStatesPayload(data) {
+  const badge = document.getElementById('haStatusBadge');
+  if (!badge) return;
+  if (!data || data.error || !data.entities || !data.entities.length) {
+    badge.innerHTML = '';
+    _haEntities = [];
+    return;
+  }
+  _haEntities = data.entities;
+  renderHAStatus();
+}
+
 async function loadHAStatus(force) {
   if (document.hidden && !force) return;
   const badge = document.getElementById('haStatusBadge');
   if (!badge) return;
   try {
-    const data = await API.get('/api/homeassistant/states', force ? { force: true } : undefined);
-    if (data.error || !data.entities || !data.entities.length) {
-      badge.innerHTML = '';
-      _haEntities = [];
-      return;
-    }
-    _haEntities = data.entities;
-    renderHAStatus();
+    const data = await API.get('/api/homeassistant/states', force ? { force: true, shell: true } : { shell: true });
+    _applyHAStatesPayload(data);
   } catch(e) {
     badge.innerHTML = '';
   }
@@ -587,10 +734,104 @@ async function popoverAlarmAction(action, entityId) {
   }
 }
 
-let _camRefreshTimer = null;
+// ── Active WebRTC & Camera Stream Cleanup ─────────────────────
+const _activePeers = new Set();
+
+function registerPeerConnection(pc) {
+  if (pc) _activePeers.add(pc);
+  return pc;
+}
+
+function unregisterPeerConnection(pc) {
+  if (!pc) return;
+  _activePeers.delete(pc);
+  try { pc.close(); } catch (_) {}
+}
+
+async function connectCameraWebRTC(entityId, videoEl) {
+  /** Negotiate go2rtc WebRTC via /api/security/camera/{id}/webrtc and attach to <video>. */
+  if (!entityId || !videoEl) throw new Error('Missing camera target');
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  });
+  registerPeerConnection(pc);
+  videoEl._fhPeer = pc;
+
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+  pc.ontrack = (ev) => {
+    if (ev.streams && ev.streams[0]) {
+      videoEl.srcObject = ev.streams[0];
+    } else {
+      const stream = videoEl.srcObject || new MediaStream();
+      stream.addTrack(ev.track);
+      videoEl.srcObject = stream;
+    }
+    videoEl.classList.add('loaded');
+    videoEl.play().catch(() => {});
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Wait briefly for ICE candidates so go2rtc gets a usable offer
+  await new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') {
+      resolve();
+      return;
+    }
+    const done = () => {
+      pc.removeEventListener('icegatheringstatechange', onChange);
+      resolve();
+    };
+    const onChange = () => {
+      if (pc.iceGatheringState === 'complete') done();
+    };
+    pc.addEventListener('icegatheringstatechange', onChange);
+    setTimeout(done, 1500);
+  });
+
+  const local = pc.localDescription;
+  if (!local || !local.sdp) {
+    unregisterPeerConnection(pc);
+    throw new Error('No local SDP');
+  }
+
+  const resp = await _fetchWithTimeout(
+    `/api/security/camera/${encodeURIComponent(entityId)}/webrtc`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: local.sdp, type: local.type || 'offer' }),
+    },
+    12000,
+    null
+  );
+  if (!resp.ok) {
+    unregisterPeerConnection(pc);
+    throw new Error(await resp.text());
+  }
+  const answer = await resp.json();
+  if (!answer || !answer.sdp) {
+    unregisterPeerConnection(pc);
+    throw new Error('Empty WebRTC answer');
+  }
+  await pc.setRemoteDescription({ type: answer.type || 'answer', sdp: answer.sdp });
+  return pc;
+}
 
 function killActiveStreams() {
-  // Explicitly sever MJPEG streams so HTTP/1.1 connection slots free up immediately
+  for (const pc of _activePeers) {
+    try { pc.close(); } catch (_) {}
+  }
+  _activePeers.clear();
+  document.querySelectorAll('video.camera-feed-video, #cameraModalVideo').forEach(v => {
+    try {
+      v.pause();
+      v.srcObject = null;
+      v.removeAttribute('src');
+    } catch (_) {}
+  });
   document.querySelectorAll('img.camera-feed-img, #cameraModalImg').forEach(img => {
     try {
       img.onload = null;
@@ -603,49 +844,68 @@ function killActiveStreams() {
 window.addEventListener('pagehide', killActiveStreams);
 window.addEventListener('beforeunload', killActiveStreams);
 
+let _dashCamEpoch = 0;
+
 function _snapBucket() {
   return Math.floor(Date.now() / 10000);
+}
+
+function _applyDashCamerasPayload(data) {
+  const strip = document.getElementById('dashCameras');
+  if (!strip) return;
+  const epoch = ++_dashCamEpoch;
+  const cameras = ((data && data.cameras) || []).slice(0, 2);
+  if (!cameras.length) {
+    strip.style.display = 'none';
+    strip.innerHTML = '';
+    return;
+  }
+
+  const bucket = _snapBucket();
+  strip.innerHTML = cameras.map(cam => {
+    const id = encodeURIComponent(cam.ha_entity_id);
+    const name = cam.name || cam.ha_entity_id;
+    return `
+    <a href="/security.html" class="dash-cam-card" title="${escapeHtml(name)}">
+      <img class="dash-cam-img" id="dashCam_${cam.ha_entity_id}"
+           src="/api/security/camera/${id}/snapshot?t=${bucket}"
+           alt="${escapeHtml(name)}" decoding="async">
+    </a>`;
+  }).join('');
+  strip.style.display = 'flex';
+
+  // Chain next thumbnail load AFTER current load/error finishes so we never abort in-flight images
+  cameras.forEach(cam => {
+    const img = document.getElementById(`dashCam_${cam.ha_entity_id}`);
+    if (!img) return;
+    const scheduleNext = () => {
+      if (epoch !== _dashCamEpoch) return;
+      setTimeout(() => {
+        if (epoch !== _dashCamEpoch) return;
+        const el = document.getElementById(`dashCam_${cam.ha_entity_id}`);
+        if (!el) return;
+        if (document.hidden || FHRouter.currentRoute() === '/security.html') {
+          scheduleNext();
+          return;
+        }
+        el.style.display = '';
+        el.src = `/api/security/camera/${encodeURIComponent(cam.ha_entity_id)}/snapshot?t=${_snapBucket()}`;
+      }, 10000);
+    };
+    img.onload = scheduleNext;
+    img.onerror = function () {
+      this.style.display = 'none';
+      scheduleNext();
+    };
+  });
 }
 
 async function loadDashCameras(force) {
   const strip = document.getElementById('dashCameras');
   if (!strip) return;
   try {
-    const data = await API.get('/api/security/cameras', force ? { force: true } : undefined);
-    const cameras = (data.cameras || []).slice(0, 2);
-    if (!cameras.length) {
-      strip.style.display = 'none';
-      strip.innerHTML = '';
-      clearInterval(_camRefreshTimer);
-      _camRefreshTimer = null;
-      return;
-    }
-
-    const bucket = _snapBucket();
-    strip.innerHTML = cameras.map(cam => {
-      const id = encodeURIComponent(cam.ha_entity_id);
-      const name = cam.name || cam.ha_entity_id;
-      return `
-      <a href="/security.html" class="dash-cam-card" title="${escapeHtml(name)}">
-        <img class="dash-cam-img" id="dashCam_${cam.ha_entity_id}"
-             src="/api/security/camera/${id}/snapshot?t=${bucket}"
-             alt="${escapeHtml(name)}" decoding="async" onerror="this.style.display='none'">
-      </a>`;
-    }).join('');
-    strip.style.display = 'flex';
-
-    clearInterval(_camRefreshTimer);
-    _camRefreshTimer = setInterval(() => {
-      if (document.hidden || FHRouter.currentRoute() === '/security.html') return;
-      const b = _snapBucket();
-      cameras.forEach(cam => {
-        const img = document.getElementById(`dashCam_${cam.ha_entity_id}`);
-        if (img) {
-          img.style.display = '';
-          img.src = `/api/security/camera/${encodeURIComponent(cam.ha_entity_id)}/snapshot?t=${b}`;
-        }
-      });
-    }, 10000);
+    const data = await API.get('/api/security/cameras', force ? { force: true, shell: true } : { shell: true });
+    _applyDashCamerasPayload(data);
   } catch(e) {}
 }
 
@@ -698,7 +958,6 @@ function _wxRound(n) {
   return Number.isFinite(v) ? Math.round(v) : null;
 }
 
-// Fahrenheit bands: bitter, very cold, freezing, cold, cool, mild, warm, hot, very hot, extreme.
 const _TEMP_EDGES = [10, 25, 32, 45, 58, 68, 78, 88, 98];
 
 function _tempBand(n) {
@@ -819,42 +1078,99 @@ function _bindWeatherClick(el, data) {
   }
 }
 
+function _applyWeatherPayload(data) {
+  const el = document.getElementById('weatherWidget');
+  if (!el) return;
+  if (!data || data.error || data.warming) {
+    if (data && data.warming) {
+      setTimeout(() => loadWeather(true), 3500);
+      return;
+    }
+    el.innerHTML = '';
+    _setTempBand(el, null);
+    _bindWeatherClick(el, null);
+    return;
+  }
+  const t = data.tomorrow;
+  const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
+  const todayHi = _wxTempHtml(data.high, '↑');
+  const todayLo = _wxTempHtml(data.low, '↓');
+  el.innerHTML = `
+    <div class="weather-now">
+      <div class="weather-icon">${data.icon}</div>
+      ${_wxTempHtml(data.temp, '', 'weather-temp')}
+      <span class="weather-condition">${escapeHtml(data.condition)}</span>
+      <span class="weather-meta">${todayHi}${todayLo}</span>
+    </div>
+    ${t && t.high != null ? `
+      <div class="weather-tomorrow">
+        <span class="weather-tmr-label">Tomorrow</span>
+        <span class="weather-tmr-icon">${t.icon}</span>
+        <span class="weather-tmr-hilo">${_wxTempHtml(t.high, '↑')}${_wxTempHtml(t.low, '↓')}</span>
+        ${precipStr}
+      </div>` : ''}
+  `;
+  _setTempBand(el, data.temp);
+  _bindWeatherClick(el, data);
+}
+
 async function loadWeather(force) {
   const el = document.getElementById('weatherWidget');
   if (!el) return;
   try {
-    const data = await API.get('/api/weather/', force ? { force: true } : undefined);
-    if (!data || data.error) {
-      el.innerHTML = '';
-      _setTempBand(el, null);
-      _bindWeatherClick(el, null);
-      return;
-    }
-    const t = data.tomorrow;
-    const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
-    const todayHi = _wxTempHtml(data.high, '↑');
-    const todayLo = _wxTempHtml(data.low, '↓');
-    el.innerHTML = `
-      <div class="weather-now">
-        <div class="weather-icon">${data.icon}</div>
-        ${_wxTempHtml(data.temp, '', 'weather-temp')}
-        <span class="weather-condition">${escapeHtml(data.condition)}</span>
-        <span class="weather-meta">${todayHi}${todayLo}</span>
-      </div>
-      ${t && t.high != null ? `
-        <div class="weather-tomorrow">
-          <span class="weather-tmr-label">Tomorrow</span>
-          <span class="weather-tmr-icon">${t.icon}</span>
-          <span class="weather-tmr-hilo">${_wxTempHtml(t.high, '↑')}${_wxTempHtml(t.low, '↓')}</span>
-          ${precipStr}
-        </div>` : ''}
-    `;
-    _setTempBand(el, data.temp);
-    _bindWeatherClick(el, data);
+    const data = await API.get('/api/weather/', force ? { force: true, shell: true } : { shell: true });
+    _applyWeatherPayload(data);
   } catch (e) {
     el.innerHTML = '';
     _setTempBand(el, null);
     _bindWeatherClick(el, null);
+  }
+}
+
+async function loadShellBootstrap() {
+  try {
+    const b = await API.get('/api/bootstrap', { shell: true });
+    if (!b) return;
+    if (b.settings) {
+      API.seed('/api/settings/', b.settings);
+      _syncCachedSettings(b.settings);
+      _tzLoaded = true;
+      _applyTheme();
+      _lastDimReset = 0;
+      _resetDim();
+    }
+    if (Array.isArray(b.members)) {
+      API.seed('/api/members/', b.members);
+      const pf = document.getElementById('personFilter');
+      if (pf) _renderPersonFilterChips(pf, b.members);
+      _paintSidebarMembers(b.members);
+    }
+    if (Array.isArray(b.messages)) {
+      API.seed('/api/messages/', b.messages);
+      _paintMessageBadges(b.messages);
+    }
+    if (b.weather) {
+      API.seed('/api/weather/', b.weather);
+      _applyWeatherPayload(b.weather);
+    }
+    if (b.ha_states) {
+      API.seed('/api/homeassistant/states', b.ha_states);
+      _applyHAStatesPayload(b.ha_states);
+      if (b.ha_states.warming) {
+        setTimeout(() => loadHAStatus(true), 2500);
+      }
+    }
+    if (b.cameras) {
+      API.seed('/api/security/cameras', b.cameras);
+      _applyDashCamerasPayload(b.cameras);
+    }
+  } catch (e) {
+    // Individual fallbacks if bootstrap failed
+    mountPersonFilter();
+    loadSidebarMembers();
+    loadWeather();
+    loadHAStatus();
+    loadDashCameras();
   }
 }
 
@@ -880,6 +1196,7 @@ const FHRouter = (() => {
   let _activeCleanup = null;
   let _navSeq = 0;
   let _booted = false;
+  let _prefetchBusy = false;
 
   function _assetSuffix() {
     const s = document.querySelector('script[src*="/js/api.js"]');
@@ -929,7 +1246,7 @@ const FHRouter = (() => {
     if (_tplInflight.has(route)) return _tplInflight.get(route);
     const cfg = ROUTES[route];
     if (!cfg) return Promise.reject(new Error('Unknown route ' + route));
-    const p = _fetchWithTimeout(cfg.html, { credentials: 'same-origin' }, 8000)
+    const p = _fetchWithTimeout(cfg.html, { credentials: 'same-origin' }, 8000, null)
       .then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.text();
@@ -995,12 +1312,16 @@ const FHRouter = (() => {
 
   function prefetch(route) {
     const r = normRoute(route);
-    if (!ROUTES[r]) return;
-    _loadTemplate(r).catch(() => {});
-    _loadScript(r).catch(() => {});
+    if (!ROUTES[r] || _prefetchBusy) return;
+    if (_tplCache.has(r) && _controllers.has(r)) return;
+    _prefetchBusy = true;
+    Promise.all([_loadTemplate(r), _loadScript(r)])
+      .catch(() => {})
+      .finally(() => { _prefetchBusy = false; });
   }
 
   function _unmountCurrent() {
+    abortRouteRequests();
     closeAlarmPopover();
     document.getElementById('haCoverPopover')?.remove();
     killActiveStreams();
@@ -1024,7 +1345,6 @@ const FHRouter = (() => {
       h1.textContent = tpl.titleText;
     }
 
-    // Remove everything after the persistent header and inject the new screen body
     while (header.nextSibling) {
       header.nextSibling.remove();
     }
@@ -1077,7 +1397,6 @@ const FHRouter = (() => {
     _updateSidebarActive(route);
     _unmountCurrent();
 
-    // Fast synchronous path when template & script are already warmed in memory!
     if (_tplCache.has(route) && _controllers.has(route)) {
       try {
         _applySwap(route, _tplCache.get(route), targetUrl, opts);
@@ -1104,14 +1423,21 @@ const FHRouter = (() => {
     _activeRoute = normRoute(location.pathname);
     _updateSidebarActive(_activeRoute);
 
-    // Mount initial page controller if already registered
+    // Cache current page's own HTML template in memory immediately (0 network cost)
+    try {
+      const main = document.querySelector('main.main-content');
+      if (main) {
+        const clone = document.documentElement.outerHTML;
+        _tplCache.set(_activeRoute, _parseTemplate(clone));
+      }
+    } catch (_) {}
+
     const ctrl = _controllers.get(_activeRoute);
     if (ctrl && typeof ctrl.mount === 'function' && !_activeCleanup) {
       const cleanup = ctrl.mount();
       _activeCleanup = typeof cleanup === 'function' ? cleanup : (ctrl.unmount || null);
     }
 
-    // Intercept internal links for 0ms client-side navigation
     document.addEventListener('click', e => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const a = e.target.closest && e.target.closest('a[href]');
@@ -1130,7 +1456,7 @@ const FHRouter = (() => {
       navigate(url.pathname + url.search + url.hash);
     });
 
-    // Prefetch on hover / touchstart so even unvisited screens swap in 0ms
+    // Lazy 1-at-a-time prefetch on pointerover / touchstart (replaces 18-request boot storm)
     const warmLink = e => {
       const a = e.target.closest && e.target.closest('a[href]');
       if (!a) return;
@@ -1147,31 +1473,18 @@ const FHRouter = (() => {
     window.addEventListener('popstate', () => {
       navigate(location.pathname + location.search + location.hash, { fromPopstate: true, force: true });
     });
-
-    // Stagger background prefetch of all screen templates + scripts once initial page settles
-    setTimeout(() => {
-      Object.keys(ROUTES).forEach((r, idx) => {
-        setTimeout(() => prefetch(r), idx * 120);
-      });
-    }, 900);
   }
 
   return { register, navigate, prefetch, currentRoute, boot };
 })();
 
-// Init persistent shell + theme + router once
+// Init persistent shell + theme + router + single /api/bootstrap call
 document.addEventListener('DOMContentLoaded', () => {
   ensureShell();
   initTheme();
   _updateFullscreenBtn();
-  mountPersonFilter();
-  loadSidebarMembers();
+  loadShellBootstrap();
   FHRouter.boot();
-  afterPagePaint(() => {
-    loadWeather();
-    loadHAStatus();
-    loadDashCameras();
-  });
   setInterval(() => loadHAStatus(), 30000);
   setInterval(() => { if (!document.hidden) loadMessageBadge(); }, 60000);
   ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>

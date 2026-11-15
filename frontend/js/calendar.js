@@ -304,6 +304,7 @@
       allEvents = await API.get(url);
       if (FHRouter.currentRoute() === '/calendar.html') renderActiveView();
     } catch (e) {
+      if (typeof isAbortError === 'function' && isAbortError(e)) return;
       if (!cached) showToast('Failed to load events', 'error');
     }
   }

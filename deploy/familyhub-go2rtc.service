@@ -1,0 +1,24 @@
+[Unit]
+Description=Family Hub - go2rtc WebRTC camera server
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=familyhub
+Group=familyhub
+
+WorkingDirectory=/opt/familyhub/data/go2rtc
+ExecStart=/opt/familyhub/bin/go2rtc -config /opt/familyhub/data/go2rtc/go2rtc.yaml
+Restart=always
+RestartSec=5
+
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/familyhub/data/go2rtc
+
+[Install]
+WantedBy=multi-user.target
