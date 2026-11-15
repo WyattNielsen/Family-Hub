@@ -142,7 +142,9 @@
       const person = getPersonFilter();
       const sel = document.getElementById('msgRecipient');
       if (sel) sel.value = person === 'all' ? '' : person;
-      loadMessages();
+      const cached = API.peek('/api/messages/');
+      if (cached) _paintMessages(cached);
+      else loadMessages();
     });
     loadMemberOptions();
     loadMessages();

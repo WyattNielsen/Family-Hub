@@ -208,7 +208,8 @@
       el.innerHTML = '<div class="meals-note">School menus are hidden. <a href="/settings.html">Change this in Settings</a></div>';
       return;
     }
-    const schools = data.schools || [];
+    const person = getPersonFilter();
+    const schools = filterRowsByMember(data.schools || [], person);
     if (!data.configured) {
       schoolMenus = [];
       closeMealPlan();
@@ -220,7 +221,9 @@
       closeMealPlan();
       el.innerHTML = loading
         ? '<div class="meals-note">Loading school menus…</div>'
-        : '<div class="meals-note">Assign a school in <a href="/settings.html">Settings</a>.</div>';
+        : (person === 'all'
+          ? '<div class="meals-note">Assign a school in <a href="/settings.html">Settings</a>.</div>'
+          : '<div class="meals-note">No school menu for this person.</div>');
       return;
     }
     schoolMenus = schools;
@@ -410,9 +413,8 @@
     if (!el) return;
     const gen = ++_weekGen;
     const start = weekAnchor();
-    const person = getPersonFilter();
-    let url = '/api/meals/week?start=' + start;
-    if (person !== 'all') url += '&member_id=' + encodeURIComponent(person);
+    // Always Everyone; person chips filter school rows client-side.
+    const url = '/api/meals/week?start=' + start;
     const nextBtn = document.getElementById('weekNext');
     if (nextBtn) nextBtn.textContent = weekOffset === 0 ? 'Next week' : '›';
 
@@ -529,15 +531,15 @@
     const el = document.getElementById('requestList');
     if (!el) return;
     const person = getPersonFilter();
-    const url = person === 'all'
-      ? '/api/meals/requests'
-      : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
+    const url = '/api/meals/requests';
+    const paint = (rows) => _paintRequests(el, filterRowsByMember(rows || [], person), person);
     const cached = API.peek(url);
-    if (cached) _paintRequests(el, cached, person);
+    if (cached) paint(cached);
     try {
       const rows = await API.get(url);
-      if (document.getElementById('requestList') === el) _paintRequests(el, rows, person);
+      if (document.getElementById('requestList') === el) paint(rows);
     } catch (e) {
+      if (typeof isAbortError === 'function' && isAbortError(e)) return;
       if (!cached && document.getElementById('requestList') === el) {
         el.innerHTML = '<div class="empty-state">Could not load requests</div>';
       }
@@ -612,8 +614,17 @@
     onPersonFilterChange(() => {
       closeMealPlan();
       fillPeople();
-      loadWeek();
-      loadRequests();
+      // Instant client-side filter from cached Everyone data — no network.
+      if (lastSchoolData) renderSchools(lastSchoolData, lastSchoolLoading);
+      else loadWeek();
+      const reqCached = API.peek('/api/meals/requests');
+      const reqEl = document.getElementById('requestList');
+      if (reqEl && reqCached) {
+        const person = getPersonFilter();
+        _paintRequests(reqEl, filterRowsByMember(reqCached, person), person);
+      } else {
+        loadRequests();
+      }
     });
     document.getElementById('requestForm').addEventListener('submit', submitRequest);
     document.getElementById('weekPrev').addEventListener('click', () => shiftWeek(-1));

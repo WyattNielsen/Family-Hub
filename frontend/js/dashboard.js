@@ -198,15 +198,13 @@
     const [ey, em, ed] = endStr.split('-').map(Number);
     const endWeek = new Date(ey, em - 1, ed, 23, 59, 59);
     const person = getPersonFilter();
-    let eventsUrl = `/api/calendar/events?start=${encodeURIComponent(todayStr + 'T00:00:00')}&end=${encodeURIComponent(endStr + 'T23:59:59')}`;
-    if (person !== 'all') eventsUrl += `&member_id=${encodeURIComponent(person)}`;
+    // Always fetch Everyone; person chips filter client-side (instant, no hang).
+    const eventsUrl = `/api/calendar/events?start=${encodeURIComponent(todayStr + 'T00:00:00')}&end=${encodeURIComponent(endStr + 'T23:59:59')}`;
     return { eventsUrl, now, endWeek, person, todayStr, endStr };
   }
 
-  function dashboardDayEventsUrl(dateStr, person) {
-    let url = `/api/calendar/events?start=${encodeURIComponent(dateStr + 'T00:00:00')}&end=${encodeURIComponent(dateStr + 'T23:59:59')}`;
-    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
-    return url;
+  function dashboardDayEventsUrl(dateStr) {
+    return `/api/calendar/events?start=${encodeURIComponent(dateStr + 'T00:00:00')}&end=${encodeURIComponent(dateStr + 'T23:59:59')}`;
   }
 
   function dateInWeekWindow(dateStr, now, endWeek) {
@@ -245,19 +243,21 @@
     const useWeek = dashCalView === 'upnext' || dateInWeekWindow(dashAgendaDate, now, endWeek);
 
     const paint = (rows, when) => {
-      if (dashCalView === 'agenda') _renderDashAgenda(el, rows);
-      else _renderEventsList(el, rows, when);
+      const visible = filterEventsForPerson(rows, person);
+      if (dashCalView === 'agenda') _renderDashAgenda(el, visible);
+      else _renderEventsList(el, visible, when);
     };
 
     if (useWeek) {
-      const cached = API.peek(eventsUrl) || (_lastEventsKey === person ? _lastEventsData : null);
+      const cached = API.peek(eventsUrl) || _lastEventsData;
       if (cached) paint(cached, now);
       try {
         const allFetched = await API.get(eventsUrl);
-        _lastEventsKey = person;
+        _lastEventsKey = 'all';
         _lastEventsData = allFetched;
         if (document.getElementById('todayEvents') === el) paint(allFetched, new Date());
       } catch (e) {
+        if (isAbortError(e)) return;
         if (!cached && document.getElementById('todayEvents') === el) {
           el.innerHTML = '<div class="empty-state">Failed to load events</div>';
         }
@@ -265,15 +265,16 @@
       return;
     }
 
-    const dayUrl = dashboardDayEventsUrl(dashAgendaDate, person);
+    const dayUrl = dashboardDayEventsUrl(dashAgendaDate);
     const cachedDay = API.peek(dayUrl);
-    if (cachedDay) _renderDashAgenda(el, cachedDay);
+    if (cachedDay) paint(cachedDay, now);
     try {
       const dayFetched = await API.get(dayUrl);
       if (document.getElementById('todayEvents') === el && dashCalView === 'agenda') {
-        _renderDashAgenda(el, dayFetched);
+        paint(dayFetched, now);
       }
     } catch (e) {
+      if (isAbortError(e)) return;
       if (!cachedDay && document.getElementById('todayEvents') === el) {
         el.innerHTML = '<div class="empty-state">Failed to load events</div>';
       }
@@ -499,7 +500,8 @@
       return '<div class="meals-note">Connect SchoolCafe in Settings to see school menus.</div>';
     }
     if (loading) return '<div class="meals-note">Loading school menus…</div>';
-    if (!data.schools || !data.schools.length) {
+    const schools = filterRowsByMember(data.schools || [], person);
+    if (!schools.length) {
       return person === 'all'
         ? '<div class="meals-note">Assign a school to each student in Settings.</div>'
         : '<div class="meals-note">No school menu for this person.</div>';
@@ -507,7 +509,7 @@
     const servedDate = data.school_date || schoolMenuDate(dinnerDate);
     const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
     const mealType = schoolMealTypes;
-    return `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + data.schools.map(s => {
+    return `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + schools.map(s => {
       const breakfast = mealType === 'lunch' ? '' : menuItemsText(s.breakfast);
       const lunch = mealType === 'breakfast' ? '' : menuItemsText(s.lunch);
       const body = s.error
@@ -588,20 +590,18 @@
     }).catch(() => {});
     const schoolDate = schoolMenuDate(dinnerDate);
     const person = getPersonFilter();
-    let url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
-    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
-    const reqUrl = person === 'all'
-      ? '/api/meals/requests'
-      : `/api/meals/requests?member_id=${encodeURIComponent(person)}`;
+    const url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
+    const reqUrl = '/api/meals/requests';
 
     const cachedFast = API.peek(url + '&include_school=false');
     const cachedFull = API.peek(url);
     const cachedReqs = API.peek(reqUrl);
+    const paintReqs = (reqs) => filterRowsByMember(reqs || [], person);
     if (cachedFull && cachedReqs) {
-      paintDinner(el, cachedFull, cachedReqs, dinnerDate, mealsSchoolHtml(cachedFull, person, dinnerDate, false));
+      paintDinner(el, cachedFull, paintReqs(cachedReqs), dinnerDate, mealsSchoolHtml(cachedFull, person, dinnerDate, false));
     } else if (cachedFast && cachedReqs) {
       const wants = cachedFast.configured && !cachedFast.school_menus_hidden;
-      paintDinner(el, cachedFast, cachedReqs, dinnerDate, mealsSchoolHtml(cachedFast, person, dinnerDate, wants));
+      paintDinner(el, cachedFast, paintReqs(cachedReqs), dinnerDate, mealsSchoolHtml(cachedFast, person, dinnerDate, wants));
     }
 
     try {
@@ -611,7 +611,7 @@
       ]);
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
       const wantsSchool = menus.configured && !menus.school_menus_hidden;
-      paintDinner(el, menus, requests, dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(wantsSchool && menus.warming)));
+      paintDinner(el, menus, paintReqs(requests), dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(wantsSchool && menus.warming)));
       if (wantsSchool && menus.warming) {
         setTimeout(() => {
           if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals();
@@ -672,10 +672,10 @@
     const dinnerDate = toETDateStr(new Date());
     const schoolDate = schoolMenuDate(dinnerDate);
     const { person, todayStr, endStr } = dashboardWeekEventsUrl();
-    let url = `/api/dashboard?date=${encodeURIComponent(dinnerDate)}&school_date=${encodeURIComponent(schoolDate)}`
+    // Always Everyone; person chips filter client-side so switching never waits on the network.
+    const url = `/api/dashboard?date=${encodeURIComponent(dinnerDate)}&school_date=${encodeURIComponent(schoolDate)}`
       + `&events_start=${encodeURIComponent(todayStr + 'T00:00:00')}`
       + `&events_end=${encodeURIComponent(endStr + 'T23:59:59')}`;
-    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
     return { url, dinnerDate, schoolDate, person, todayStr, endStr };
   }
 
@@ -683,11 +683,8 @@
     if (!data) return;
     const choresUrl = '/api/chores/?hide_future=true&completed=false&since_days=0';
     const { eventsUrl } = dashboardWeekEventsUrl();
-    const mealsUrl = `/api/meals/day?date=${meta.dinnerDate}&school_date=${meta.schoolDate}`
-      + (meta.person !== 'all' ? `&member_id=${encodeURIComponent(meta.person)}` : '');
-    const reqUrl = meta.person === 'all'
-      ? '/api/meals/requests'
-      : `/api/meals/requests?member_id=${encodeURIComponent(meta.person)}`;
+    const mealsUrl = `/api/meals/day?date=${meta.dinnerDate}&school_date=${meta.schoolDate}`;
+    const reqUrl = '/api/meals/requests';
 
     if (data.events) API.seed(eventsUrl, data.events);
     if (data.chores) API.seed(choresUrl, data.chores);
@@ -702,13 +699,15 @@
 
   async function _paintDashboardBundle(data, meta) {
     if (!data || FHRouter.currentRoute() !== '/') return;
+    const person = getPersonFilter();
     const now = new Date();
     const eventsEl = document.getElementById('todayEvents');
     if (eventsEl && data.events) {
-      _lastEventsKey = meta.person;
+      _lastEventsKey = 'all';
       _lastEventsData = data.events;
-      if (dashCalView === 'agenda') _renderDashAgenda(eventsEl, data.events);
-      else _renderEventsList(eventsEl, data.events, now);
+      const visible = filterEventsForPerson(data.events, person);
+      if (dashCalView === 'agenda') _renderDashAgenda(eventsEl, visible);
+      else _renderEventsList(eventsEl, visible, now);
     }
     const choresEl = document.getElementById('upcomingChores');
     if (choresEl && data.chores && data.members) {
@@ -720,9 +719,9 @@
       paintDinner(
         mealsEl,
         data.meals,
-        data.meal_requests || [],
+        filterRowsByMember(data.meal_requests || [], person),
         meta.dinnerDate,
-        mealsSchoolHtml(data.meals, meta.person, meta.dinnerDate, Boolean(data.meals.warming))
+        mealsSchoolHtml(data.meals, person, meta.dinnerDate, Boolean(data.meals.warming))
       );
       if (data.meals.warming && gen === _mealsGen) {
         setTimeout(() => { if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals(); }, 2500);
@@ -736,6 +735,16 @@
       _cachedStocks = data.stocks;
       _paintStocks(stockEl, data.stocks);
     }
+  }
+
+  function _repaintDashboardForPerson() {
+    const meta = _dashboardBundleUrl();
+    const cached = API.peek(meta.url);
+    if (cached) {
+      _seedDashboardBundle(cached, meta);
+      return _paintDashboardBundle(cached, meta);
+    }
+    return loadDashboardBundle();
   }
 
   async function loadDashboardBundle() {
@@ -773,7 +782,7 @@
 
   function mount() {
     onPersonFilterChange(() => {
-      loadDashboardBundle();
+      _repaintDashboardForPerson();
     });
     setDashboardDate();
 
