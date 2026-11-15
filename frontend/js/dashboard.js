@@ -576,18 +576,15 @@
     const cachedSettings = API.peek('/api/settings/');
     if (cachedSettings) schoolMealTypes = normalizeMealType(cachedSettings.school_meal_types);
     window.__fhSchoolMealType = schoolMealTypes;
-    API.get('/api/settings/').then(s => {
-      if (gen !== _mealsGen) return;
-      const next = normalizeMealType(s && s.school_meal_types);
-      if (next === schoolMealTypes) return;
-      schoolMealTypes = next;
-      window.__fhSchoolMealType = next;
-      const slot = document.getElementById('mealsSchool');
-      if (!slot || !_schoolPaint || _schoolPaint.gen !== gen) return;
-      if (document.getElementById('mealsBody') !== el) return;
-      const p = _schoolPaint;
-      slot.innerHTML = mealsSchoolHtml(p.data, p.person, p.dinnerDate, p.loading);
-    }).catch(() => {});
+    // Prefer already-bootstrapped settings — no extra GET just for meal-type toggle.
+    const settings = API.peek('/api/settings/');
+    if (settings) {
+      const next = normalizeMealType(settings.school_meal_types);
+      if (next !== schoolMealTypes) {
+        schoolMealTypes = next;
+        window.__fhSchoolMealType = next;
+      }
+    }
     const schoolDate = schoolMenuDate(dinnerDate);
     const person = getPersonFilter();
     const url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
@@ -608,11 +605,6 @@
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
       const wantsSchool = menus.configured && !menus.school_menus_hidden;
       paintDinner(el, menus, paintReqs(requests), dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(wantsSchool && menus.warming)));
-      if (wantsSchool && menus.warming && gen <= 3) {
-        setTimeout(() => {
-          if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals();
-        }, 4000 + gen * 2000);
-      }
     } catch (e) {
       if (isAbortError(e)) return;
       if (!cachedFull && gen === _mealsGen && document.getElementById('mealsBody') === el) {
@@ -719,9 +711,6 @@
         meta.dinnerDate,
         mealsSchoolHtml(data.meals, person, meta.dinnerDate, Boolean(data.meals.warming))
       );
-      if (data.meals.warming && gen === _mealsGen && _mealsGen <= 4) {
-        setTimeout(() => { if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals(); }, 2500);
-      }
     }
     const shopEl = document.getElementById('shoppingStrip');
     if (shopEl && data.shopping) _paintShoppingStrip(shopEl, data.shopping);
@@ -759,15 +748,7 @@
       return data;
     }).catch((e) => {
       if (isAbortError(e)) return;
-      // Fall back to individual loaders if the aggregate endpoint fails
-      if (!cached && gen === _dashBundleGen) {
-        loadTodayEvents();
-        loadUpcomingChores();
-        loadMeals();
-        loadShoppingStrip();
-        loadMessagePreview();
-        loadStocks();
-      }
+      // No fan-out fallback — one aggregate or show empty/cached.
     });
     const tracked = request.finally(() => {
       if (_dashBundleInflight === tracked) _dashBundleInflight = null;
@@ -805,13 +786,12 @@
       loadDashboardBundle();
     });
 
-    _stocksTimer = setInterval(loadStocks, 5 * 60 * 1000);
+    _stocksTimer = setInterval(() => { if (!document.hidden) loadStocks(); }, 5 * 60 * 1000);
     _refreshTimer = setInterval(() => {
       if (document.hidden || _dashBundleInflight) return;
       setDashboardDate();
+      // One aggregate refresh — do not also poke weather/messages separately.
       loadDashboardBundle();
-      loadWeather();
-      loadMessageBadge();
     }, 5 * 60 * 1000);
 
     return unmount;

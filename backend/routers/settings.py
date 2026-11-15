@@ -62,6 +62,38 @@ async def get_settings():
         raise _http_err("settings read failed", e) from e
 
 
+@router.get("/page")
+async def get_settings_page():
+    """One JSON blob for the Settings screen — settings + members + calendars."""
+    try:
+        from routers import calendar, members
+
+        stored = await asyncio.to_thread(reload_settings_map)
+        settings = sanitize_settings(stored)
+        member_rows = await asyncio.to_thread(members.get_members)
+        accounts = await asyncio.to_thread(calendar.list_calendar_accounts)
+        sources = await asyncio.to_thread(calendar.list_calendar_sources)
+        family_write = await asyncio.to_thread(calendar.get_family_write_calendar)
+        interval = settings.get("google_sync_interval") or "0"
+        try:
+            interval_minutes = int(interval)
+        except (TypeError, ValueError):
+            interval_minutes = 0
+        return {
+            "settings": settings,
+            "members": member_rows,
+            "calendar_accounts": accounts,
+            "calendar_sources": sources,
+            "family_write": family_write,
+            "sync": {
+                "last_synced": settings.get("google_last_synced") or None,
+                "interval_minutes": interval_minutes,
+            },
+        }
+    except Exception as e:
+        raise _http_err("settings page read failed", e) from e
+
+
 @router.post("/")
 def update_settings(payload: dict):
     try:

@@ -2,10 +2,11 @@
 const _getCache = new Map();
 const _getInflight = new Map();
 let _getCacheGen = 0;
-const GET_CACHE_MS = 10000;       // Fresh hit window across rapid screen switches
+const GET_CACHE_MS = 15000;       // Fresh hit window across rapid screen switches
 const GET_STALE_MAX_MS = 600000;  // Up to 10m for instant optimistic paint via API.peek()
 const FETCH_TIMEOUT_MS = 10000;
-const MAX_CONCURRENT_API = 5;     // Page GETs only; shell GETs bypass this queue
+// HTTP/1.1 browsers allow ~6 connections/origin. Keep API at 2 so HTML/JS/images still breathe.
+const MAX_CONCURRENT_API = 2;
 
 let _activeApiCount = 0;
 const _apiWaitQueue = [];
@@ -80,7 +81,7 @@ function _invalidateAfterMutation(path) {
     _invalidateGetCachePrefix('/api/bootstrap');
     _invalidateGetCachePrefix('/api/dashboard');
     _invalidateGetCachePrefix('/api/weather');
-    return;
+    return; // /api/settings/page cleared by the /api/settings prefix above
   }
   // Narrow bust for domain writes; always clear aggregates that embed them.
   const root = path.replace(/\/\d+(\/.*)?$/, '/').replace(/\?.*$/, '');
@@ -89,10 +90,16 @@ function _invalidateAfterMutation(path) {
   _invalidateGetCachePrefix('/api/dashboard');
   if (root.indexOf('/api/chores') === 0) _invalidateGetCachePrefix('/api/chores');
   if (root.indexOf('/api/messages') === 0) _invalidateGetCachePrefix('/api/messages');
-  if (root.indexOf('/api/calendar') === 0) _invalidateGetCachePrefix('/api/calendar');
+  if (root.indexOf('/api/calendar') === 0) {
+    _invalidateGetCachePrefix('/api/calendar');
+    _invalidateGetCachePrefix('/api/settings/page');
+  }
   if (root.indexOf('/api/meals') === 0) _invalidateGetCachePrefix('/api/meals');
   if (root.indexOf('/api/shopping') === 0) _invalidateGetCachePrefix('/api/shopping');
-  if (root.indexOf('/api/members') === 0) _invalidateGetCachePrefix('/api/members');
+  if (root.indexOf('/api/members') === 0) {
+    _invalidateGetCachePrefix('/api/members');
+    _invalidateGetCachePrefix('/api/settings/page');
+  }
 }
 
 function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS, parentSignal = null) {
@@ -180,9 +187,7 @@ const API = {
         const gen = _getCacheGen;
         const netCtrl = new AbortController();
         const promise = (async () => {
-          // Timeout-only abort. Navigation soft-cancels waiters; it must not
-          // kill the socket (NS_BINDING_ABORTED) or steal the slot mid-flight.
-          if (!isShell) await _acquireApiSlot(null);
+          await _acquireApiSlot(null);
           try {
             const r = await _fetchWithTimeout(path, {}, timeoutMs, null);
             if (!r.ok) throw new Error(await r.text());
@@ -190,7 +195,7 @@ const API = {
             if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
             return data;
           } finally {
-            if (!isShell) _releaseApiSlot();
+            _releaseApiSlot();
           }
         })();
         forced = { promise, netCtrl, refCount: 0, shellPinned: false };
@@ -213,9 +218,9 @@ const API = {
       const gen = _getCacheGen;
       const netCtrl = new AbortController();
       const promise = (async () => {
-        // Shell chrome bypasses the page slot queue.
-        // Fetches are timeout-only — route changes soft-cancel waiters only.
-        if (!isShell) await _acquireApiSlot(null);
+        // Every GET shares the same 2-slot cap — shell chrome included.
+        // Timeout-only abort; route changes soft-cancel waiters only.
+        await _acquireApiSlot(null);
         try {
           const r = await _fetchWithTimeout(path, {}, timeoutMs, null);
           if (!r.ok) throw new Error(await r.text());
@@ -223,7 +228,7 @@ const API = {
           if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
           return data;
         } finally {
-          if (!isShell) _releaseApiSlot();
+          _releaseApiSlot();
         }
       })();
       entry = { promise, netCtrl, refCount: 0, shellPinned: false };
@@ -484,16 +489,17 @@ function _syncCachedSettings(s) {
 }
 
 async function initAppTimezone(force) {
-  if (_tzLoaded && !force) {
-    if (!API.peek('/api/settings/')) {
-      loadAppSettings().then(_syncCachedSettings).catch(() => {});
-    }
+  // Bootstrap already seeds settings — don't fire a second settings GET on every page.
+  if (_tzLoaded && !force) return;
+  if (!force && API.peek('/api/settings/')) {
+    _syncCachedSettings(API.peek('/api/settings/'));
+    _tzLoaded = true;
     return;
   }
   try {
     const s = await loadAppSettings(force);
     _syncCachedSettings(s);
-  } catch(e) {}
+  } catch (e) {}
   _tzLoaded = true;
 }
 
@@ -1190,19 +1196,6 @@ function _bindWeatherClick(el, data) {
   }
 }
 
-let _weatherWarmTimer = null;
-let _weatherWarmAttempts = 0;
-const _WEATHER_WARM_MAX = 8;
-
-function _scheduleWeatherWarmRetry() {
-  clearTimeout(_weatherWarmTimer);
-  if (_weatherWarmAttempts >= _WEATHER_WARM_MAX) return;
-  const delay = Math.min(30000, 3500 * Math.pow(1.6, _weatherWarmAttempts));
-  _weatherWarmAttempts += 1;
-  // Non-force: reuse inflight/cache instead of spawning parallel weather GETs.
-  _weatherWarmTimer = setTimeout(() => loadWeather(false), delay);
-}
-
 function _applyWeatherPayload(data) {
   const el = document.getElementById('weatherWidget');
   if (!el) return;
@@ -1211,26 +1204,13 @@ function _applyWeatherPayload(data) {
       el.innerHTML = '<div class="weather-now"><span class="weather-condition">Loading weather…</span></div>';
       _setTempBand(el, null);
       _bindWeatherClick(el, null);
-      _scheduleWeatherWarmRetry();
       return;
     }
-    // Soft errors (fetch/geocode) — keep retrying a few times instead of blanking forever.
-    if (data && data.error && data.error !== 'no_location' && _weatherWarmAttempts < _WEATHER_WARM_MAX) {
-      el.innerHTML = '<div class="weather-now"><span class="weather-condition">Loading weather…</span></div>';
-      _setTempBand(el, null);
-      _bindWeatherClick(el, null);
-      _scheduleWeatherWarmRetry();
-      return;
-    }
-    clearTimeout(_weatherWarmTimer);
-    _weatherWarmAttempts = 0;
     el.innerHTML = '';
     _setTempBand(el, null);
     _bindWeatherClick(el, null);
     return;
   }
-  clearTimeout(_weatherWarmTimer);
-  _weatherWarmAttempts = 0;
   const t = data.tomorrow;
   const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
   const todayHi = _wxTempHtml(data.high, '↑');
@@ -1267,50 +1247,50 @@ async function loadWeather(force) {
   }
 }
 
+function _applyShellBootstrap(b) {
+  if (!b) return;
+  if (b.settings) {
+    API.seed('/api/settings/', b.settings);
+    _syncCachedSettings(b.settings);
+    _tzLoaded = true;
+    _applyTheme();
+    _lastDimReset = 0;
+    _resetDim();
+  }
+  if (Array.isArray(b.members)) {
+    API.seed('/api/members/', b.members);
+    const pf = document.getElementById('personFilter');
+    if (pf) _renderPersonFilterChips(pf, b.members);
+    _paintSidebarMembers(b.members);
+  }
+  if (Array.isArray(b.messages)) {
+    API.seed('/api/messages/', b.messages);
+    _paintMessageBadges(b.messages);
+  }
+  if (b.weather) {
+    API.seed('/api/weather/', b.weather);
+    _applyWeatherPayload(b.weather);
+  }
+  if (b.ha_states) {
+    API.seed('/api/homeassistant/states', b.ha_states);
+    _applyHAStatesPayload(b.ha_states);
+  }
+  if (b.cameras) {
+    API.seed('/api/security/cameras', b.cameras);
+    _applyDashCamerasPayload(b.cameras);
+  }
+}
+
 async function loadShellBootstrap() {
+  // One shell request. Never fan out to weather/HA/cameras/members in parallel.
   try {
-    const b = await API.get('/api/bootstrap', { shell: true });
-    if (!b) return;
-    if (b.settings) {
-      API.seed('/api/settings/', b.settings);
-      _syncCachedSettings(b.settings);
-      _tzLoaded = true;
-      _applyTheme();
-      _lastDimReset = 0;
-      _resetDim();
-    }
-    if (Array.isArray(b.members)) {
-      API.seed('/api/members/', b.members);
-      const pf = document.getElementById('personFilter');
-      if (pf) _renderPersonFilterChips(pf, b.members);
-      _paintSidebarMembers(b.members);
-    }
-    if (Array.isArray(b.messages)) {
-      API.seed('/api/messages/', b.messages);
-      _paintMessageBadges(b.messages);
-    }
-    if (b.weather) {
-      API.seed('/api/weather/', b.weather);
-      _applyWeatherPayload(b.weather);
-    }
-    if (b.ha_states) {
-      API.seed('/api/homeassistant/states', b.ha_states);
-      _applyHAStatesPayload(b.ha_states);
-      if (b.ha_states.warming) {
-        setTimeout(() => loadHAStatus(true), 2500);
-      }
-    }
-    if (b.cameras) {
-      API.seed('/api/security/cameras', b.cameras);
-      _applyDashCamerasPayload(b.cameras);
-    }
+    _applyShellBootstrap(await API.get('/api/bootstrap', { shell: true }));
   } catch (e) {
-    // Individual fallbacks if bootstrap failed
-    mountPersonFilter();
-    loadSidebarMembers();
-    loadWeather();
-    loadHAStatus();
-    loadDashCameras();
+    try {
+      _applyShellBootstrap(await API.get('/api/bootstrap', { shell: true, force: true }));
+    } catch (_) {
+      mountPersonFilter();
+    }
   }
 }
 
@@ -1596,19 +1576,7 @@ const FHRouter = (() => {
       navigate(url.pathname + url.search + url.hash);
     });
 
-    // Lazy 1-at-a-time prefetch on pointerover / touchstart (replaces 18-request boot storm)
-    const warmLink = e => {
-      const a = e.target.closest && e.target.closest('a[href]');
-      if (!a) return;
-      try {
-        const url = new URL(a.href, location.origin);
-        if (url.origin === location.origin && ROUTES[normRoute(url.pathname)]) {
-          prefetch(url.pathname);
-        }
-      } catch (_) {}
-    };
-    document.addEventListener('pointerover', warmLink, { passive: true });
-    document.addEventListener('touchstart', warmLink, { passive: true });
+    // No hover prefetch — it competed with real page/API traffic on HTTP/1.1.
 
     window.addEventListener('popstate', () => {
       navigate(location.pathname + location.search + location.hash, { fromPopstate: true, force: true });
@@ -1618,15 +1586,15 @@ const FHRouter = (() => {
   return { register, navigate, prefetch, currentRoute, boot };
 })();
 
-// Init persistent shell + theme + router + single /api/bootstrap call
+// Init: theme + one bootstrap + router. Keep background polls sparse.
 document.addEventListener('DOMContentLoaded', () => {
   ensureShell();
   initTheme();
   _updateFullscreenBtn();
   loadShellBootstrap();
   FHRouter.boot();
-  setInterval(() => loadHAStatus(), 30000);
-  setInterval(() => { if (!document.hidden) loadMessageBadge(); }, 60000);
+  setInterval(() => { if (!document.hidden) loadHAStatus(); }, 90000);
+  setInterval(() => { if (!document.hidden) loadMessageBadge(); }, 120000);
   ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
     document.addEventListener(ev, _onPersonActivity, { passive: true })
   );

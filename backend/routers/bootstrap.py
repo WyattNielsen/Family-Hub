@@ -117,3 +117,95 @@ async def get_dashboard_bundle(
         "messages": msg_rows,
         "stocks": stock_rows,
     }
+
+
+@router.get("/page/calendar")
+async def page_calendar(
+    start: str = Query(...),
+    end: str = Query(...),
+):
+    """Calendar screen — events + members + sync status in one call."""
+
+    def _load():
+        from database import get_db
+
+        with get_db() as conn:
+            ev_rows = calendar.query_events_in_window(conn, start=start, end=end, member_id=None)
+        return ev_rows, members.get_members()
+
+    ev_rows, mem_rows = await asyncio.to_thread(_load)
+    sync = await calendar.get_sync_status()
+    return {"events": ev_rows, "members": mem_rows, "sync": sync}
+
+
+@router.get("/page/chores")
+async def page_chores(
+    hide_future: bool = Query(False),
+    since_days: int = Query(0),
+):
+    """Chores screen — chores + leaderboard + members in one call."""
+
+    def _load():
+        return (
+            chores.get_chores(
+                assigned_to=None,
+                completed=None,
+                hide_future=hide_future,
+                since_days=since_days,
+            ),
+            chores.get_leaderboard(),
+            members.get_members(),
+        )
+
+    chore_rows, lb_rows, mem_rows = await asyncio.to_thread(_load)
+    return {"chores": chore_rows, "leaderboard": lb_rows, "members": mem_rows}
+
+
+@router.get("/page/meals")
+async def page_meals(start: Optional[str] = Query(None)):
+    """Meals screen — week plan + requests + history + members in one call."""
+    today, _hour = schoolcafe.app_today()
+    week = await meals.week_menu(start=start, member_id=None, include_school=True)
+    history, req_rows, mem_rows = await asyncio.to_thread(
+        lambda: (
+            meals.meal_history(before=today, limit=80),
+            meals.list_requests(member_id=None),
+            members.get_members(),
+        )
+    )
+    stored = await get_settings_map_async()
+    return {
+        "week": week,
+        "history": history,
+        "requests": req_rows,
+        "members": mem_rows,
+        "school_meal_types": (stored or {}).get("school_meal_types") or "both",
+    }
+
+
+@router.get("/page/messages")
+async def page_messages():
+    """Messages screen — messages + members in one call."""
+
+    def _load():
+        return messages.get_messages(), members.get_members()
+
+    msg_rows, mem_rows = await asyncio.to_thread(_load)
+    return {"messages": msg_rows, "members": mem_rows}
+
+
+@router.get("/page/security")
+async def page_security():
+    """Security screen — HA device states + cameras in one call."""
+    ha, cams = await asyncio.gather(
+        homeassistant.get_ha_states(),
+        security.get_cameras(),
+    )
+    return {"ha_states": ha, "cameras": cams}
+
+
+@router.get("/page/shopping")
+async def page_shopping():
+    """Shopping screen — one list payload."""
+    items = await asyncio.to_thread(shopping.list_items)
+    return {"items": items}

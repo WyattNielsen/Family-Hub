@@ -285,25 +285,48 @@
     grid.innerHTML = html;
   }
 
-  async function loadEvents() {
-    // Always fetch Everyone for the month; person chips filter client-side.
+  function _calendarRange() {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const monthNum = String(month + 1).padStart(2, '0');
     const lastDay = new Date(year, month + 1, 0).getDate();
-    const start = `${year}-${monthNum}-01T00:00:00`;
-    const end = `${year}-${monthNum}-${String(lastDay).padStart(2, '0')}T23:59:59`;
-    const url = `/api/calendar/events?start=${start}&end=${end}`;
+    return {
+      start: `${year}-${monthNum}-01T00:00:00`,
+      end: `${year}-${monthNum}-${String(lastDay).padStart(2, '0')}T23:59:59`,
+    };
+  }
 
-    const cached = API.peek(url);
-    if (cached) {
-      allEvents = cached;
-      renderActiveView();
+  function _applySyncStatus(data) {
+    const el = document.getElementById('syncStatus');
+    if (!el || !data || !data.last_synced) return;
+    const mins = Math.round((Date.now() - new Date(data.last_synced + 'Z').getTime()) / 60000);
+    el.textContent = mins < 2 ? 'Synced just now' : `Synced ${mins}m ago`;
+  }
+
+  function _applyCalendarPage(data) {
+    if (!data) return;
+    if (Array.isArray(data.events)) {
+      allEvents = data.events;
+      API.seed(`/api/calendar/events?start=${_calendarRange().start}&end=${_calendarRange().end}`, data.events);
     }
+    if (Array.isArray(data.members)) {
+      members = data.members;
+      API.seed('/api/members/', data.members);
+      populateMemberSelect();
+    }
+    if (data.sync) _applySyncStatus(data.sync);
+    renderActiveView();
+  }
 
+  async function loadEvents() {
+    // Always Everyone for the month; person chips filter client-side. One page GET.
+    const { start, end } = _calendarRange();
+    const url = `/api/page/calendar?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+    const cached = API.peek(url);
+    if (cached) _applyCalendarPage(cached);
     try {
-      allEvents = await API.get(url);
-      if (FHRouter.currentRoute() === '/calendar.html') renderActiveView();
+      const data = await API.get(url);
+      if (FHRouter.currentRoute() === '/calendar.html') _applyCalendarPage(data);
     } catch (e) {
       if (typeof isAbortError === 'function' && isAbortError(e)) return;
       if (!cached) showToast('Failed to load events', 'error');
@@ -452,16 +475,6 @@
     if (el) el.style.display = 'none';
   }
 
-  async function loadSyncStatus() {
-    try {
-      const data = await API.get('/api/calendar/sync/status');
-      const el = document.getElementById('syncStatus');
-      if (!el || !data.last_synced) return;
-      const mins = Math.round((Date.now() - new Date(data.last_synced + 'Z').getTime()) / 60000);
-      el.textContent = mins < 2 ? 'Synced just now' : `Synced ${mins}m ago`;
-    } catch (e) {}
-  }
-
   async function syncGoogle() {
     const btn = document.getElementById('syncBtn');
     if (!btn) return;
@@ -471,7 +484,6 @@
       const r = await API.post('/api/calendar/sync/all', {});
       showToast(`✅ Synced ${r.synced || 0} events`, 'success');
       loadEvents();
-      loadSyncStatus();
     } catch (e) {
       showToast('Sync failed — check calendar connections in Settings', 'error');
     } finally {
@@ -494,24 +506,18 @@
     onPersonFilterChange(() => renderActiveView());
     applyCalView();
     renderActiveView();
-    loadEvents();
-
-    initAppTimezone().then(() => {
-      if (FHRouter.currentRoute() !== '/calendar.html') return;
-      renderActiveView();
-      loadEvents();
-    });
 
     const cachedMembers = API.peek('/api/members/');
     if (cachedMembers) {
       members = cachedMembers;
       populateMemberSelect();
     }
-    API.get('/api/members/').then(rows => {
-      members = rows || [];
-      if (FHRouter.currentRoute() === '/calendar.html') populateMemberSelect();
-    }).catch(() => {});
-    loadSyncStatus();
+
+    initAppTimezone().then(() => {
+      if (FHRouter.currentRoute() !== '/calendar.html') return;
+      renderActiveView();
+      loadEvents();
+    });
 
     document.getElementById('prevMonth').onclick = () => {
       if (currentView === 'agenda') currentDate.setDate(currentDate.getDate() - 1);

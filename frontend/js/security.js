@@ -25,12 +25,63 @@
     renderOtherCards(others);
   }
 
+  function _paintCamerasFromPage(cameras) {
+    const section = document.getElementById('cameraSection');
+    const notConfigured = document.getElementById('cameraNotConfigured');
+    const grid = document.getElementById('cameraGrid');
+    if (!section || !notConfigured || !grid) return;
+    if (!cameras.length) {
+      section.style.display = 'none';
+      notConfigured.style.display = 'block';
+      return;
+    }
+    notConfigured.style.display = 'none';
+    section.style.display = 'block';
+    const epoch = ++_gridEpoch;
+    grid.innerHTML = cameras.map(cam => {
+      const id = cam.ha_entity_id;
+      const safeId = encodeURIComponent(id);
+      const safeName = String(cam.name || id).replace(/'/g, "\\'");
+      return `
+        <div class="camera-feed-card" data-entity="${escapeHtml(id)}" data-name="${escapeHtml(cam.name || id)}"
+             onclick="openCameraModal('${safeName}','${safeId}')">
+          <div class="camera-feed-label">${escapeHtml(cam.name || id)}</div>
+          <div class="camera-placeholder" id="ph-${id}">
+            <div class="camera-placeholder-icon">📷</div>
+            <div>Connecting to ${escapeHtml(cam.name || id)}…</div>
+          </div>
+          <video id="vid-${id}" class="camera-feed-video" autoplay muted playsinline></video>
+          <img id="snap-${id}" class="camera-feed-img" alt="${escapeHtml(cam.name || id)}" style="display:none"
+               src="/api/security/camera/${safeId}/snapshot?t=${Date.now()}">
+        </div>`;
+    }).join('');
+    cameras.forEach((cam, idx) => {
+      setTimeout(() => {
+        if (epoch === _gridEpoch) _startGridWebRTC(cam, epoch);
+      }, idx * 200);
+    });
+  }
+
+  function _applySecurityPage(data, withCameras) {
+    if (!data) return;
+    if (data.ha_states) {
+      API.seed('/api/homeassistant/states', data.ha_states);
+      _paintSecurityDevices(data.ha_states);
+    }
+    if (withCameras && data.cameras) {
+      API.seed('/api/security/cameras', data.cameras);
+      const list = Array.isArray(data.cameras) ? data.cameras : (data.cameras.cameras || []);
+      _paintCamerasFromPage(list);
+    }
+  }
+
   async function loadSecurityDevices(force) {
-    const cached = !force ? API.peek('/api/homeassistant/states') : null;
-    if (cached) _paintSecurityDevices(cached);
+    const url = '/api/page/security';
+    const cached = !force ? API.peek(url) : null;
+    if (cached) _applySecurityPage(cached, false);
     try {
-      const data = await API.get('/api/homeassistant/states', force ? { force: true } : undefined);
-      if (FHRouter.currentRoute() === '/security.html') _paintSecurityDevices(data);
+      const data = await API.get(url, force ? { force: true } : undefined);
+      if (FHRouter.currentRoute() === '/security.html') _applySecurityPage(data, true);
     } catch (e) {
       if (isAbortError(e)) return;
       const notCfg = document.getElementById('haNotConfigured');
@@ -190,50 +241,23 @@
   }
 
   async function loadCameraFeeds() {
-    const section = document.getElementById('cameraSection');
-    const notConfigured = document.getElementById('cameraNotConfigured');
-    const grid = document.getElementById('cameraGrid');
-    if (!section || !notConfigured || !grid) return;
+    // Cameras arrive with /api/page/security — used on first mount only.
+    const cached = API.peek('/api/page/security');
+    if (cached && cached.cameras) {
+      const list = Array.isArray(cached.cameras) ? cached.cameras : (cached.cameras.cameras || []);
+      _paintCamerasFromPage(list);
+      return;
+    }
     try {
-      const data = await API.get('/api/security/cameras');
+      const data = await API.get('/api/page/security');
       if (FHRouter.currentRoute() !== '/security.html') return;
-      const cameras = data.cameras || [];
-      if (!cameras.length) {
-        section.style.display = 'none';
-        notConfigured.style.display = 'block';
-        return;
-      }
-      notConfigured.style.display = 'none';
-      section.style.display = 'block';
-      const epoch = ++_gridEpoch;
-      grid.innerHTML = cameras.map(cam => {
-        const id = cam.ha_entity_id;
-        const safeId = encodeURIComponent(id);
-        const safeName = String(cam.name || id).replace(/'/g, "\\'");
-        return `
-          <div class="camera-feed-card" data-entity="${escapeHtml(id)}" data-name="${escapeHtml(cam.name || id)}"
-               onclick="openCameraModal('${safeName}','${safeId}')">
-            <div class="camera-feed-label">${escapeHtml(cam.name || id)}</div>
-            <div class="camera-placeholder" id="ph-${id}">
-              <div class="camera-placeholder-icon">📷</div>
-              <div>Connecting to ${escapeHtml(cam.name || id)}…</div>
-            </div>
-            <video id="vid-${id}" class="camera-feed-video" autoplay muted playsinline></video>
-            <img id="snap-${id}" class="camera-feed-img" alt="${escapeHtml(cam.name || id)}" style="display:none"
-                 src="/api/security/camera/${safeId}/snapshot?t=${Date.now()}">
-          </div>`;
-      }).join('');
-
-      // Stagger WebRTC connects so ICE/signaling does not spike all at once
-      cameras.forEach((cam, idx) => {
-        setTimeout(() => {
-          if (epoch === _gridEpoch) _startGridWebRTC(cam, epoch);
-        }, idx * 200);
-      });
+      _applySecurityPage(data, true);
     } catch (e) {
       if (isAbortError(e)) return;
-      section.style.display = 'none';
-      notConfigured.style.display = 'block';
+      const section = document.getElementById('cameraSection');
+      const notConfigured = document.getElementById('cameraNotConfigured');
+      if (section) section.style.display = 'none';
+      if (notConfigured) notConfigured.style.display = 'block';
     }
   }
 
@@ -332,13 +356,11 @@
 
   function mount() {
     initAppTimezone();
+    // One page GET paints devices + cameras.
     loadSecurityDevices();
-    afterPagePaint(() => {
-      if (FHRouter.currentRoute() === '/security.html') loadCameraFeeds();
-    });
     _secTimer = setInterval(() => {
       if (!document.hidden) loadSecurityDevices(true);
-    }, 30000);
+    }, 90000);
     return unmount;
   }
 

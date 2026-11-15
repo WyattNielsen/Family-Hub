@@ -73,16 +73,33 @@
     });
   }
 
-  async function loadChores() {
-    const url = showingAll ? '/api/chores/?since_days=7' : '/api/chores/?hide_future=true';
-    const cached = API.peek(url);
-    if (cached) {
-      allChores = cached;
-      renderChores();
+  function _applyChoresPage(data) {
+    if (!data) return;
+    if (Array.isArray(data.chores)) {
+      allChores = data.chores;
+      const seedUrl = showingAll ? '/api/chores/?since_days=7' : '/api/chores/?hide_future=true';
+      API.seed(seedUrl, data.chores);
     }
+    if (Array.isArray(data.members)) {
+      members = data.members;
+      API.seed('/api/members/', data.members);
+      populateMemberSelect();
+    }
+    if (Array.isArray(data.leaderboard)) {
+      API.seed('/api/chores/leaderboard', data.leaderboard);
+      const el = document.getElementById('leaderboard');
+      if (el) _paintLeaderboard(el, data.leaderboard);
+    }
+    renderChores();
+  }
+
+  async function loadChores() {
+    const url = showingAll ? '/api/page/chores?since_days=7' : '/api/page/chores?hide_future=true';
+    const cached = API.peek(url);
+    if (cached) _applyChoresPage(cached);
     try {
-      allChores = await API.get(url);
-      if (FHRouter.currentRoute() === '/chores.html') renderChores();
+      const data = await API.get(url);
+      if (FHRouter.currentRoute() === '/chores.html') _applyChoresPage(data);
     } catch (e) {
       const el = document.getElementById('choresList');
       if (!cached && el) el.innerHTML = '<div class="empty-state">Failed to load chores</div>';
@@ -327,7 +344,7 @@
     if (el && !currentlyCompleted) el.style.opacity = '0.5';
     try {
       await API.put(`/api/chores/${id}`, { completed: !currentlyCompleted });
-      await Promise.all([loadChores(), loadLeaderboard()]);
+      await loadChores();
       if (!currentlyCompleted) showToast('🌟 Great job! Points earned!', 'success');
     } catch (e) {
       showToast('Failed to update chore', 'error');
@@ -446,7 +463,6 @@
       await API.delete(`/api/chores/${id}`);
       showToast('Chore deleted', '');
       loadChores();
-      loadLeaderboard();
     } catch (e) {
       showToast('Failed to delete', 'error');
     }
@@ -476,18 +492,7 @@
   }
 
   async function loadLeaderboard() {
-    const el = document.getElementById('leaderboard');
-    if (!el) return;
-    const cached = API.peek('/api/chores/leaderboard');
-    if (cached) _paintLeaderboard(el, cached);
-    try {
-      const data = await API.get('/api/chores/leaderboard');
-      if (document.getElementById('leaderboard') === el) _paintLeaderboard(el, data);
-    } catch (e) {
-      if (!cached && document.getElementById('leaderboard') === el) {
-        el.innerHTML = '<div class="empty-state">Failed to load leaderboard</div>';
-      }
-    }
+    // Leaderboard arrives with /api/page/chores — no separate GET.
   }
 
   window.updateMemberCheckStyle = updateMemberCheckStyle;
@@ -505,22 +510,12 @@
       members = cachedMembers;
       populateMemberSelect();
     }
-    if (allChores.length && members.length) {
-      renderChores();
-    }
+    if (allChores.length && members.length) renderChores();
 
     initAppTimezone().then(() => {
       if (FHRouter.currentRoute() !== '/chores.html') return;
       loadChores();
-      loadLeaderboard();
     });
-    API.get('/api/members/').then(rows => {
-      members = rows || [];
-      if (FHRouter.currentRoute() === '/chores.html') {
-        populateMemberSelect();
-        renderChores();
-      }
-    }).catch(() => {});
 
     const toggleBtn = document.getElementById('toggleAllChores');
     if (toggleBtn) {

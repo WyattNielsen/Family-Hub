@@ -47,14 +47,20 @@
   }
 
   async function loadMembers() {
-    const cached = API.peek('/api/members/');
+    const page = API.peek('/api/settings/page');
+    const cached = (page && page.members) || API.peek('/api/members/');
     if (cached) {
       members = cached;
       loadMembersFromCache();
     }
+    // Members are included in /api/settings/page — refresh via that one call.
+    if (FHRouter.currentRoute() === '/settings.html') {
+      await loadSettingsPage({ force: true });
+      return;
+    }
     try {
       members = await API.get('/api/members/');
-      if (FHRouter.currentRoute() === '/settings.html') loadMembersFromCache();
+      loadMembersFromCache();
     } catch (e) {
       const el = document.getElementById('membersList');
       if (!cached && el) el.innerHTML = '<div class="empty-state">Could not load family members</div>';
@@ -256,50 +262,9 @@
     }).join('');
   }
 
-  async function loadFamilyCalendar(opts = {}) {
-    const skipMembers = Boolean(opts.skipMembers);
-    const tasks = [
-      API.get('/api/calendar/accounts'),
-      API.get('/api/calendar/sources'),
-      API.get('/api/calendar/family/write-calendar'),
-    ];
-    if (!skipMembers) tasks.push(API.get('/api/members/'));
-
-    const results = await Promise.allSettled(tasks);
-    if (FHRouter.currentRoute() !== '/settings.html') return;
-
-    const acctsRes = results[0];
-    const srcsRes = results[1];
-    const fwRes = results[2];
-    const memsRes = skipMembers ? null : results[3];
-
-    if (acctsRes.status === 'fulfilled') {
-      const data = acctsRes.value;
-      calendarAccounts = Array.isArray(data) ? data : (data.accounts || []);
-      _renderCalendarAccounts();
-    } else {
-      calendarAccounts = [];
-      const el = document.getElementById('calendarAccountsList');
-      if (el) el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load accounts: ${_escapeHtml(acctsRes.reason?.message || '')}</div>`;
-    }
-
-    if (memsRes && memsRes.status === 'fulfilled') {
-      members = memsRes.value || [];
-      loadMembersFromCache();
-    }
-
-    if (srcsRes.status === 'fulfilled') {
-      const data = srcsRes.value;
-      calendarSources = Array.isArray(data) ? data : (data.sources || []);
-      _renderCalendarSources();
-    } else {
-      calendarSources = [];
-      const el = document.getElementById('calendarSourcesList');
-      if (el) el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load calendars: ${_escapeHtml(srcsRes.reason?.message || '')}</div>`;
-    }
-
-    familyWriteSourceId = fwRes.status === 'fulfilled' ? (fwRes.value.source_id ?? null) : null;
-    renderWriteCalendars();
+  async function loadFamilyCalendar(_opts = {}) {
+    // Calendar block is part of /api/settings/page — one call refreshes everything.
+    await loadSettingsPage({ force: true });
   }
 
   async function disconnectCalendarAccount(id) {
@@ -741,19 +706,10 @@
   }
 
   async function loadSyncInterval() {
-    const cached = API.peek('/api/settings/');
-    if (cached) _applySyncFromSettings(cached);
-    try {
-      // Prefer settings map (already loaded on this page). Fall back to sync status.
-      const s = await API.get('/api/settings/');
-      _applySyncFromSettings(s);
-      if (!s.google_last_synced) {
-        const data = await API.get('/api/calendar/sync/status');
-        const sel = document.getElementById('syncIntervalPicker');
-        if (sel && data.interval_minutes != null) sel.value = data.interval_minutes || 0;
-        _updateSyncStatus(data.last_synced);
-      }
-    } catch (e) {}
+    const page = API.peek('/api/settings/page');
+    const s = (page && page.settings) || API.peek('/api/settings/');
+    if (s) _applySyncFromSettings(s);
+    if (page && page.sync) _updateSyncStatus(page.sync.last_synced);
   }
 
   function _updateSyncStatus(lastSynced) {
@@ -865,38 +821,68 @@
     if (dimMin)    dimMin.value    = s.dim_minutes ?? '5';
   }
 
+  function _applySettingsPage(data) {
+    if (!data || FHRouter.currentRoute() !== '/settings.html') return;
+    if (data.settings) {
+      API.seed('/api/settings/', data.settings);
+      _populateAllSettingsInputs(data.settings);
+      _applySyncFromSettings(data.settings);
+    }
+    if (Array.isArray(data.members)) {
+      API.seed('/api/members/', data.members);
+      members = data.members;
+      loadMembersFromCache();
+    }
+    if (Array.isArray(data.calendar_accounts)) {
+      API.seed('/api/calendar/accounts', data.calendar_accounts);
+      calendarAccounts = data.calendar_accounts;
+      _renderCalendarAccounts();
+    }
+    if (Array.isArray(data.calendar_sources)) {
+      API.seed('/api/calendar/sources', data.calendar_sources);
+      calendarSources = data.calendar_sources;
+      _renderCalendarSources();
+    }
+    if (data.family_write) {
+      API.seed('/api/calendar/family/write-calendar', data.family_write);
+      familyWriteSourceId = data.family_write.source_id ?? null;
+    }
+    if (data.sync) {
+      API.seed('/api/calendar/sync/status', data.sync);
+      _updateSyncStatus(data.sync.last_synced || null);
+    }
+    renderWriteCalendars();
+  }
+
   async function loadAllSettingsFields(opts = {}) {
-    const force = Boolean(opts.force);
+    // Prefer the page blob; fall back to plain settings map.
+    const page = API.peek('/api/settings/page');
+    if (page && page.settings) {
+      _populateAllSettingsInputs(page.settings);
+      _applySyncFromSettings(page.settings);
+      if (!opts.force) return;
+    }
     const cached = API.peek('/api/settings/');
     if (cached) {
       _populateAllSettingsInputs(cached);
       _applySyncFromSettings(cached);
     }
-    try {
-      const s = await API.get('/api/settings/', force ? { force: true } : undefined);
-      _populateAllSettingsInputs(s);
-      _applySyncFromSettings(s);
-    } catch (e) {}
+    if (opts.force) await loadSettingsPage();
   }
 
-  /** One coordinated mount load — avoids the old 7+ GET stampede. */
-  async function loadSettingsPage() {
-    const cachedSettings = API.peek('/api/settings/');
-    if (cachedSettings) {
-      _populateAllSettingsInputs(cachedSettings);
-      _applySyncFromSettings(cachedSettings);
+  /** One GET — settings + members + calendars as a single JSON object. */
+  async function loadSettingsPage(opts = {}) {
+    const force = Boolean(opts.force);
+    const cached = API.peek('/api/settings/page');
+    if (cached && !force) _applySettingsPage(cached);
+    try {
+      const data = await API.get('/api/settings/page', force ? { force: true } : undefined);
+      if (FHRouter.currentRoute() !== '/settings.html') return;
+      _applySettingsPage(data);
+    } catch (e) {
+      const el = document.getElementById('membersList');
+      if (!cached && el) el.innerHTML = '<div class="empty-state">Could not load settings</div>';
     }
-    const cachedMembers = API.peek('/api/members/');
-    if (cachedMembers) {
-      members = cachedMembers;
-      loadMembersFromCache();
-    }
-
-    await Promise.all([
-      loadAllSettingsFields(),
-      loadMembers(),
-      loadFamilyCalendar({ skipMembers: true }),
-    ]);
   }
 
   async function loadPhotosGrid() {

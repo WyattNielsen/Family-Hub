@@ -61,12 +61,28 @@
     board.innerHTML = msgs.map(renderMessage).join('');
   }
 
+  function _applyMessagesPage(data) {
+    if (!data) return;
+    if (Array.isArray(data.members)) {
+      _members = data.members;
+      API.seed('/api/members/', data.members);
+      const person = getPersonFilter();
+      fillPersonSelect(document.getElementById('msgRecipient'), 'Everyone', person === 'all' ? '' : person);
+      fillPersonSelect(document.getElementById('msgAuthor'), "Who's posting?");
+    }
+    if (Array.isArray(data.messages)) {
+      API.seed('/api/messages/', data.messages);
+      _paintMessages(data.messages);
+    }
+  }
+
   async function loadMessages() {
-    const cached = API.peek('/api/messages/');
-    if (cached) _paintMessages(cached);
+    const url = '/api/page/messages';
+    const cached = API.peek(url);
+    if (cached) _applyMessagesPage(cached);
     try {
-      const msgs = await API.get('/api/messages/');
-      if (FHRouter.currentRoute() === '/messages.html') _paintMessages(msgs);
+      const data = await API.get(url);
+      if (FHRouter.currentRoute() === '/messages.html') _applyMessagesPage(data);
     } catch (e) {
       console.error('Failed to load messages', e);
     }
@@ -117,23 +133,6 @@
     }
   }
 
-  async function loadMemberOptions() {
-    const cached = API.peek('/api/members/');
-    if (cached) {
-      _members = cached;
-      const person = getPersonFilter();
-      fillPersonSelect(document.getElementById('msgRecipient'), 'Everyone', person === 'all' ? '' : person);
-      fillPersonSelect(document.getElementById('msgAuthor'), "Who's posting?");
-    }
-    try {
-      _members = await API.get('/api/members/');
-      if (FHRouter.currentRoute() !== '/messages.html') return;
-      const person = getPersonFilter();
-      fillPersonSelect(document.getElementById('msgRecipient'), 'Everyone', person === 'all' ? '' : person);
-      fillPersonSelect(document.getElementById('msgAuthor'), "Who's posting?");
-    } catch (e) {}
-  }
-
   window.postMessage = postMessage;
   window.ackMessage = ackMessage;
 
@@ -146,11 +145,10 @@
       if (cached) _paintMessages(cached);
       else loadMessages();
     });
-    loadMemberOptions();
     loadMessages();
     _msgTimer = setInterval(() => {
       if (!document.hidden) loadMessages();
-    }, 60000);
+    }, 120000);
 
     document.getElementById('msgBody').addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') postMessage();

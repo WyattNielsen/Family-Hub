@@ -16,10 +16,16 @@
   async function loadShopping() {
     const el = document.getElementById('shopList');
     if (!el) return;
-    const cached = API.peek('/api/shopping/');
-    if (cached) _paintShopping(el, cached);
+    const url = '/api/page/shopping';
+    const cached = API.peek(url);
+    if (cached && Array.isArray(cached.items)) {
+      API.seed('/api/shopping/', cached.items);
+      _paintShopping(el, cached.items);
+    }
     try {
-      const items = await API.get('/api/shopping/');
+      const data = await API.get(url);
+      const items = (data && data.items) || [];
+      API.seed('/api/shopping/', items);
       if (document.getElementById('shopList') === el) _paintShopping(el, items);
     } catch (e) {
       if (!cached && document.getElementById('shopList') === el) {

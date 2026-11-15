@@ -386,18 +386,14 @@
   }
 
   function loadMealType() {
-    const epoch = mealTypeEpoch;
-    if (typeof window.__fhSchoolMealType === 'string' && epoch === mealTypeEpoch) {
+    if (typeof window.__fhSchoolMealType === 'string') {
       applyMealType(window.__fhSchoolMealType);
     }
     const cached = API.peek('/api/settings/');
-    if (cached && epoch === mealTypeEpoch) {
+    if (cached) {
       if (applyMealType(cached.school_meal_types)) rerenderSchoolView();
     }
-    API.get('/api/settings/').then(s => {
-      if (epoch !== mealTypeEpoch || FHRouter.currentRoute() !== '/meals.html') return;
-      if (applyMealType(s && s.school_meal_types)) rerenderSchoolView();
-    }).catch(() => {});
+    // No settings GET — bootstrap already seeded the map.
   }
 
   function bindMealTypeToggle() {
@@ -431,33 +427,52 @@
     });
   }
 
+  function _applyMealsPage(data, start) {
+    const el = document.getElementById('weekPlan');
+    if (!el || !data) return;
+    const week = data.week || data;
+    if (data.school_meal_types != null) applyMealType(data.school_meal_types);
+    if (Array.isArray(data.members)) {
+      members = data.members;
+      API.seed('/api/members/', data.members);
+      fillPeople();
+    }
+    if (Array.isArray(data.history)) {
+      API.seed('/api/meals/history?before=' + toETDateStr(new Date()), data.history);
+      const histEl = document.getElementById('mealHistory');
+      if (histEl) _paintHistory(histEl, data.history);
+    }
+    if (Array.isArray(data.requests)) {
+      API.seed('/api/meals/requests', data.requests);
+      const reqEl = document.getElementById('requestList');
+      if (reqEl) {
+        const person = getPersonFilter();
+        _paintRequests(reqEl, filterRowsByMember(data.requests, person), person);
+      }
+    }
+    API.seed('/api/meals/week?start=' + start, week);
+    _paintWeekPlan(el, week, start);
+    const wantsSchool = week.configured && !week.school_menus_hidden;
+    // No warming retry loops — show what we have (including empty/warming once).
+    renderSchools(week, Boolean(wantsSchool && week.warming));
+  }
+
   async function loadWeek() {
     const el = document.getElementById('weekPlan');
     if (!el) return;
     const gen = ++_weekGen;
     const start = weekAnchor();
-    // One request for dinner + school. Backend school reads are local snapshots only.
-    const url = '/api/meals/week?start=' + start;
+    const url = '/api/page/meals?start=' + encodeURIComponent(start);
     const nextBtn = document.getElementById('weekNext');
     if (nextBtn) nextBtn.textContent = weekOffset === 0 ? 'Next week' : '›';
 
     const cached = API.peek(url);
-    if (cached) {
-      _paintWeekPlan(el, cached, start);
-      renderSchools(cached, Boolean(cached.configured && !cached.school_menus_hidden && cached.warming));
-    }
+    if (cached) _applyMealsPage(cached, start);
 
     try {
-      const menus = await API.get(url);
+      const data = await API.get(url);
       if (gen !== _weekGen || document.getElementById('weekPlan') !== el) return;
-      _paintWeekPlan(el, menus, start);
-      const wantsSchool = menus.configured && !menus.school_menus_hidden;
-      renderSchools(menus, Boolean(wantsSchool && menus.warming));
-      if (wantsSchool && menus.warming && gen <= 3) {
-        setTimeout(() => {
-          if (gen === _weekGen && FHRouter.currentRoute() === '/meals.html') loadWeek();
-        }, 4000 + gen * 2000);
-      }
+      _applyMealsPage(data, start);
     } catch (e) {
       if (typeof isAbortError === 'function' && isAbortError(e)) return;
       if (!cached && gen === _weekGen && document.getElementById('weekPlan') === el) {
@@ -499,19 +514,8 @@
   }
 
   async function loadHistory() {
-    const el = document.getElementById('mealHistory');
-    if (!el) return;
-    const url = '/api/meals/history?before=' + toETDateStr(new Date());
-    const cached = API.peek(url);
-    if (cached) _paintHistory(el, cached);
-    try {
-      const rows = await API.get(url);
-      if (document.getElementById('mealHistory') === el) _paintHistory(el, rows);
-    } catch (e) {
-      if (!cached && document.getElementById('mealHistory') === el) {
-        el.innerHTML = '<div class="empty-state">Could not load past meals</div>';
-      }
-    }
+    // History arrives with /api/page/meals.
+    await loadWeek();
   }
 
   async function reuseHistory(btn) {
@@ -549,22 +553,8 @@
   }
 
   async function loadRequests() {
-    const el = document.getElementById('requestList');
-    if (!el) return;
-    const person = getPersonFilter();
-    const url = '/api/meals/requests';
-    const paint = (rows) => _paintRequests(el, filterRowsByMember(rows || [], person), person);
-    const cached = API.peek(url);
-    if (cached) paint(cached);
-    try {
-      const rows = await API.get(url);
-      if (document.getElementById('requestList') === el) paint(rows);
-    } catch (e) {
-      if (typeof isAbortError === 'function' && isAbortError(e)) return;
-      if (!cached && document.getElementById('requestList') === el) {
-        el.innerHTML = '<div class="empty-state">Could not load requests</div>';
-      }
-    }
+    // Requests arrive with /api/page/meals.
+    await loadWeek();
   }
 
   async function submitRequest(ev) {
@@ -598,13 +588,12 @@
       return;
     }
     try {
-      const rows = await API.get('/api/meals/requests');
+      const rows = API.peek('/api/meals/requests') || [];
       const req = rows.find(r => r.id === id);
       if (!req) return;
       await API.put('/api/meals/dinner', { meal_date: date, title: req.title });
       await API.delete('/api/meals/requests/' + id);
       await loadWeek();
-      await loadRequests();
       showToast('Added to ' + dayLabel(date), 'success');
     } catch (e) {
       showToast('Could not plan that meal', 'error');
@@ -635,7 +624,6 @@
     onPersonFilterChange(() => {
       closeMealPlan();
       fillPeople();
-      // Instant client-side filter from cached Everyone data — no network.
       if (lastSchoolData) renderSchools(lastSchoolData, lastSchoolLoading);
       else loadWeek();
       const reqCached = API.peek('/api/meals/requests');
@@ -643,8 +631,6 @@
       if (reqEl && reqCached) {
         const person = getPersonFilter();
         _paintRequests(reqEl, filterRowsByMember(reqCached, person), person);
-      } else {
-        loadRequests();
       }
     });
     document.getElementById('requestForm').addEventListener('submit', submitRequest);
@@ -659,13 +645,7 @@
     initAppTimezone().then(() => {
       if (FHRouter.currentRoute() !== '/meals.html') return;
       loadWeek();
-      loadRequests();
-      loadHistory();
     });
-    API.get('/api/members/').then(rows => {
-      members = rows || [];
-      if (FHRouter.currentRoute() === '/meals.html') fillPeople();
-    }).catch(() => { members = []; });
 
     return () => {
       _weekGen += 1;
