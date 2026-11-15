@@ -1,6 +1,7 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import asyncio
 import json
 import time
