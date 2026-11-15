@@ -73,11 +73,16 @@ async def get_dashboard_bundle(
         ev_end = f"{end_d}T23:59:59"
 
     def _sync_bundle():
-        ev_rows = calendar.get_events(start=ev_start, end=ev_end, member_id=member_id)
+        from database import get_db
+        with get_db() as conn:
+            ev_rows = calendar.query_events_in_window(
+                conn, start=ev_start, end=ev_end, member_id=member_id
+            )
         chore_rows = chores.get_chores(
             assigned_to=member_id,
             completed=False,
             hide_future=True,
+            since_days=0,
         )
         lb_rows = chores.get_leaderboard()
         mem_rows = members.get_members()

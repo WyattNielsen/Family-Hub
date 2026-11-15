@@ -247,31 +247,53 @@ def get_setting_value(key: str, default: str = "") -> str:
 def upsert_setting_sync(conn: DBConn, key: str, value: Optional[str]):
     if value is None:
         conn.execute("DELETE FROM settings WHERE key = %s", (key,))
-    else:
+        return
+    # Prefer UPDATE-then-INSERT so a missing PRIMARY KEY / ON CONFLICT
+    # constraint cannot 500 every settings save.
+    cur = conn.execute(
+        "UPDATE settings SET value = %s WHERE key = %s",
+        (str(value), key),
+    )
+    if cur.rowcount:
+        return
+    try:
         conn.execute(
-            """INSERT INTO settings (key, value) VALUES (%s, %s)
-               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            "INSERT INTO settings (key, value) VALUES (%s, %s)",
             (key, str(value)),
         )
+    except Exception:
+        # Concurrent insert won the race — take their row over.
+        conn.execute(
+            "UPDATE settings SET value = %s WHERE key = %s",
+            (str(value), key),
+        )
+
+
+def reload_settings_map() -> dict[str, str]:
+    """Force a synchronous re-read from Postgres into the process cache."""
+    global _settings_cache
+    data = _load_settings_sync()
+    with _settings_lock:
+        _settings_cache = (time.monotonic(), data)
+    return data
 
 
 def invalidate_settings_cache(broadcast: bool = True):
     global _settings_cache
-    # Reload synchronously when broadcast=True (writer path) so local process stays warm
+    try:
+        data = reload_settings_map()
+    except Exception:
+        with _settings_lock:
+            _settings_cache = None
+        return None
     if broadcast:
         try:
             with get_db() as conn:
-                rows = conn.execute("SELECT key, value FROM settings").fetchall()
-                data = {r["key"]: r["value"] for r in rows}
-                conn.execute("SELECT pg_notify('fh_events', 'settings')")
+                conn.execute("SELECT pg_notify(%s, %s)", ("fh_events", "settings"))
                 conn.commit()
-            with _settings_lock:
-                _settings_cache = (time.monotonic(), data)
-            return
-        except Exception:
-            pass
-    with _settings_lock:
-        _settings_cache = None
+        except Exception as e:
+            print(f"settings notify failed: {e}")
+    return data
 
 
 # ── Worker Job Wakeups (LISTEN / NOTIFY) ─────────────────────────────────────
@@ -588,6 +610,15 @@ def init_db():
 
             migrate_from_sqlite_if_needed(conn, DB_PATH)
 
+            # Ensure upserts work even if an older table lacked a PRIMARY KEY
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS settings_key_uidx ON settings (key)"
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"settings unique index note: {e}")
+                conn.rollback()
             defaults = [
                 ("slideshow_timeout", "120"),
                 ("slideshow_interval", "5"),
@@ -595,11 +626,15 @@ def init_db():
                 ("photos_session_id", ""),
             ]
             for key, val in defaults:
-                conn.execute(
-                    """INSERT INTO settings (key, value) VALUES (%s, %s)
-                       ON CONFLICT (key) DO NOTHING""",
-                    (key, val),
+                cur = conn.execute(
+                    "UPDATE settings SET value = value WHERE key = %s",
+                    (key,),
                 )
+                if not cur.rowcount:
+                    conn.execute(
+                        "INSERT INTO settings (key, value) VALUES (%s, %s)",
+                        (key, val),
+                    )
             conn.commit()
         finally:
             conn.execute("SELECT pg_advisory_unlock(84729103)")

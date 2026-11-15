@@ -49,7 +49,27 @@ def migrate_from_sqlite_if_needed(pg_conn, sqlite_path: str) -> bool:
     member_count = pg_conn.execute("SELECT COUNT(*) AS c FROM members").fetchone()["c"]
     event_count = pg_conn.execute("SELECT COUNT(*) AS c FROM events").fetchone()["c"]
     chore_count = pg_conn.execute("SELECT COUNT(*) AS c FROM chores").fetchone()["c"]
+    settings_count = pg_conn.execute("SELECT COUNT(*) AS c FROM settings").fetchone()["c"]
     if member_count > 0 or event_count > 0 or chore_count > 0:
+        # Still merge settings from SQLite when Postgres has family data but an
+        # empty settings table (common after a partial first boot).
+        if settings_count == 0 and os.path.isfile(sqlite_path):
+            try:
+                sconn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+                try:
+                    if "settings" in _sqlite_tables(sconn):
+                        print("Merging settings from legacy SQLite into empty Postgres settings table...")
+                        for r in _sqlite_rows(sconn, "settings"):
+                            if r.get("key") is not None and r.get("value") is not None:
+                                pg_conn.execute(
+                                    """INSERT INTO settings (key, value) VALUES (%s, %s)
+                                       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+                                    (str(r["key"]), str(r["value"])),
+                                )
+                finally:
+                    sconn.close()
+            except Exception as e:
+                print(f"Settings merge from SQLite failed: {e}")
         pg_conn.execute(
             """INSERT INTO settings (key, value) VALUES ('_sqlite_migrated', 'existing_pg')
                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"""
