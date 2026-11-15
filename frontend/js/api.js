@@ -65,8 +65,8 @@ function _invalidateGetCachePrefix(prefix) {
   for (const key of [..._getCache.keys()]) {
     if (key === prefix || key.startsWith(prefix)) _getCache.delete(key);
   }
-  // Bump gen so in-flight GETs for those paths don't re-seed stale bodies.
-  _getCacheGen += 1;
+  // Do NOT bump _getCacheGen here — a global bump makes every unrelated
+  // in-flight GET discard its result, which feels like random flakiness.
 }
 
 function _invalidateAfterMutation(path) {
@@ -172,31 +172,39 @@ const API = {
       if (hit && Date.now() - hit.at < GET_CACHE_MS) return hit.data;
     }
 
-    // force:true must never join a pre-mutation inflight (that was the settings
-    // "saved but reverts" bug). Run a dedicated fetch and replace the cache.
+    // force:true bypasses the fresh-hit window but still dedupes on the same
+    // path. Never abort a sibling inflight — that is a prime NS_BINDING source.
     if (force) {
-      const stale = _getInflight.get(path);
-      if (stale && !stale.shellPinned) {
-        try { stale.netCtrl.abort(); } catch (_) {}
-        if (_getInflight.get(path) === stale) _getInflight.delete(path);
+      let forced = _getInflight.get(path);
+      if (!forced) {
+        const gen = _getCacheGen;
+        const netCtrl = new AbortController();
+        const promise = (async () => {
+          // Timeout-only abort. Navigation soft-cancels waiters; it must not
+          // kill the socket (NS_BINDING_ABORTED) or steal the slot mid-flight.
+          if (!isShell) await _acquireApiSlot(null);
+          try {
+            const r = await _fetchWithTimeout(path, {}, timeoutMs, null);
+            if (!r.ok) throw new Error(await r.text());
+            const data = await r.json();
+            if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
+            return data;
+          } finally {
+            if (!isShell) _releaseApiSlot();
+          }
+        })();
+        forced = { promise, netCtrl, refCount: 0, shellPinned: false };
+        _getInflight.set(path, forced);
+        promise.finally(() => {
+          if (_getInflight.get(path) === forced) _getInflight.delete(path);
+        }).catch(() => {});
       }
-      const gen = _getCacheGen;
-      const netCtrl = new AbortController();
-      const onParentAbort = () => { try { netCtrl.abort(); } catch (_) {} };
-      if (navSignal) {
-        if (navSignal.aborted) throw new DOMException('Navigation aborted', 'AbortError');
-        navSignal.addEventListener('abort', onParentAbort, { once: true });
-      }
+      if (isShell) forced.shellPinned = true;
+      forced.refCount += 1;
       try {
-        // Force reloads skip the page concurrency queue so a just-saved
-        // settings refresh is never stuck behind dashboard widgets.
-        const r = await _fetchWithTimeout(path, {}, timeoutMs, netCtrl.signal);
-        if (!r.ok) throw new Error(await r.text());
-        const data = await r.json();
-        if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
-        return data;
+        return await forced.promise;
       } finally {
-        if (navSignal) navSignal.removeEventListener('abort', onParentAbort);
+        forced.refCount = Math.max(0, forced.refCount - 1);
       }
     }
 
@@ -205,11 +213,11 @@ const API = {
       const gen = _getCacheGen;
       const netCtrl = new AbortController();
       const promise = (async () => {
-        // Shell chrome (HA / weather / badges) bypasses the page slot queue so
-        // dashboard widgets cannot time out behind a stuck shell poll.
-        if (!isShell) await _acquireApiSlot(netCtrl.signal);
+        // Shell chrome bypasses the page slot queue.
+        // Fetches are timeout-only — route changes soft-cancel waiters only.
+        if (!isShell) await _acquireApiSlot(null);
         try {
-          const r = await _fetchWithTimeout(path, {}, timeoutMs, netCtrl.signal);
+          const r = await _fetchWithTimeout(path, {}, timeoutMs, null);
           if (!r.ok) throw new Error(await r.text());
           const data = await r.json();
           if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
@@ -242,9 +250,9 @@ const API = {
         if (settled) return;
         settled = true;
         entry.refCount = Math.max(0, entry.refCount - 1);
-        if (entry.refCount === 0 && !entry.shellPinned) {
-          try { entry.netCtrl.abort(); } catch (_) {}
-        }
+        // Soft-cancel: stop delivering to this page, but do NOT abort the
+        // network. Letting the GET finish fills the cache for the next visit
+        // and avoids Firefox NS_BINDING_ABORTED storms on every nav click.
         reject(new DOMException('Navigation aborted', 'AbortError'));
       };
       navSignal.addEventListener('abort', onAbort, { once: true });
@@ -1191,7 +1199,8 @@ function _scheduleWeatherWarmRetry() {
   if (_weatherWarmAttempts >= _WEATHER_WARM_MAX) return;
   const delay = Math.min(30000, 3500 * Math.pow(1.6, _weatherWarmAttempts));
   _weatherWarmAttempts += 1;
-  _weatherWarmTimer = setTimeout(() => loadWeather(true), delay);
+  // Non-force: reuse inflight/cache instead of spawning parallel weather GETs.
+  _weatherWarmTimer = setTimeout(() => loadWeather(false), delay);
 }
 
 function _applyWeatherPayload(data) {

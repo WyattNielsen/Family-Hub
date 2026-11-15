@@ -16,7 +16,6 @@ from database import (
 
 router = APIRouter()
 _FORECAST_TTL = 15 * 60
-_INLINE_REFRESH_LOCK = asyncio.Lock()
 _UA = {"User-Agent": "FamilyHub/1.0 (self-hosted; weather@hub.local)", "Accept": "application/json"}
 
 WMO_CONDITIONS = {
@@ -402,7 +401,7 @@ async def refresh_weather_snapshot() -> bool:
 
 @router.get("/")
 async def get_weather():
-    """Prefer snapshot; if missing, fetch inline once so the UI is not stuck on warming."""
+    """Zero-external-IO read. Missing snapshots wake the worker; never block the web process."""
     s = await get_settings_map_async()
     zip_code = (s.get("weather_zip") or "").strip()
     if not zip_code:
@@ -410,50 +409,14 @@ async def get_weather():
 
     snap_key = f"weather:{zip_code}"
     snap = await get_snapshot_async(snap_key)
-
-    def _is_soft_error(row):
-        if not row:
-            return True
-        payload, updated_at, _err = row
-        return (
-            isinstance(payload, dict)
-            and payload.get("error")
-            and payload.get("temp") is None
-            and time.time() - updated_at > 30
-        )
-
-    if snap is None or _is_soft_error(snap):
+    if snap is None:
         await notify_worker_async("refresh_weather")
-        # Inline fill so a stuck/wedged worker does not leave the header empty forever.
-        if _INLINE_REFRESH_LOCK.locked():
-            for _ in range(40):
-                await asyncio.sleep(0.25)
-                snap = await get_snapshot_async(snap_key)
-                if snap and not (
-                    isinstance(snap[0], dict) and snap[0].get("error") and snap[0].get("temp") is None
-                ):
-                    break
-        else:
-            async with _INLINE_REFRESH_LOCK:
-                snap = await get_snapshot_async(snap_key)
-                needs = snap is None or (
-                    isinstance(snap[0], dict)
-                    and snap[0].get("error")
-                    and snap[0].get("temp") is None
-                )
-                if needs:
-                    try:
-                        await asyncio.wait_for(refresh_weather_snapshot(), timeout=20.0)
-                    except Exception as e:
-                        print(f"[weather] inline refresh error: {e}")
-                    snap = await get_snapshot_async(snap_key)
-
-        if snap is None:
-            return {"warming": True}
+        return {"warming": True}
 
     payload, updated_at, _err = snap
     if time.time() - updated_at > _FORECAST_TTL:
         await notify_worker_async("refresh_weather")
     if isinstance(payload, dict) and payload.get("error") and payload.get("temp") is None:
+        await notify_worker_async("refresh_weather")
         return {"warming": True, "error": payload.get("error")}
     return payload

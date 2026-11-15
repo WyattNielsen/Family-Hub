@@ -11,3 +11,4 @@ backup_data/
 .DS_Store
 .vscode/
 *.swp
+.tmp/
