@@ -612,10 +612,10 @@
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
       const wantsSchool = menus.configured && !menus.school_menus_hidden;
       paintDinner(el, menus, paintReqs(requests), dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(wantsSchool && menus.warming)));
-      if (wantsSchool && menus.warming) {
+      if (wantsSchool && menus.warming && gen <= 4) {
         setTimeout(() => {
           if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals();
-        }, 3500);
+        }, 3500 + gen * 1500);
       }
     } catch (e) {
       if (isAbortError(e)) return;
@@ -723,7 +723,7 @@
         meta.dinnerDate,
         mealsSchoolHtml(data.meals, person, meta.dinnerDate, Boolean(data.meals.warming))
       );
-      if (data.meals.warming && gen === _mealsGen) {
+      if (data.meals.warming && gen === _mealsGen && _mealsGen <= 4) {
         setTimeout(() => { if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals(); }, 2500);
       }
     }

@@ -7,4 +7,5 @@ if [ ! -x "$UVICORN" ]; then
 fi
 port="${PORT:-3000}"
 workers="${WEB_WORKERS:-2}"
-exec "$UVICORN" main:app --host 0.0.0.0 --port "$port" --workers "$workers" --timeout-keep-alive 5
+exec "$UVICORN" main:app --host 0.0.0.0 --port "$port" --workers "$workers" \
+  --timeout-keep-alive 5 --timeout-graceful-shutdown 30

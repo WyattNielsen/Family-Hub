@@ -35,6 +35,8 @@ _sync_pool_pid: int | None = None
 
 _async_pool: AsyncConnectionPool | None = None
 _async_pool_pid: int | None = None
+_async_pool_lock: asyncio.Lock | None = None
+_POOL_MAX = 6  # Keep headroom under Postgres default max_connections with 2 web + worker
 
 _settings_lock = threading.Lock()
 _settings_cache: tuple[float, dict[str, str]] | None = None
@@ -86,7 +88,7 @@ def get_sync_pool() -> ConnectionPool:
         _sync_pool = ConnectionPool(
             conninfo=DATABASE_URL,
             min_size=1,
-            max_size=12,
+            max_size=_POOL_MAX,
             timeout=10.0,
             kwargs={"row_factory": dict_row, "autocommit": False},
             open=True,
@@ -96,32 +98,39 @@ def get_sync_pool() -> ConnectionPool:
 
 
 async def get_async_pool() -> AsyncConnectionPool:
-    global _async_pool, _async_pool_pid
+    global _async_pool, _async_pool_pid, _async_pool_lock
     pid = os.getpid()
     if _async_pool is not None and _async_pool_pid == pid:
         return _async_pool
-    pool = AsyncConnectionPool(
-        conninfo=DATABASE_URL,
-        min_size=1,
-        max_size=12,
-        timeout=10.0,
-        kwargs={"row_factory": dict_row, "autocommit": True},
-        open=False,
-    )
-    await pool.open()
-    _async_pool = pool
-    _async_pool_pid = pid
-    return pool
+    if _async_pool_lock is None:
+        _async_pool_lock = asyncio.Lock()
+    async with _async_pool_lock:
+        if _async_pool is not None and _async_pool_pid == pid:
+            return _async_pool
+        pool = AsyncConnectionPool(
+            conninfo=DATABASE_URL,
+            min_size=1,
+            max_size=_POOL_MAX,
+            timeout=10.0,
+            kwargs={"row_factory": dict_row, "autocommit": True},
+            open=False,
+        )
+        await pool.open()
+        _async_pool = pool
+        _async_pool_pid = pid
+        return pool
 
 
 async def close_pools():
-    global _sync_pool, _async_pool
+    global _sync_pool, _async_pool, _sync_pool_pid, _async_pool_pid
     if _async_pool is not None:
         await _async_pool.close()
         _async_pool = None
+        _async_pool_pid = None
     if _sync_pool is not None:
         _sync_pool.close()
         _sync_pool = None
+        _sync_pool_pid = None
 
 
 class DBConn:

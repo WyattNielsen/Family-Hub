@@ -432,10 +432,10 @@
       _paintWeekPlan(el, menus, start);
       const wantsSchool = menus.configured && !menus.school_menus_hidden;
       renderSchools(menus, Boolean(wantsSchool && menus.warming));
-      if (wantsSchool && menus.warming) {
+      if (wantsSchool && menus.warming && gen <= 4) {
         setTimeout(() => {
           if (gen === _weekGen && FHRouter.currentRoute() === '/meals.html') loadWeek();
-        }, 3500);
+        }, 3500 + gen * 1500);
       }
     } catch (e) {
       if (typeof isAbortError === 'function' && isAbortError(e)) return;

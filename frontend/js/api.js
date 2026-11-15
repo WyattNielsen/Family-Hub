@@ -17,7 +17,7 @@ function _acquireApiSlot(signal) {
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
-    const entry = { resolve, reject };
+    const entry = { resolve, reject, signal: signal || null };
     if (signal) {
       if (signal.aborted) {
         reject(new DOMException('Navigation aborted', 'AbortError'));
@@ -60,6 +60,41 @@ function _bustGetCache() {
   _getCache.clear();
 }
 
+/** Invalidate only paths that match a prefix (keeps unrelated peeks warm). */
+function _invalidateGetCachePrefix(prefix) {
+  for (const key of [..._getCache.keys()]) {
+    if (key === prefix || key.startsWith(prefix)) _getCache.delete(key);
+  }
+  // Bump gen so in-flight GETs for those paths don't re-seed stale bodies.
+  _getCacheGen += 1;
+}
+
+function _invalidateAfterMutation(path) {
+  if (!path) {
+    _bustGetCache();
+    return;
+  }
+  // Settings writes seed their own map — don't wipe the whole SPA cache.
+  if (path === '/api/settings/' || path === '/api/settings') {
+    _invalidateGetCachePrefix('/api/settings');
+    _invalidateGetCachePrefix('/api/bootstrap');
+    _invalidateGetCachePrefix('/api/dashboard');
+    _invalidateGetCachePrefix('/api/weather');
+    return;
+  }
+  // Narrow bust for domain writes; always clear aggregates that embed them.
+  const root = path.replace(/\/\d+(\/.*)?$/, '/').replace(/\?.*$/, '');
+  _invalidateGetCachePrefix(root);
+  _invalidateGetCachePrefix('/api/bootstrap');
+  _invalidateGetCachePrefix('/api/dashboard');
+  if (root.indexOf('/api/chores') === 0) _invalidateGetCachePrefix('/api/chores');
+  if (root.indexOf('/api/messages') === 0) _invalidateGetCachePrefix('/api/messages');
+  if (root.indexOf('/api/calendar') === 0) _invalidateGetCachePrefix('/api/calendar');
+  if (root.indexOf('/api/meals') === 0) _invalidateGetCachePrefix('/api/meals');
+  if (root.indexOf('/api/shopping') === 0) _invalidateGetCachePrefix('/api/shopping');
+  if (root.indexOf('/api/members') === 0) _invalidateGetCachePrefix('/api/members');
+}
+
 function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS, parentSignal = null) {
   const ctrl = new AbortController();
   let timedOut = false;
@@ -85,7 +120,6 @@ function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS, par
 }
 
 async function _send(path, options) {
-  _bustGetCache();
   const r = await _fetchWithTimeout(path, options, 20000, null);
   if (!r.ok) {
     const raw = await r.text();
@@ -98,6 +132,8 @@ async function _send(path, options) {
     } catch (_) {}
     throw new Error(msg || (r.status + ' ' + r.statusText));
   }
+  // Only invalidate after a successful write — failed saves must not stampede GETs.
+  _invalidateAfterMutation(path);
   const data = await r.json();
   // Settings POST returns the fresh map so the UI never reloads stale cache.
   if (
@@ -1146,6 +1182,18 @@ function _bindWeatherClick(el, data) {
   }
 }
 
+let _weatherWarmTimer = null;
+let _weatherWarmAttempts = 0;
+const _WEATHER_WARM_MAX = 8;
+
+function _scheduleWeatherWarmRetry() {
+  clearTimeout(_weatherWarmTimer);
+  if (_weatherWarmAttempts >= _WEATHER_WARM_MAX) return;
+  const delay = Math.min(30000, 3500 * Math.pow(1.6, _weatherWarmAttempts));
+  _weatherWarmAttempts += 1;
+  _weatherWarmTimer = setTimeout(() => loadWeather(true), delay);
+}
+
 function _applyWeatherPayload(data) {
   const el = document.getElementById('weatherWidget');
   if (!el) return;
@@ -1154,14 +1202,18 @@ function _applyWeatherPayload(data) {
       el.innerHTML = '<div class="weather-now"><span class="weather-condition">Loading weather…</span></div>';
       _setTempBand(el, null);
       _bindWeatherClick(el, null);
-      setTimeout(() => loadWeather(true), 3500);
+      _scheduleWeatherWarmRetry();
       return;
     }
+    clearTimeout(_weatherWarmTimer);
+    _weatherWarmAttempts = 0;
     el.innerHTML = '';
     _setTempBand(el, null);
     _bindWeatherClick(el, null);
     return;
   }
+  clearTimeout(_weatherWarmTimer);
+  _weatherWarmAttempts = 0;
   const t = data.tomorrow;
   const precipStr = t && t.precip != null ? `<span class="weather-tmr-precip">💧${t.precip}%</span>` : '';
   const todayHi = _wxTempHtml(data.high, '↑');

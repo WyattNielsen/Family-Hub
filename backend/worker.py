@@ -75,12 +75,17 @@ async def _job_consumer_loop():
             while not _job_queue.empty():
                 batch.add(_job_queue.get_nowait())
 
+            # One settings reload per drained batch (not per job).
+            try:
+                await asyncio.to_thread(reload_settings_map)
+            except Exception as exc:
+                print(f"[worker] settings reload error: {exc}")
+
             for job in batch:
                 try:
-                    # Jobs often follow a settings write — pull fresh keys first.
-                    await asyncio.to_thread(reload_settings_map)
                     if job == "sync_all":
-                        await calendar.run_full_sync()
+                        # Long-running: don't block HA/weather jobs behind it.
+                        asyncio.create_task(_run_calendar_sync_job())
                     elif job == "refresh_ha":
                         await homeassistant.refresh_ha_snapshot()
                     elif job == "refresh_weather":
@@ -105,6 +110,20 @@ async def _job_consumer_loop():
             break
 
 
+_calendar_sync_lock = asyncio.Lock()
+
+
+async def _run_calendar_sync_job():
+    if _calendar_sync_lock.locked():
+        print("[worker] calendar sync already running — skip duplicate")
+        return
+    async with _calendar_sync_lock:
+        try:
+            await calendar.run_full_sync()
+        except Exception as exc:
+            print(f"[worker] calendar sync job error: {exc}")
+
+
 async def _fast_poller_loop():
     """Poll Home Assistant states (every 15s) and warm camera snapshots."""
     while True:
@@ -123,20 +142,30 @@ async def _medium_poller_loop():
     last_weather = time.monotonic() - 900
     last_cam_sync = time.monotonic() - 240
     while True:
+        now = time.monotonic()
         try:
-            now = time.monotonic()
             await stocks.refresh_stocks_snapshot()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            print(f"[worker] stocks poll error: {exc}")
+        try:
             if now - last_cam_sync >= 240:
                 await go2rtc_sync.sync_go2rtc_streams()
                 await security.refresh_camera_snapshots()
                 last_cam_sync = now
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            print(f"[worker] camera sync poll error: {exc}")
+        try:
             if now - last_weather >= 900:
                 await weather.refresh_weather_snapshot()
                 last_weather = now
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            print(f"[worker] medium poller error: {exc}")
+            print(f"[worker] weather poll error: {exc}")
         await asyncio.sleep(180)
 
 
@@ -186,13 +215,24 @@ async def _calendar_sync_loop():
             await asyncio.sleep(300)
 
 
+def _app_now():
+    """Wall clock in the family timezone from settings (not host TZ)."""
+    import pytz
+    tz_name = get_setting_value("timezone", "America/New_York") or "America/New_York"
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone("America/New_York")
+    return datetime.now(tz)
+
+
 async def _reminder_loop():
     fired_today: set[str] = set()
     last_date: str | None = None
     while True:
         try:
             await asyncio.sleep(30)
-            now = datetime.now()
+            now = _app_now()
             today = now.date().isoformat()
             if last_date != today:
                 fired_today.clear()

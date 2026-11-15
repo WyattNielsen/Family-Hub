@@ -1373,26 +1373,29 @@ async def run_full_sync() -> int:
 
 @router.post("/sync/all")
 async def sync_all_calendars():
-    """Trigger sync in the worker container so the web GIL stays completely free."""
+    """Queue sync in the worker — never run full sync on the web process.
+
+    Holding the web event loop for calendar I/O was a primary hang source.
+    """
+    await notify_worker_async("sync_all")
+    # Best-effort short wait for completion notification; timeout still means queued.
     try:
         aconn = await psycopg.AsyncConnection.connect(DATABASE_URL, autocommit=True)
         async with aconn:
             await aconn.execute("LISTEN fh_events")
-            await notify_worker_async("sync_all")
-            deadline = time.monotonic() + 15.0
-            gen = aconn.notifies(timeout=15.0)
-            async for notify in gen:
+            deadline = time.monotonic() + 8.0
+            async for notify in aconn.notifies(timeout=8.0):
                 payload = notify.payload or ""
-                if payload.startswith("sync_done:"):
-                    total = int(payload.split(":", 1)[1] or "0")
-                    return {"synced": total}
+                if isinstance(payload, (bytes, bytearray, memoryview)):
+                    payload = bytes(payload).decode("utf-8", errors="replace")
+                if str(payload).startswith("sync_done:"):
+                    total = int(str(payload).split(":", 1)[1] or "0")
+                    return {"synced": total, "queued": False}
                 if time.monotonic() >= deadline:
                     break
-        return {"synced": 0, "queued": True}
     except Exception as exc:
-        print(f"Worker sync delegation fallback: {exc}")
-        synced = await run_full_sync()
-        return {"synced": synced}
+        print(f"sync/all wait skipped: {exc}")
+    return {"synced": 0, "queued": True}
 
 
 def _load_member_sources_sync(member_id: int):
