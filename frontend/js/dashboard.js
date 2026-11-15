@@ -4,6 +4,7 @@
   let schoolMealTypes = 'both';
   let _stocksTimer = null;
   let _refreshTimer = null;
+  let _mealsRetryTimer = null;
   let _cachedStocks = null;
 
   function setDashboardDate() {
@@ -745,6 +746,17 @@
       if (gen !== _dashBundleGen || FHRouter.currentRoute() !== '/') return;
       _seedDashboardBundle(data, meta);
       await _paintDashboardBundle(data, meta);
+      // Background SchoolCafe fill may still be running — one retry, not a loop.
+      const schools = (data.meals && data.meals.schools) || [];
+      const emptySchool = schools.length && schools.every(s =>
+        !(s.breakfast && s.breakfast.length) && !(s.lunch && s.lunch.length)
+      );
+      if (emptySchool && !_mealsRetryTimer) {
+        _mealsRetryTimer = setTimeout(() => {
+          _mealsRetryTimer = null;
+          if (FHRouter.currentRoute() === '/') loadDashboardBundle();
+        }, 3000);
+      }
       return data;
     }).catch((e) => {
       if (isAbortError(e)) return;
@@ -800,8 +812,10 @@
   function unmount() {
     clearInterval(_stocksTimer);
     clearInterval(_refreshTimer);
+    if (_mealsRetryTimer) clearTimeout(_mealsRetryTimer);
     _stocksTimer = null;
     _refreshTimer = null;
+    _mealsRetryTimer = null;
     _mealsGen += 1;
     _dashBundleGen += 1;
     _dashBundleInflight = null;

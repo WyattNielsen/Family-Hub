@@ -9,6 +9,7 @@
   let lastSchoolLoading = false;
   let openPlan = null;
   let mealTypeEpoch = 0;
+  let _schoolRetryTimer = null;
 
   function shiftWeek(delta) {
     weekOffset += delta;
@@ -452,9 +453,19 @@
     }
     API.seed('/api/meals/week?start=' + start, week);
     _paintWeekPlan(el, week, start);
-    const wantsSchool = week.configured && !week.school_menus_hidden;
-    // Backend fills empty snaps inline; never leave the UI on a permanent Loading state.
+    // Background fill may still be running — show what we have, one retry if empty.
     renderSchools(week, false);
+    const schools = week.schools || [];
+    const emptySchool = week.configured && !week.school_menus_hidden && schools.length &&
+      schools.every(s => !(s.days && Object.values(s.days).some(day =>
+        (day.breakfast && day.breakfast.length) || (day.lunch && day.lunch.length)
+      )));
+    if (emptySchool && !_schoolRetryTimer) {
+      _schoolRetryTimer = setTimeout(() => {
+        _schoolRetryTimer = null;
+        loadWeek();
+      }, 3000);
+    }
   }
 
   async function loadWeek() {

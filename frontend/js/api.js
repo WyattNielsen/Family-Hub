@@ -1228,12 +1228,21 @@ function _applyWeatherPayload(data) {
   _bindWeatherClick(el, data);
 }
 
+let _weatherRetryTimer = null;
+
 async function loadWeather(force) {
   const el = document.getElementById('weatherWidget');
   if (!el) return;
   try {
     const data = await API.get('/api/weather/', force ? { force: true, shell: true } : { shell: true });
     _applyWeatherPayload(data);
+    // Background fill may still be running — one retry, not a loop.
+    if ((!data || data.error || data.temp == null) && !force && !_weatherRetryTimer) {
+      _weatherRetryTimer = setTimeout(() => {
+        _weatherRetryTimer = null;
+        loadWeather(true);
+      }, 2500);
+    }
   } catch (e) {
     el.innerHTML = '';
     _setTempBand(el, null);
@@ -1264,6 +1273,14 @@ function _applyShellBootstrap(b) {
   if (b.weather) {
     API.seed('/api/weather/', b.weather);
     _applyWeatherPayload(b.weather);
+    if (b.weather.error || b.weather.temp == null) {
+      if (!_weatherRetryTimer) {
+        _weatherRetryTimer = setTimeout(() => {
+          _weatherRetryTimer = null;
+          loadWeather(true);
+        }, 2500);
+      }
+    }
   }
   if (b.ha_states) {
     API.seed('/api/homeassistant/states', b.ha_states);

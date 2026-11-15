@@ -312,6 +312,7 @@ def _snap_key(school_id: str, meal_type: str, monday: str, preferred_line: str) 
 
 _WEEK_LOCKS: dict[str, asyncio.Lock] = {}
 _WEEK_LOCKS_GUARD = asyncio.Lock()
+_BG_WEEK_TASKS: dict[str, asyncio.Task] = {}
 
 
 async def _week_lock(school_id: str, monday: str) -> asyncio.Lock:
@@ -332,60 +333,52 @@ def _week_snapshot_ok(snap) -> bool:
     return _payload_has_items(payload) or err == "empty_menu"
 
 
-async def _ensure_school_week(school_id: str, monday: str, preferred_line: str, meal_type: str):
-    """Fill the snapshot for this school/week if missing or empty. One refresh per school."""
-    key = _snap_key(school_id, meal_type, monday, preferred_line)
-    snap = await get_snapshot_async(key)
-    if _week_snapshot_ok(snap):
+def _kick_school_week_refresh(school_id: str, monday: str):
+    """Fill snapshots in the background. Never await this on a user request — wait_for
+    cancellation was leaving snaps empty while every dashboard load hung ~20s."""
+    key = f"{school_id}:{monday}"
+    existing = _BG_WEEK_TASKS.get(key)
+    if existing and not existing.done():
         return
-    # Recent failed attempt — don't block every page load for 20s.
-    if snap and snap[2] and snap[2] != "empty_menu":
-        if time.time() - float(snap[1] or 0) < 120:
-            return
 
-    lock = await _week_lock(school_id, monday)
-    async with lock:
-        snap = await get_snapshot_async(key)
-        if _week_snapshot_ok(snap):
-            return
-        if snap and snap[2] and snap[2] != "empty_menu":
-            if time.time() - float(snap[1] or 0) < 120:
-                return
-        await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
-        try:
-            await asyncio.wait_for(refresh_school_week_snapshot(school_id, monday), timeout=20.0)
-        except Exception as exc:
-            print(f"[schoolcafe] ensure refresh failed {school_id[:8]}… {monday}: {exc}")
+    async def _run():
+        lock = await _week_lock(school_id, monday)
+        async with lock:
+            try:
+                await refresh_school_week_snapshot(school_id, monday)
+            except Exception as exc:
+                print(f"[schoolcafe] background refresh failed {school_id[:8]}… {monday}: {exc}")
+            finally:
+                _BG_WEEK_TASKS.pop(key, None)
+
+    _BG_WEEK_TASKS[key] = asyncio.create_task(_run())
 
 
 async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[dict, str, bool]:
-    """Return weekly menu. Fetches SchoolCafe once when the snapshot is empty."""
+    """Return cached weekly menu. Kick a background fill when the snapshot is empty."""
     monday = monday_of(iso_date)
     key = _snap_key(school_id, meal_type, monday, preferred_line)
     snap = await get_snapshot_async(key)
 
-    empty = True
-    if snap and isinstance(snap[0], dict):
-        payload = snap[0].get("payload") or {}
-        err = snap[2]
-        if _payload_has_items(payload) or err == "empty_menu":
-            empty = False
+    if snap and isinstance(snap[0], dict) and _payload_has_items(snap[0].get("payload") or {}):
+        data, updated_at, _error = snap
+        if time.time() - float(updated_at or 0) > _WEEK_FRESH_SECONDS:
+            await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
+            _kick_school_week_refresh(school_id, monday)
+        return data.get("payload") or {}, data.get("line") or "", False
 
-    if empty:
-        await _ensure_school_week(school_id, monday, preferred_line, meal_type)
-        snap = await get_snapshot_async(key)
-
-    if not snap or not isinstance(snap[0], dict):
-        return {}, "", False
-
-    data, updated_at, _error = snap
-    if time.time() - float(updated_at or 0) > _WEEK_FRESH_SECONDS:
+    # Missing, failed, or "empty_menu" — wake a fill. Trust empty_menu only briefly so a
+    # bad/cancelled write cannot poison the UI for hours.
+    age = time.time() - float(snap[1] or 0) if snap else 1e9
+    confirmed_empty = bool(snap and snap[2] == "empty_menu" and age < 15 * 60)
+    if not confirmed_empty:
         await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
+        _kick_school_week_refresh(school_id, monday)
 
-    payload = data.get("payload") or {}
-    line = data.get("line") or ""
-    # Never leave the UI spinning on warming — empty means "nothing posted".
-    return payload, line, False
+    if snap and isinstance(snap[0], dict):
+        data = snap[0]
+        return data.get("payload") or {}, data.get("line") or "", False
+    return {}, "", False
 
 
 async def menu_items(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[list, str, bool]:

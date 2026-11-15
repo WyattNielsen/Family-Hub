@@ -276,6 +276,16 @@ async def main():
 
     # Warm all snapshots right away at boot so web requests hit hot data
     await go2rtc_sync.sync_go2rtc_streams()
+    try:
+        from database import reload_settings_map
+        await asyncio.to_thread(reload_settings_map)
+        await asyncio.wait_for(weather.refresh_weather_snapshot(), timeout=30)
+    except Exception as exc:
+        print(f"[worker] boot weather warm failed: {exc}")
+    try:
+        await asyncio.wait_for(schoolcafe.refresh_schoolcafe_snapshots(), timeout=90)
+    except Exception as exc:
+        print(f"[worker] boot meals warm failed: {exc}")
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

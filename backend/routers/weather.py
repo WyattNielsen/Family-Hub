@@ -168,10 +168,7 @@ async def _http_get_json(url: str, *, params=None, headers=None, timeout: float 
     except Exception as e:
         last_err = e
         print(f"[weather] shared client error for {url}: {e}")
-        try:
-            await outbound.aclose()
-        except Exception:
-            pass
+        # Do NOT aclose() the process-wide outbound client — that breaks meals/HA mid-flight.
 
     try:
         async with httpx.AsyncClient(
@@ -407,9 +404,28 @@ def _weather_usable(snap) -> bool:
     return isinstance(payload, dict) and payload.get("temp") is not None
 
 
+_bg_weather_task: asyncio.Task | None = None
+
+
+async def _bg_refresh_weather():
+    async with _REFRESH_LOCK:
+        try:
+            await refresh_weather_snapshot()
+        except Exception as e:
+            print(f"[weather] background refresh failed: {e}")
+
+
+def _kick_weather_refresh():
+    """Start a full refresh without blocking the caller. Never cancel in-flight work."""
+    global _bg_weather_task
+    if _bg_weather_task and not _bg_weather_task.done():
+        return
+    _bg_weather_task = asyncio.create_task(_bg_refresh_weather())
+
+
 @router.get("/")
 async def get_weather():
-    """Return forecast. If the snapshot is empty, fetch once here so the UI is never stuck."""
+    """Local snapshot read. Never blocks on the provider waterfall (that hung the dashboard)."""
     s = await get_settings_map_async()
     zip_code = (s.get("weather_zip") or "").strip()
     if not zip_code:
@@ -417,28 +433,28 @@ async def get_weather():
 
     snap_key = f"weather:{zip_code}"
     snap = await get_snapshot_async(snap_key)
-
-    if not _weather_usable(snap):
-        # Skip repeat inline fetch if we just failed (keeps bootstrap snappy).
-        recent_fail = (
-            snap
-            and snap[2]
-            and time.time() - float(snap[1] or 0) < 60
-        )
-        if not recent_fail:
+    if _weather_usable(snap):
+        payload, updated_at, _err = snap
+        if time.time() - float(updated_at or 0) > _FORECAST_TTL:
             await notify_worker_async("refresh_weather")
-            async with _REFRESH_LOCK:
-                snap = await get_snapshot_async(snap_key)
-                if not _weather_usable(snap):
-                    try:
-                        await asyncio.wait_for(refresh_weather_snapshot(), timeout=15.0)
-                    except Exception as e:
-                        print(f"[weather] inline refresh failed: {e}")
-                    snap = await get_snapshot_async(snap_key)
-        if not _weather_usable(snap):
-            return {"error": snap[2] if snap and snap[2] else "unavailable"}
+            _kick_weather_refresh()
+        return payload
 
-    payload, updated_at, _err = snap
-    if time.time() - updated_at > _FORECAST_TTL:
-        await notify_worker_async("refresh_weather")
-    return payload
+    await notify_worker_async("refresh_weather")
+
+    # Fast path when geo is already saved: one short Open-Meteo call, then return.
+    lat = (s.get("weather_lat") or "").strip()
+    lon = (s.get("weather_lon") or "").strip()
+    city = s.get("weather_city") or ""
+    geocoded_zip = (s.get("weather_geocoded_zip") or "").strip()
+    if lat and lon and geocoded_zip == zip_code:
+        try:
+            payload = await asyncio.wait_for(_fetch_open_meteo(lat, lon, city), timeout=3.0)
+            if payload and payload.get("temp") is not None:
+                await set_snapshot_async(snap_key, payload, error=None)
+                return payload
+        except Exception as e:
+            print(f"[weather] fast path failed: {e}")
+
+    _kick_weather_refresh()
+    return {"error": snap[2] if snap and snap[2] else "unavailable"}
