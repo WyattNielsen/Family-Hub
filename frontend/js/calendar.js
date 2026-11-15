@@ -30,13 +30,17 @@
     loadEvents();
   }
 
+  function visibleEvents() {
+    return filterEventsForPerson(allEvents, getPersonFilter());
+  }
+
   function renderAgendaView() {
     const el = document.getElementById('agendaView');
     const titleEl = document.getElementById('calendarTitle');
     if (!el) return;
     const dateStr = dateStrFromCurrent();
     if (titleEl) titleEl.textContent = agendaDateLabel(dateStr);
-    renderAgenda(el, allEvents, dateStr, {
+    renderAgenda(el, visibleEvents(), dateStr, {
       onEventClick: (ev, domEvent) => showEventDetail(ev.id, domEvent),
       onAdd: (d) => openEventModal(d),
     });
@@ -259,7 +263,7 @@
 
     for (let w = 0; w < 6; w++) {
       const week = cells.slice(w * 7, w * 7 + 7);
-      const laid = _layoutWeekLanes(week.map(c => (c.inMonth ? c.dateStr : null)), allEvents);
+      const laid = _layoutWeekLanes(week.map(c => (c.inMonth ? c.dateStr : null)), visibleEvents());
       week.forEach((cell, i) => { cell.lanes = laid[i]; });
     }
 
@@ -281,24 +285,22 @@
     grid.innerHTML = html;
   }
 
-  async function loadEvents() {
-    // Always fetch the month window so Month and Agenda share one cache key
-    // (peek / 10s fresh / inflight dedupe) and day switches stay in-memory.
+  async function loadEvents(opts) {
+    // Always fetch Everyone for the month; person chips filter client-side.
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const monthNum = String(month + 1).padStart(2, '0');
     const lastDay = new Date(year, month + 1, 0).getDate();
     const start = `${year}-${monthNum}-01T00:00:00`;
     const end = `${year}-${monthNum}-${String(lastDay).padStart(2, '0')}T23:59:59`;
-    let url = `/api/calendar/events?start=${start}&end=${end}`;
-    const person = getPersonFilter();
-    if (person !== 'all') url += `&member_id=${encodeURIComponent(person)}`;
+    const url = `/api/calendar/events?start=${start}&end=${end}`;
 
     const cached = API.peek(url);
     if (cached) {
       allEvents = cached;
       renderActiveView();
     }
+    if (opts && opts.cacheOnly) return;
 
     try {
       allEvents = await API.get(url);
@@ -489,7 +491,11 @@
   window.deleteEvent = deleteEvent;
 
   function mount() {
-    onPersonFilterChange(() => loadEvents());
+    onPersonFilterChange(() => {
+      // Instant client-side filter from cached Everyone data — no network.
+      if (allEvents.length) renderActiveView();
+      else loadEvents({ cacheOnly: true });
+    });
     applyCalView();
     renderActiveView();
     loadEvents();

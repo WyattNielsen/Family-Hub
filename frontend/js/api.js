@@ -118,6 +118,20 @@ function setPersonFilter(id) {
   armPersonIdle();
 }
 
+/** Match server calendar filter: selected person + family-wide events. */
+function filterEventsForPerson(events, person) {
+  if (!events) return [];
+  if (!person || person === 'all') return events;
+  return events.filter(e => e.is_family || String(e.member_id) === String(person));
+}
+
+function filterRowsByMember(rows, person, key) {
+  if (!rows) return [];
+  if (!person || person === 'all') return rows;
+  const field = key || 'member_id';
+  return rows.filter(r => String(r[field]) === String(person));
+}
+
 const PERSON_IDLE_MS = 5 * 60 * 1000;
 let _personIdleTimer = null;
 
@@ -169,10 +183,34 @@ function _renderPersonFilterChips(el, members) {
   el.innerHTML = everyone + chips;
   el.querySelectorAll('.person-chip').forEach(btn => {
     btn.onclick = () => {
-      setPersonFilter(btn.dataset.person);
+      const next = btn.dataset.person || 'all';
+      if (String(getPersonFilter()) === String(next)) return;
+      setPersonFilter(next);
       el.querySelectorAll('.person-chip').forEach(b => b.classList.toggle('active', b === btn));
+      // Person views filter cached Everyone data client-side — no abort/refetch.
       if (_personFilterChange) _personFilterChange(getPersonFilter());
-      loadMessageBadge();
+      const cachedMsgs = API.peek('/api/messages/');
+      if (cachedMsgs) {
+        const counts = { all: 0 };
+        for (const m of cachedMsgs) {
+          if (!m.recipient_id) counts.all += 1;
+          else {
+            const id = String(m.recipient_id);
+            counts[id] = (counts[id] || 0) + 1;
+          }
+        }
+        el.querySelectorAll('.person-chip').forEach(chip => {
+          paintCountBadge(chip.querySelector('.person-badge'), counts[chip.dataset.person] || 0);
+        });
+        const person = getPersonFilter();
+        const nav = document.getElementById('msgNavBadge');
+        const navCount = person === 'all'
+          ? cachedMsgs.length
+          : cachedMsgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person)).length;
+        paintCountBadge(nav, navCount);
+      } else {
+        loadMessageBadge();
+      }
     };
   });
 }

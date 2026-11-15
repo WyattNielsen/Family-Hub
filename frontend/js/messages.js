@@ -142,7 +142,10 @@
       const person = getPersonFilter();
       const sel = document.getElementById('msgRecipient');
       if (sel) sel.value = person === 'all' ? '' : person;
-      loadMessages();
+      // Instant client-side filter from cached Everyone data — no network.
+      const cached = API.peek('/api/messages/');
+      if (cached) _paintMessages(cached);
+      else loadMessages();
     });
     loadMemberOptions();
     loadMessages();
