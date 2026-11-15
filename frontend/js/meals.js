@@ -436,33 +436,47 @@
     if (!el) return;
     const gen = ++_weekGen;
     const start = weekAnchor();
-    // Always Everyone; person chips filter school rows client-side.
-    const url = '/api/meals/week?start=' + start;
+    // Dinner plan and school menus are separate requests so a slow SchoolCafe
+    // snapshot never blanks the family dinner week.
+    const dinnerUrl = '/api/meals/week?start=' + start + '&include_school=false';
+    const schoolUrl = '/api/meals/week?start=' + start;
     const nextBtn = document.getElementById('weekNext');
     if (nextBtn) nextBtn.textContent = weekOffset === 0 ? 'Next week' : '›';
 
-    const cachedFast = API.peek(url + '&include_school=false');
-    const cachedFull = API.peek(url);
-    if (cachedFast) {
-      _paintWeekPlan(el, cachedFast, start);
-      const wants = cachedFast.configured && !cachedFast.school_menus_hidden;
-      renderSchools(cachedFull || cachedFast, wants && !cachedFull);
+    const cachedDinner = API.peek(dinnerUrl) || API.peek(schoolUrl);
+    const cachedSchool = API.peek(schoolUrl);
+    if (cachedDinner) {
+      _paintWeekPlan(el, cachedDinner, start);
+      const wants = cachedDinner.configured && !cachedDinner.school_menus_hidden;
+      renderSchools(cachedSchool || cachedDinner, wants && !cachedSchool);
     }
 
     try {
-      const menus = await API.get(url);
+      const dinner = await API.get(dinnerUrl);
       if (gen !== _weekGen || document.getElementById('weekPlan') !== el) return;
-      _paintWeekPlan(el, menus, start);
-      const wantsSchool = menus.configured && !menus.school_menus_hidden;
-      renderSchools(menus, Boolean(wantsSchool && menus.warming));
-      if (wantsSchool && menus.warming && gen <= 4) {
+      _paintWeekPlan(el, dinner, start);
+
+      const wantsSchool = dinner.configured && !dinner.school_menus_hidden;
+      if (!wantsSchool) {
+        renderSchools(dinner, false);
+        return;
+      }
+
+      if (cachedSchool) renderSchools(cachedSchool, Boolean(cachedSchool.warming));
+      else renderSchools(dinner, true);
+
+      const menus = await API.get(schoolUrl);
+      if (gen !== _weekGen || document.getElementById('weekPlan') !== el) return;
+      // Keep dinner titles from the fast response; only refresh school rows.
+      renderSchools(menus, Boolean(menus.warming));
+      if (menus.warming && gen <= 4) {
         setTimeout(() => {
           if (gen === _weekGen && FHRouter.currentRoute() === '/meals.html') loadWeek();
         }, 3500 + gen * 1500);
       }
     } catch (e) {
       if (typeof isAbortError === 'function' && isAbortError(e)) return;
-      if (!cachedFast && !cachedFull && gen === _weekGen && document.getElementById('weekPlan') === el) {
+      if (!cachedDinner && !cachedSchool && gen === _weekGen && document.getElementById('weekPlan') === el) {
         weekDays = [];
         schoolMenus = [];
         closeMealPlan();

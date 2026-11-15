@@ -310,76 +310,37 @@ def _snap_key(school_id: str, meal_type: str, monday: str, preferred_line: str) 
     return f"schoolcafe:{school_id}:{meal_type}:{monday}:{preferred_line or 'default'}"
 
 
-_INLINE_MEALS_LOCKS: dict[str, asyncio.Lock] = {}
-_INLINE_MEALS_LOCKS_GUARD = asyncio.Lock()
-
-
-async def _inline_lock(lock_key: str) -> asyncio.Lock:
-    async with _INLINE_MEALS_LOCKS_GUARD:
-        lock = _INLINE_MEALS_LOCKS.get(lock_key)
-        if lock is None:
-            lock = asyncio.Lock()
-            _INLINE_MEALS_LOCKS[lock_key] = lock
-        return lock
-
-
-def _snap_needs_fetch(row) -> bool:
-    """True when snapshot is missing, hard-failed, or stale empty cache."""
-    if not row or not isinstance(row[0], dict):
-        return True
-    payload = row[0].get("payload") or {}
-    if _payload_has_items(payload):
-        return False
-    err = row[2]
-    age = time.time() - float(row[1] or 0)
-    # Network/parse failures should retry. empty_menu is a finished (unpublished) result.
-    if err and err != "empty_menu":
-        return True
-    return age > _WEEK_FRESH_SECONDS
-
-
 async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[dict, str, bool]:
-    """Read cached weekly SchoolCafe menu from PostgreSQL snapshot.
+    """Read cached weekly SchoolCafe menu from PostgreSQL snapshot in <3ms.
 
-    Returns (payload_dict, line_name, warming_bool). Falls back to one inline
-    fetch when the snapshot is missing or failed so the UI does not stay blank.
+    Returns (payload_dict, line_name, warming_bool). Never blocks on upstream HTTP —
+    that caused /api/meals/day (and the whole dashboard) to hang for ~10s.
     """
     monday = monday_of(iso_date)
     key = _snap_key(school_id, meal_type, monday, preferred_line)
     snap = await get_snapshot_async(key)
-
-    if _snap_needs_fetch(snap):
+    if snap is None:
         await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
-        lock_key = f"{school_id}:{monday}"
-        lock = await _inline_lock(lock_key)
-        if lock.locked():
-            for _ in range(40):
-                await asyncio.sleep(0.25)
-                snap = await get_snapshot_async(key)
-                if not _snap_needs_fetch(snap):
-                    break
-        else:
-            async with lock:
-                snap = await get_snapshot_async(key)
-                if _snap_needs_fetch(snap):
-                    try:
-                        await asyncio.wait_for(refresh_school_week_snapshot(school_id, monday), timeout=25.0)
-                    except Exception as exc:
-                        print(f"[schoolcafe] inline refresh error: {exc}")
-                    snap = await get_snapshot_async(key)
-        if not snap:
-            return {}, "", True
+        return {}, "", True
 
     data, updated_at, error = snap
     if time.time() - updated_at > _WEEK_FRESH_SECONDS:
         await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
 
     if not isinstance(data, dict):
+        await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
         return {}, "", True
+
     payload = data.get("payload") or {}
     line = data.get("line") or ""
-    if not _payload_has_items(payload) and error and error != "empty_menu":
+    has_items = _payload_has_items(payload)
+
+    # Legacy empty "success" rows and hard fetch errors: wake worker and keep UI warming
+    # so we don't permanently show "No menu" while SchoolCafe still has data.
+    if not has_items and error != "empty_menu":
+        await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
         return payload, line, True
+
     return payload, line, False
 
 

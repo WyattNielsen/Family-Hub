@@ -160,13 +160,23 @@ async def _school_week(member: dict, dates: list):
 
 
 async def _get_week_dinners_async(dates: list[str]) -> dict[str, dict]:
+    if not dates:
+        return {}
+    # Use IN (...), not ANY(%s) — list→array binding has been unreliable here and
+    # returned zero rows even when day/history queries for the same dates worked.
+    placeholders = ",".join(["%s"] * len(dates))
     async with async_db() as conn:
         cur = await conn.execute(
-            "SELECT meal_date, title, notes FROM family_meals WHERE meal_date = ANY(%s)",
-            (dates,),
+            f"SELECT meal_date, title, notes FROM family_meals WHERE meal_date IN ({placeholders})",
+            dates,
         )
         rows = await cur.fetchall()
-    return {r["meal_date"]: {"title": r["title"], "notes": r["notes"]} for r in rows}
+    out: dict[str, dict] = {}
+    for r in rows:
+        key = str(r["meal_date"] or "")[:10]
+        if key:
+            out[key] = {"title": r["title"] or "", "notes": r["notes"] or ""}
+    return out
 
 
 @router.get("/week")

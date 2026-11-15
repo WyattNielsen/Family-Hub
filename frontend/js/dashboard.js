@@ -590,29 +590,42 @@
     }).catch(() => {});
     const schoolDate = schoolMenuDate(dinnerDate);
     const person = getPersonFilter();
+    const dinnerUrl = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}&include_school=false`;
     const url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
     const reqUrl = '/api/meals/requests';
 
-    const cachedFast = API.peek(url + '&include_school=false');
+    const cachedFast = API.peek(dinnerUrl) || API.peek(url + '&include_school=false');
     const cachedFull = API.peek(url);
     const cachedReqs = API.peek(reqUrl);
     const paintReqs = (reqs) => filterRowsByMember(reqs || [], person);
     if (cachedFull && cachedReqs) {
       paintDinner(el, cachedFull, paintReqs(cachedReqs), dinnerDate, mealsSchoolHtml(cachedFull, person, dinnerDate, false));
-    } else if (cachedFast && cachedReqs) {
+    } else if (cachedFast) {
       const wants = cachedFast.configured && !cachedFast.school_menus_hidden;
-      paintDinner(el, cachedFast, paintReqs(cachedReqs), dinnerDate, mealsSchoolHtml(cachedFast, person, dinnerDate, wants));
+      paintDinner(el, cachedFast, paintReqs(cachedReqs || []), dinnerDate, mealsSchoolHtml(cachedFast, person, dinnerDate, wants));
     }
 
     try {
-      const [menus, requests] = await Promise.all([
-        API.get(url),
+      // Dinner + requests first — never wait on SchoolCafe for the family plan.
+      const [dinner, requests] = await Promise.all([
+        API.get(dinnerUrl),
         API.get(reqUrl).catch(() => []),
       ]);
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-      const wantsSchool = menus.configured && !menus.school_menus_hidden;
-      paintDinner(el, menus, paintReqs(requests), dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(wantsSchool && menus.warming)));
-      if (wantsSchool && menus.warming && gen <= 4) {
+      const wantsSchool = dinner.configured && !dinner.school_menus_hidden;
+      paintDinner(
+        el,
+        dinner,
+        paintReqs(requests),
+        dinnerDate,
+        mealsSchoolHtml(cachedFull || dinner, person, dinnerDate, Boolean(wantsSchool && !cachedFull))
+      );
+      if (!wantsSchool) return;
+
+      const menus = await API.get(url);
+      if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
+      paintDinner(el, menus, paintReqs(requests), dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(menus.warming)));
+      if (menus.warming && gen <= 4) {
         setTimeout(() => {
           if (gen === _mealsGen && FHRouter.currentRoute() === '/') loadMeals();
         }, 3500 + gen * 1500);
