@@ -2,9 +2,11 @@ import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
 from database import (
     get_db,
+    get_settings_map,
     get_settings_map_async,
     invalidate_settings_cache,
     notify_worker,
+    refresh_settings_cache_async,
     upsert_setting_sync,
 )
 
@@ -37,7 +39,9 @@ def sanitize_settings(stored: dict) -> dict:
 
 @router.get("/")
 async def get_settings():
-    stored = await get_settings_map_async()
+    # Always re-read from Postgres so a GET after POST never hits a stale
+    # in-process cache on a different uvicorn worker.
+    stored = await refresh_settings_cache_async()
     return sanitize_settings(stored)
 
 
@@ -56,7 +60,11 @@ def update_settings(payload: dict):
                 continue
             if key.endswith("_set") and key[: -len("_set")] in WRITE_ONLY_KEYS:
                 continue
-            upsert_setting_sync(conn, key, str(value))
+            # JSON null means delete (never store the literal string "None")
+            if value is None:
+                upsert_setting_sync(conn, key, None)
+            else:
+                upsert_setting_sync(conn, key, str(value))
         conn.commit()
 
     invalidate_settings_cache(broadcast=True)
@@ -80,7 +88,8 @@ def update_settings(payload: dict):
         )
     ):
         notify_worker("refresh_meals")
-    return {"ok": True}
+
+    return {"ok": True, "settings": sanitize_settings(get_settings_map())}
 
 
 @router.get("/{key}")

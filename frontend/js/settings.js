@@ -752,23 +752,27 @@
     }
   }
 
+  function _settingsFromWrite(resp) {
+    return (resp && resp.settings) || API.peek('/api/settings/') || null;
+  }
+
   // Populate ALL settings inputs from a single GET /api/settings/ call!
   function _populateAllSettingsInputs(s) {
     if (!s || FHRouter.currentRoute() !== '/settings.html') return;
 
     const timeout = document.getElementById('slideshowTimeout');
     const interval = document.getElementById('slideshowInterval');
-    if (timeout && s.slideshow_timeout) timeout.value = s.slideshow_timeout;
-    if (interval && s.slideshow_interval) interval.value = s.slideshow_interval;
+    if (timeout && s.slideshow_timeout != null) timeout.value = s.slideshow_timeout;
+    if (interval && s.slideshow_interval != null) interval.value = s.slideshow_interval;
 
     const zipEl = document.getElementById('weatherZip');
-    if (zipEl && s.weather_zip) zipEl.value = s.weather_zip;
+    if (zipEl && s.weather_zip != null) zipEl.value = s.weather_zip;
 
     const tzSel = document.getElementById('timezoneSelect');
     if (tzSel && s.timezone) tzSel.value = s.timezone;
 
     const haUrlEl = document.getElementById('haUrl');
-    if (haUrlEl && s.ha_url) haUrlEl.value = s.ha_url;
+    if (haUrlEl && s.ha_url != null) haUrlEl.value = s.ha_url;
     const haPathEl = document.getElementById('haDashboardPath');
     if (haPathEl) haPathEl.value = s.ha_dashboard_path || '';
     const tokenEl = document.getElementById('haToken');
@@ -843,7 +847,7 @@
     const cached = API.peek('/api/settings/');
     if (cached) _populateAllSettingsInputs(cached);
     try {
-      const s = await API.get('/api/settings/');
+      const s = await API.get('/api/settings/', { force: true });
       _populateAllSettingsInputs(s);
     } catch (e) {}
   }
@@ -957,7 +961,9 @@
   async function saveWeatherZip() {
     const zip = (document.getElementById('weatherZip')?.value || '').trim();
     try {
-      await API.post('/api/settings/', { weather_zip: zip, weather_lat: '', weather_lon: '', weather_city: '' });
+      const resp = await API.post('/api/settings/', { weather_zip: zip, weather_lat: '', weather_lon: '', weather_city: '' });
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
       showToast('✅ Weather location saved!', 'success');
       loadWeather(true);
     } catch (e) {
@@ -968,7 +974,9 @@
   async function saveTimezone() {
     const tz = document.getElementById('timezoneSelect')?.value || 'America/New_York';
     try {
-      await API.post('/api/settings/', { timezone: tz });
+      const resp = await API.post('/api/settings/', { timezone: tz });
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
       await initAppTimezone(true);
       showToast('✅ Timezone saved!', 'success');
     } catch (e) {
@@ -1046,9 +1054,11 @@
       if (pathEl) body.ha_dashboard_path = pathEl.value.trim() || '/lovelace';
       if (token) body.ha_token = token;
       if (alarmCode) body.ha_alarm_code = alarmCode;
-      await API.post('/api/settings/', body);
+      const resp = await API.post('/api/settings/', body);
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
+      else await loadHASettings();
       showToast('✅ Home Assistant settings saved!', 'success');
-      await loadHASettings();
       loadHAStatus(true);
       loadDashCameras(true);
     } catch (e) {
@@ -1082,12 +1092,16 @@
 
   async function selectSchoolDistrict(id, name) {
     try {
-      await API.post('/api/settings/', {
+      const resp = await API.post('/api/settings/', {
         schoolcafe_district_id: String(id),
         schoolcafe_district_name: name,
       });
-      const current = document.getElementById('districtCurrent');
-      if (current) current.textContent = 'Connected: ' + name;
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
+      else {
+        const current = document.getElementById('districtCurrent');
+        if (current) current.textContent = 'Connected: ' + name;
+      }
       const results = document.getElementById('districtResults');
       if (results) results.innerHTML = '';
       showToast('✅ District saved', 'success');
@@ -1132,7 +1146,9 @@
     if (root) root.dataset.touched = '1';
     paintSchoolMealType(type);
     try {
-      await API.post('/api/settings/', { school_meal_types: type });
+      const resp = await API.post('/api/settings/', { school_meal_types: type });
+      const s = _settingsFromWrite(resp);
+      if (s) applySchoolMealTypeSetting(s.school_meal_types);
       if (FHRouter.currentRoute() === '/settings.html') showToast('✅ School meals saved', 'success');
     } catch (e) {
       if (FHRouter.currentRoute() !== '/settings.html') return;
@@ -1149,7 +1165,9 @@
       body.school_meal_types = currentSchoolMealType();
     }
     try {
-      await API.post('/api/settings/', body);
+      const resp = await API.post('/api/settings/', body);
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
       showToast('✅ School menu visibility saved', 'success');
     } catch (e) {
       showToast('Failed to save', 'error');
@@ -1159,7 +1177,9 @@
   async function saveStockSettings() {
     const symbols = (document.getElementById('stockSymbols')?.value || '').trim();
     try {
-      await API.post('/api/settings/', { stock_symbols: symbols });
+      const resp = await API.post('/api/settings/', { stock_symbols: symbols });
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
       showToast('✅ Stock tickers saved!', 'success');
     } catch (e) {
       showToast('Failed to save', 'error');
@@ -1265,7 +1285,9 @@
       }
     });
     try {
-      await API.post('/api/settings/', { chore_reminders: JSON.stringify(reminders) });
+      const resp = await API.post('/api/settings/', { chore_reminders: JSON.stringify(reminders) });
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
       document.getElementById('reminderSaveStatus').textContent = '✅ Saved';
       setTimeout(() => {
         const el = document.getElementById('reminderSaveStatus');
@@ -1295,10 +1317,12 @@
     const timeout = document.getElementById('slideshowTimeout')?.value || '120';
     const interval = document.getElementById('slideshowInterval')?.value || '5';
     try {
-      await API.post('/api/settings/', {
+      const resp = await API.post('/api/settings/', {
         slideshow_timeout: timeout,
         slideshow_interval: interval,
       });
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
       if (typeof Slideshow !== 'undefined' && Slideshow.reloadConfig) Slideshow.reloadConfig();
       showToast('✅ Slideshow settings saved!', 'success');
     } catch (e) {
@@ -1311,11 +1335,13 @@
     const end   = document.getElementById('darkEnd').value;
     const dim   = document.getElementById('dimMinutes').value;
     try {
-      await API.post('/api/settings/', {
+      const resp = await API.post('/api/settings/', {
         dark_mode_start: start,
         dark_mode_end:   end,
         dim_minutes:     dim
       });
+      const s = _settingsFromWrite(resp);
+      if (s) _populateAllSettingsInputs(s);
       await initTheme(true);
       showToast('🌙 Night mode saved!', 'success');
     } catch (e) {

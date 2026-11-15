@@ -38,7 +38,7 @@ _async_pool_pid: int | None = None
 
 _settings_lock = threading.Lock()
 _settings_cache: tuple[float, dict[str, str]] | None = None
-_SETTINGS_TTL = 30.0
+_SETTINGS_TTL = 5.0
 
 _snap_mem_lock = threading.Lock()
 _snap_mem_cache: dict[str, tuple[float, tuple[Any, float, Optional[str]]]] = {}

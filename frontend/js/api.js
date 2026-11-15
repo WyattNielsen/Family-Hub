@@ -4,8 +4,8 @@ const _getInflight = new Map();
 let _getCacheGen = 0;
 const GET_CACHE_MS = 10000;       // Fresh hit window across rapid screen switches
 const GET_STALE_MAX_MS = 600000;  // Up to 10m for instant optimistic paint via API.peek()
-const FETCH_TIMEOUT_MS = 12000;
-const MAX_CONCURRENT_API = 4;     // Leave 2 of 6 HTTP/1.1 sockets free for assets/snapshots
+const FETCH_TIMEOUT_MS = 10000;
+const MAX_CONCURRENT_API = 5;     // Page GETs only; shell GETs bypass this queue
 
 let _activeApiCount = 0;
 const _apiWaitQueue = [];
@@ -88,7 +88,16 @@ async function _send(path, options) {
   _bustGetCache();
   const r = await _fetchWithTimeout(path, options, 20000, null);
   if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  const data = await r.json();
+  // Settings POST returns the fresh map so the UI never reloads stale cache.
+  if (
+    (path === '/api/settings/' || path === '/api/settings') &&
+    data && data.settings && typeof data.settings === 'object'
+  ) {
+    API.seed('/api/settings/', data.settings);
+    _syncCachedSettings(data.settings);
+  }
+  return data;
 }
 
 const API = {
@@ -117,12 +126,42 @@ const API = {
       if (hit && Date.now() - hit.at < GET_CACHE_MS) return hit.data;
     }
 
+    // force:true must never join a pre-mutation inflight (that was the settings
+    // "saved but reverts" bug). Run a dedicated fetch and replace the cache.
+    if (force) {
+      const stale = _getInflight.get(path);
+      if (stale && !stale.shellPinned) {
+        try { stale.netCtrl.abort(); } catch (_) {}
+        if (_getInflight.get(path) === stale) _getInflight.delete(path);
+      }
+      const gen = _getCacheGen;
+      const netCtrl = new AbortController();
+      const onParentAbort = () => { try { netCtrl.abort(); } catch (_) {} };
+      if (navSignal) {
+        if (navSignal.aborted) throw new DOMException('Navigation aborted', 'AbortError');
+        navSignal.addEventListener('abort', onParentAbort, { once: true });
+      }
+      try {
+        // Force reloads skip the page concurrency queue so a just-saved
+        // settings refresh is never stuck behind dashboard widgets.
+        const r = await _fetchWithTimeout(path, {}, timeoutMs, netCtrl.signal);
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
+        return data;
+      } finally {
+        if (navSignal) navSignal.removeEventListener('abort', onParentAbort);
+      }
+    }
+
     let entry = _getInflight.get(path);
     if (!entry) {
       const gen = _getCacheGen;
       const netCtrl = new AbortController();
       const promise = (async () => {
-        await _acquireApiSlot(netCtrl.signal);
+        // Shell chrome (HA / weather / badges) bypasses the page slot queue so
+        // dashboard widgets cannot time out behind a stuck shell poll.
+        if (!isShell) await _acquireApiSlot(netCtrl.signal);
         try {
           const r = await _fetchWithTimeout(path, {}, timeoutMs, netCtrl.signal);
           if (!r.ok) throw new Error(await r.text());
@@ -130,7 +169,7 @@ const API = {
           if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
           return data;
         } finally {
-          _releaseApiSlot();
+          if (!isShell) _releaseApiSlot();
         }
       })();
       entry = { promise, netCtrl, refCount: 0, shellPinned: false };
