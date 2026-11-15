@@ -87,7 +87,17 @@ function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS, par
 async function _send(path, options) {
   _bustGetCache();
   const r = await _fetchWithTimeout(path, options, 20000, null);
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) {
+    const raw = await r.text();
+    let msg = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.detail) {
+        msg = typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail);
+      }
+    } catch (_) {}
+    throw new Error(msg || (r.status + ' ' + r.statusText));
+  }
   const data = await r.json();
   // Settings POST returns the fresh map so the UI never reloads stale cache.
   if (

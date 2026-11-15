@@ -191,10 +191,18 @@ async def async_db():
 
 # ── Settings Cache & Cross-Process Invalidation ──────────────────────────────
 
+def _as_setting_str(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _load_settings_sync() -> dict[str, str]:
     with get_db() as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
-        return {r["key"]: r["value"] for r in rows}
+        return {_as_setting_str(r["key"]): _as_setting_str(r["value"]) for r in rows}
 
 
 async def refresh_settings_cache_async() -> dict[str, str]:
@@ -202,7 +210,7 @@ async def refresh_settings_cache_async() -> dict[str, str]:
     async with async_db() as conn:
         cur = await conn.execute("SELECT key, value FROM settings")
         rows = await cur.fetchall()
-        data = {r["key"]: r["value"] for r in rows}
+        data = {_as_setting_str(r["key"]): _as_setting_str(r["value"]) for r in rows}
     with _settings_lock:
         _settings_cache = (time.monotonic(), data)
     return data
@@ -289,7 +297,9 @@ def invalidate_settings_cache(broadcast: bool = True):
     if broadcast:
         try:
             with get_db() as conn:
-                conn.execute("SELECT pg_notify(%s, %s)", ("fh_events", "settings"))
+                # Keep channel/payload as SQL literals — avoids client encoding
+                # edge cases with bind params on NOTIFY.
+                conn.execute("SELECT pg_notify('fh_events', 'settings')")
                 conn.commit()
         except Exception as e:
             print(f"settings notify failed: {e}")
@@ -410,7 +420,11 @@ async def listen_cache_events_loop():
             async with aconn:
                 await aconn.execute("LISTEN fh_events")
                 async for notify in aconn.notifies():
-                    msg = notify.payload or ""
+                    raw = notify.payload or ""
+                    if isinstance(raw, (bytes, bytearray, memoryview)):
+                        msg = bytes(raw).decode("utf-8", errors="replace")
+                    else:
+                        msg = str(raw)
                     if msg == "settings":
                         await refresh_settings_cache_async()
                     elif msg.startswith("snap:"):

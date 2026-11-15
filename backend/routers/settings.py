@@ -1,5 +1,6 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import asyncio
+import traceback
 from fastapi import APIRouter, HTTPException
 from database import (
     get_db,
@@ -18,8 +19,16 @@ WRITE_ONLY_KEYS = frozenset({"ha_token", "ha_alarm_code"})
 MASK_PLACEHOLDER = "••••••••"
 
 
+def _as_str(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _is_set(value) -> bool:
-    text = "" if value is None else str(value).strip()
+    text = _as_str(value).strip()
     return bool(text) and text != MASK_PLACEHOLDER
 
 
@@ -28,13 +37,19 @@ def _write_only_flags(stored: dict) -> dict:
 
 
 def sanitize_settings(stored: dict) -> dict:
-    out = {
-        key: value
-        for key, value in stored.items()
-        if key not in WRITE_ONLY_KEYS and not key.startswith("_")
-    }
-    out.update(_write_only_flags(stored))
+    out = {}
+    for raw_key, value in (stored or {}).items():
+        key = _as_str(raw_key)
+        if key in WRITE_ONLY_KEYS or key.startswith("_"):
+            continue
+        out[key] = _as_str(value) if value is not None else ""
+    out.update(_write_only_flags(stored or {}))
     return out
+
+
+def _http_err(prefix: str, exc: Exception) -> HTTPException:
+    tb = traceback.format_exc(limit=6)
+    return HTTPException(status_code=500, detail=f"{prefix}: {exc} | {tb}")
 
 
 @router.get("/")
@@ -42,21 +57,22 @@ async def get_settings():
     # Sync reload avoids cross-worker stale RAM and surfaces DB errors clearly.
     try:
         stored = await asyncio.to_thread(reload_settings_map)
+        return sanitize_settings(stored)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"settings read failed: {e}") from e
-    return sanitize_settings(stored)
+        raise _http_err("settings read failed", e) from e
 
 
 @router.post("/")
 def update_settings(payload: dict):
     try:
         with get_db() as conn:
-            for key, value in payload.items():
+            for raw_key, value in payload.items():
+                key = _as_str(raw_key)
                 if key in WRITE_ONLY_KEYS:
                     if value is None:
                         upsert_setting_sync(conn, key, None)
                         continue
-                    text = str(value).strip()
+                    text = _as_str(value).strip()
                     if not text or text == MASK_PLACEHOLDER:
                         continue
                     upsert_setting_sync(conn, key, text)
@@ -67,10 +83,12 @@ def update_settings(payload: dict):
                 if value is None:
                     upsert_setting_sync(conn, key, None)
                 else:
-                    upsert_setting_sync(conn, key, str(value))
+                    upsert_setting_sync(conn, key, _as_str(value))
             conn.commit()
 
-        stored = invalidate_settings_cache(broadcast=True) or reload_settings_map()
+        stored = invalidate_settings_cache(broadcast=True)
+        if stored is None:
+            stored = reload_settings_map()
 
         if "stock_symbols" in payload:
             notify_worker("refresh_stocks")
@@ -96,7 +114,7 @@ def update_settings(payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"settings write failed: {e}") from e
+        raise _http_err("settings write failed", e) from e
 
 
 @router.get("/{key}")

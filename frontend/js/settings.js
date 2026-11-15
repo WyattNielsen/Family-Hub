@@ -967,7 +967,7 @@
       showToast('✅ Weather location saved!', 'success');
       loadWeather(true);
     } catch (e) {
-      showToast('Failed to save', 'error');
+      showToast((e && e.message) ? String(e.message).slice(0, 180) : 'Failed to save', 'error');
     }
   }
 
@@ -980,7 +980,7 @@
       await initAppTimezone(true);
       showToast('✅ Timezone saved!', 'success');
     } catch (e) {
-      showToast('Failed to save', 'error');
+      showToast((e && e.message) ? String(e.message).slice(0, 180) : 'Failed to save', 'error');
     }
   }
 
@@ -1062,7 +1062,7 @@
       loadHAStatus(true);
       loadDashCameras(true);
     } catch (e) {
-      showToast('Failed to save', 'error');
+      showToast((e && e.message) ? String(e.message).slice(0, 180) : 'Failed to save', 'error');
     }
   }
 
