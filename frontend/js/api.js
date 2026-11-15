@@ -1199,13 +1199,7 @@ function _bindWeatherClick(el, data) {
 function _applyWeatherPayload(data) {
   const el = document.getElementById('weatherWidget');
   if (!el) return;
-  if (!data || data.error || data.warming) {
-    if (data && data.warming) {
-      el.innerHTML = '<div class="weather-now"><span class="weather-condition">Loading weather…</span></div>';
-      _setTempBand(el, null);
-      _bindWeatherClick(el, null);
-      return;
-    }
+  if (!data || data.error || data.warming || data.temp == null) {
     el.innerHTML = '';
     _setTempBand(el, null);
     _bindWeatherClick(el, null);

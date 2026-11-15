@@ -604,7 +604,7 @@
       ]);
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
       const wantsSchool = menus.configured && !menus.school_menus_hidden;
-      paintDinner(el, menus, paintReqs(requests), dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, Boolean(wantsSchool && menus.warming)));
+      paintDinner(el, menus, paintReqs(requests), dinnerDate, mealsSchoolHtml(menus, person, dinnerDate, false));
     } catch (e) {
       if (isAbortError(e)) return;
       if (!cachedFull && gen === _mealsGen && document.getElementById('mealsBody') === el) {
@@ -709,7 +709,7 @@
         data.meals,
         filterRowsByMember(data.meal_requests || [], person),
         meta.dinnerDate,
-        mealsSchoolHtml(data.meals, person, meta.dinnerDate, Boolean(data.meals.warming))
+        mealsSchoolHtml(data.meals, person, meta.dinnerDate, false)
       );
     }
     const shopEl = document.getElementById('shoppingStrip');

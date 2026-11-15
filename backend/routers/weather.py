@@ -17,6 +17,7 @@ from database import (
 router = APIRouter()
 _FORECAST_TTL = 15 * 60
 _UA = {"User-Agent": "FamilyHub/1.0 (self-hosted; weather@hub.local)", "Accept": "application/json"}
+_REFRESH_LOCK = asyncio.Lock()
 
 WMO_CONDITIONS = {
     0:  ("Clear", "☀️"),
@@ -399,9 +400,16 @@ async def refresh_weather_snapshot() -> bool:
     return True
 
 
+def _weather_usable(snap) -> bool:
+    if not snap:
+        return False
+    payload, _updated_at, _err = snap
+    return isinstance(payload, dict) and payload.get("temp") is not None
+
+
 @router.get("/")
 async def get_weather():
-    """Zero-external-IO read. Missing snapshots wake the worker; never block the web process."""
+    """Return forecast. If the snapshot is empty, fetch once here so the UI is never stuck."""
     s = await get_settings_map_async()
     zip_code = (s.get("weather_zip") or "").strip()
     if not zip_code:
@@ -409,14 +417,28 @@ async def get_weather():
 
     snap_key = f"weather:{zip_code}"
     snap = await get_snapshot_async(snap_key)
-    if snap is None:
-        await notify_worker_async("refresh_weather")
-        return {"warming": True}
+
+    if not _weather_usable(snap):
+        # Skip repeat inline fetch if we just failed (keeps bootstrap snappy).
+        recent_fail = (
+            snap
+            and snap[2]
+            and time.time() - float(snap[1] or 0) < 60
+        )
+        if not recent_fail:
+            await notify_worker_async("refresh_weather")
+            async with _REFRESH_LOCK:
+                snap = await get_snapshot_async(snap_key)
+                if not _weather_usable(snap):
+                    try:
+                        await asyncio.wait_for(refresh_weather_snapshot(), timeout=15.0)
+                    except Exception as e:
+                        print(f"[weather] inline refresh failed: {e}")
+                    snap = await get_snapshot_async(snap_key)
+        if not _weather_usable(snap):
+            return {"error": snap[2] if snap and snap[2] else "unavailable"}
 
     payload, updated_at, _err = snap
     if time.time() - updated_at > _FORECAST_TTL:
         await notify_worker_async("refresh_weather")
-    if isinstance(payload, dict) and payload.get("error") and payload.get("temp") is None:
-        await notify_worker_async("refresh_weather")
-        return {"warming": True, "error": payload.get("error")}
     return payload

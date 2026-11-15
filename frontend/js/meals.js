@@ -453,8 +453,8 @@
     API.seed('/api/meals/week?start=' + start, week);
     _paintWeekPlan(el, week, start);
     const wantsSchool = week.configured && !week.school_menus_hidden;
-    // No warming retry loops — show what we have (including empty/warming once).
-    renderSchools(week, Boolean(wantsSchool && week.warming));
+    // Backend fills empty snaps inline; never leave the UI on a permanent Loading state.
+    renderSchools(week, false);
   }
 
   async function loadWeek() {

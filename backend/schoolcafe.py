@@ -310,37 +310,81 @@ def _snap_key(school_id: str, meal_type: str, monday: str, preferred_line: str) 
     return f"schoolcafe:{school_id}:{meal_type}:{monday}:{preferred_line or 'default'}"
 
 
-async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[dict, str, bool]:
-    """Read cached weekly SchoolCafe menu from PostgreSQL snapshot in <3ms.
+_WEEK_LOCKS: dict[str, asyncio.Lock] = {}
+_WEEK_LOCKS_GUARD = asyncio.Lock()
 
-    Returns (payload_dict, line_name, warming_bool). Never blocks on upstream HTTP —
-    that caused /api/meals/day (and the whole dashboard) to hang for ~10s.
-    """
+
+async def _week_lock(school_id: str, monday: str) -> asyncio.Lock:
+    key = f"{school_id}:{monday}"
+    async with _WEEK_LOCKS_GUARD:
+        lock = _WEEK_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _WEEK_LOCKS[key] = lock
+        return lock
+
+
+def _week_snapshot_ok(snap) -> bool:
+    if not snap or not isinstance(snap[0], dict):
+        return False
+    payload = snap[0].get("payload") or {}
+    err = snap[2]
+    return _payload_has_items(payload) or err == "empty_menu"
+
+
+async def _ensure_school_week(school_id: str, monday: str, preferred_line: str, meal_type: str):
+    """Fill the snapshot for this school/week if missing or empty. One refresh per school."""
+    key = _snap_key(school_id, meal_type, monday, preferred_line)
+    snap = await get_snapshot_async(key)
+    if _week_snapshot_ok(snap):
+        return
+    # Recent failed attempt — don't block every page load for 20s.
+    if snap and snap[2] and snap[2] != "empty_menu":
+        if time.time() - float(snap[1] or 0) < 120:
+            return
+
+    lock = await _week_lock(school_id, monday)
+    async with lock:
+        snap = await get_snapshot_async(key)
+        if _week_snapshot_ok(snap):
+            return
+        if snap and snap[2] and snap[2] != "empty_menu":
+            if time.time() - float(snap[1] or 0) < 120:
+                return
+        await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
+        try:
+            await asyncio.wait_for(refresh_school_week_snapshot(school_id, monday), timeout=20.0)
+        except Exception as exc:
+            print(f"[schoolcafe] ensure refresh failed {school_id[:8]}… {monday}: {exc}")
+
+
+async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[dict, str, bool]:
+    """Return weekly menu. Fetches SchoolCafe once when the snapshot is empty."""
     monday = monday_of(iso_date)
     key = _snap_key(school_id, meal_type, monday, preferred_line)
     snap = await get_snapshot_async(key)
-    if snap is None:
-        await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
-        return {}, "", True
 
-    data, updated_at, error = snap
-    if time.time() - updated_at > _WEEK_FRESH_SECONDS:
-        await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
+    empty = True
+    if snap and isinstance(snap[0], dict):
+        payload = snap[0].get("payload") or {}
+        err = snap[2]
+        if _payload_has_items(payload) or err == "empty_menu":
+            empty = False
 
-    if not isinstance(data, dict):
+    if empty:
+        await _ensure_school_week(school_id, monday, preferred_line, meal_type)
+        snap = await get_snapshot_async(key)
+
+    if not snap or not isinstance(snap[0], dict):
+        return {}, "", False
+
+    data, updated_at, _error = snap
+    if time.time() - float(updated_at or 0) > _WEEK_FRESH_SECONDS:
         await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
-        return {}, "", True
 
     payload = data.get("payload") or {}
     line = data.get("line") or ""
-    has_items = _payload_has_items(payload)
-
-    # Legacy empty "success" rows and hard fetch errors: wake worker and keep UI warming
-    # so we don't permanently show "No menu" while SchoolCafe still has data.
-    if not has_items and error != "empty_menu":
-        await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
-        return payload, line, True
-
+    # Never leave the UI spinning on warming — empty means "nothing posted".
     return payload, line, False
 
 
