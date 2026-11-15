@@ -256,15 +256,22 @@
     }).join('');
   }
 
-  async function loadFamilyCalendar() {
-    // Load all 4 calendar resources concurrently instead of sequentially!
-    const [acctsRes, srcsRes, memsRes, fwRes] = await Promise.allSettled([
+  async function loadFamilyCalendar(opts = {}) {
+    const skipMembers = Boolean(opts.skipMembers);
+    const tasks = [
       API.get('/api/calendar/accounts'),
       API.get('/api/calendar/sources'),
-      API.get('/api/members/'),
       API.get('/api/calendar/family/write-calendar'),
-    ]);
+    ];
+    if (!skipMembers) tasks.push(API.get('/api/members/'));
+
+    const results = await Promise.allSettled(tasks);
     if (FHRouter.currentRoute() !== '/settings.html') return;
+
+    const acctsRes = results[0];
+    const srcsRes = results[1];
+    const fwRes = results[2];
+    const memsRes = skipMembers ? null : results[3];
 
     if (acctsRes.status === 'fulfilled') {
       const data = acctsRes.value;
@@ -276,8 +283,9 @@
       if (el) el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load accounts: ${_escapeHtml(acctsRes.reason?.message || '')}</div>`;
     }
 
-    if (memsRes.status === 'fulfilled') {
+    if (memsRes && memsRes.status === 'fulfilled') {
       members = memsRes.value || [];
+      loadMembersFromCache();
     }
 
     if (srcsRes.status === 'fulfilled') {
@@ -725,12 +733,26 @@
     }
   }
 
+  function _applySyncFromSettings(s) {
+    if (!s) return;
+    const sel = document.getElementById('syncIntervalPicker');
+    if (sel && s.google_sync_interval != null) sel.value = String(s.google_sync_interval || '0');
+    _updateSyncStatus(s.google_last_synced || null);
+  }
+
   async function loadSyncInterval() {
+    const cached = API.peek('/api/settings/');
+    if (cached) _applySyncFromSettings(cached);
     try {
-      const data = await API.get('/api/calendar/sync/status');
-      const sel = document.getElementById('syncIntervalPicker');
-      if (sel) sel.value = data.interval_minutes || 0;
-      _updateSyncStatus(data.last_synced);
+      // Prefer settings map (already loaded on this page). Fall back to sync status.
+      const s = await API.get('/api/settings/');
+      _applySyncFromSettings(s);
+      if (!s.google_last_synced) {
+        const data = await API.get('/api/calendar/sync/status');
+        const sel = document.getElementById('syncIntervalPicker');
+        if (sel && data.interval_minutes != null) sel.value = data.interval_minutes || 0;
+        _updateSyncStatus(data.last_synced);
+      }
     } catch (e) {}
   }
 
@@ -843,13 +865,38 @@
     if (dimMin)    dimMin.value    = s.dim_minutes ?? '5';
   }
 
-  async function loadAllSettingsFields() {
+  async function loadAllSettingsFields(opts = {}) {
+    const force = Boolean(opts.force);
     const cached = API.peek('/api/settings/');
-    if (cached) _populateAllSettingsInputs(cached);
+    if (cached) {
+      _populateAllSettingsInputs(cached);
+      _applySyncFromSettings(cached);
+    }
     try {
-      const s = await API.get('/api/settings/', { force: true });
+      const s = await API.get('/api/settings/', force ? { force: true } : undefined);
       _populateAllSettingsInputs(s);
+      _applySyncFromSettings(s);
     } catch (e) {}
+  }
+
+  /** One coordinated mount load — avoids the old 7+ GET stampede. */
+  async function loadSettingsPage() {
+    const cachedSettings = API.peek('/api/settings/');
+    if (cachedSettings) {
+      _populateAllSettingsInputs(cachedSettings);
+      _applySyncFromSettings(cachedSettings);
+    }
+    const cachedMembers = API.peek('/api/members/');
+    if (cachedMembers) {
+      members = cachedMembers;
+      loadMembersFromCache();
+    }
+
+    await Promise.all([
+      loadAllSettingsFields(),
+      loadMembers(),
+      loadFamilyCalendar({ skipMembers: true }),
+    ]);
   }
 
   async function loadPhotosGrid() {
@@ -1402,10 +1449,7 @@
       });
     });
 
-    loadMembers();
-    loadFamilyCalendar();
-    loadSyncInterval();
-    loadAllSettingsFields();
+    loadSettingsPage();
 
     document.getElementById('addMemberBtn').onclick = () => openMemberModal();
     document.getElementById('closeMemberModal').onclick = closeMemberModal;
