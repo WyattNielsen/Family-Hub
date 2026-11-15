@@ -121,9 +121,12 @@ def _forecast_payload(data: dict, city: str) -> dict:
 
 async def refresh_weather_snapshot():
     """Live geocode + Open-Meteo fetch executed inside worker.py."""
-    s = await get_settings_map_async()
-    zip_code = s.get("weather_zip", "").strip()
+    from database import reload_settings_map
+    # Always re-read settings from Postgres — worker RAM cache can lag the web process.
+    s = await asyncio.to_thread(reload_settings_map)
+    zip_code = (s.get("weather_zip") or "").strip()
     if not zip_code:
+        print("[weather] refresh skipped: weather_zip not set")
         return
 
     lat = s.get("weather_lat")

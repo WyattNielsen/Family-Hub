@@ -1151,6 +1151,9 @@ function _applyWeatherPayload(data) {
   if (!el) return;
   if (!data || data.error || data.warming) {
     if (data && data.warming) {
+      el.innerHTML = '<div class="weather-now"><span class="weather-condition">Loading weather…</span></div>';
+      _setTempBand(el, null);
+      _bindWeatherClick(el, null);
       setTimeout(() => loadWeather(true), 3500);
       return;
     }

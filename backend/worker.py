@@ -32,7 +32,16 @@ import schoolcafe
 _job_queue: asyncio.Queue[str] = asyncio.Queue()
 
 
+def _notify_payload_str(raw) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, (bytes, bytearray, memoryview)):
+        return bytes(raw).decode("utf-8", errors="replace")
+    return str(raw)
+
+
 def _enqueue(job: str):
+    job = _notify_payload_str(job).strip()
     if job:
         _job_queue.put_nowait(job)
 
@@ -45,7 +54,7 @@ async def _listen_jobs_loop():
             async with aconn:
                 await aconn.execute("LISTEN fh_jobs")
                 async for notify in aconn.notifies():
-                    _enqueue(notify.payload or "")
+                    _enqueue(notify.payload)
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -55,6 +64,8 @@ async def _listen_jobs_loop():
 
 async def _job_consumer_loop():
     """Coalesce and execute immediate jobs requested by web requests."""
+    from database import reload_settings_map
+
     while True:
         try:
             first = await _job_queue.get()
@@ -66,6 +77,8 @@ async def _job_consumer_loop():
 
             for job in batch:
                 try:
+                    # Jobs often follow a settings write — pull fresh keys first.
+                    await asyncio.to_thread(reload_settings_map)
                     if job == "sync_all":
                         await calendar.run_full_sync()
                     elif job == "refresh_ha":
@@ -84,6 +97,8 @@ async def _job_consumer_loop():
                     elif job == "sync_cameras":
                         await go2rtc_sync.sync_go2rtc_streams()
                         await security.refresh_camera_snapshots()
+                    else:
+                        print(f"[worker] unknown job ignored: {job!r}")
                 except Exception as exc:
                     print(f"[worker] job '{job}' error: {exc}")
         except asyncio.CancelledError:
@@ -104,8 +119,9 @@ async def _fast_poller_loop():
 
 async def _medium_poller_loop():
     """Poll Stocks (every 3m), Weather (every 15m), and refresh HA rotating camera tokens in go2rtc (every 4m)."""
-    last_weather = 0.0
-    last_cam_sync = 0.0
+    # Force weather + camera sync on the first pass after boot.
+    last_weather = time.monotonic() - 900
+    last_cam_sync = time.monotonic() - 240
     while True:
         try:
             now = time.monotonic()
@@ -126,8 +142,11 @@ async def _medium_poller_loop():
 
 async def _slow_poller_loop():
     """Poll SchoolCafe & Nutrislice menus (every 4h) and expire old messages."""
+    # Run once immediately on boot so meals aren't empty until the 4h mark.
     while True:
         try:
+            from database import reload_settings_map
+            await asyncio.to_thread(reload_settings_map)
             await schoolcafe.refresh_schoolcafe_snapshots()
             await lunch.refresh_lunch_snapshot()
             await asyncio.to_thread(messages.expire_old_messages)

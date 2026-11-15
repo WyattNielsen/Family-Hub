@@ -332,8 +332,11 @@ async def refresh_school_week_snapshot(school_id: str, anchor_iso: str):
 
 async def refresh_schoolcafe_snapshots(extra_week_spec: str | None = None):
     """Refresh current + next week menus for every member's assigned school."""
+    from database import reload_settings_map
+    await asyncio.to_thread(reload_settings_map)
     district_id = (setting("schoolcafe_district_id") or "").strip()
     if not district_id or setting("lunch_hidden", "false") == "true":
+        print("[schoolcafe] refresh skipped: district missing or menus hidden")
         return
 
     if extra_week_spec:
