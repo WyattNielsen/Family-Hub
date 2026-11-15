@@ -141,6 +141,7 @@ async def _medium_poller_loop():
     # Force weather + camera sync on the first pass after boot.
     last_weather = time.monotonic() - 900
     last_cam_sync = time.monotonic() - 240
+    weather_interval = 900
     while True:
         now = time.monotonic()
         try:
@@ -149,23 +150,33 @@ async def _medium_poller_loop():
             break
         except Exception as exc:
             print(f"[worker] stocks poll error: {exc}")
+        # Weather before camera sync — go2rtc/HA camera work must not starve forecast refresh.
         try:
-            if now - last_cam_sync >= 240:
-                await go2rtc_sync.sync_go2rtc_streams()
-                await security.refresh_camera_snapshots()
-                last_cam_sync = now
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            print(f"[worker] camera sync poll error: {exc}")
-        try:
-            if now - last_weather >= 900:
-                await weather.refresh_weather_snapshot()
-                last_weather = now
+            if now - last_weather >= weather_interval:
+                ok = await weather.refresh_weather_snapshot()
+                if ok:
+                    last_weather = time.monotonic()
+                    weather_interval = 900
+                else:
+                    # Retry sooner when fetch/geocode failed instead of waiting 15m.
+                    last_weather = time.monotonic()
+                    weather_interval = 60
         except asyncio.CancelledError:
             break
         except Exception as exc:
             print(f"[worker] weather poll error: {exc}")
+            last_weather = time.monotonic()
+            weather_interval = 60
+        try:
+            if now - last_cam_sync >= 240:
+                await asyncio.wait_for(go2rtc_sync.sync_go2rtc_streams(), timeout=45)
+                await asyncio.wait_for(security.refresh_camera_snapshots(), timeout=45)
+                last_cam_sync = time.monotonic()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            print(f"[worker] camera sync poll error: {exc}")
+            last_cam_sync = time.monotonic()
         await asyncio.sleep(180)
 
 

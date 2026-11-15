@@ -1205,6 +1205,14 @@ function _applyWeatherPayload(data) {
       _scheduleWeatherWarmRetry();
       return;
     }
+    // Soft errors (fetch/geocode) — keep retrying a few times instead of blanking forever.
+    if (data && data.error && data.error !== 'no_location' && _weatherWarmAttempts < _WEATHER_WARM_MAX) {
+      el.innerHTML = '<div class="weather-now"><span class="weather-condition">Loading weather…</span></div>';
+      _setTempBand(el, null);
+      _bindWeatherClick(el, null);
+      _scheduleWeatherWarmRetry();
+      return;
+    }
     clearTimeout(_weatherWarmTimer);
     _weatherWarmAttempts = 0;
     el.innerHTML = '';

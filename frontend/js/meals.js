@@ -75,9 +75,32 @@
     });
   }
 
+  function schoolDaysMap(school) {
+    const days = school && school.days;
+    const map = new Map();
+    if (Array.isArray(days)) {
+      days.forEach(day => {
+        if (day && day.date) map.set(day.date, day);
+      });
+    } else if (days && typeof days === 'object') {
+      // API returns { "YYYY-MM-DD": { breakfast, lunch } }
+      Object.entries(days).forEach(([date, meals]) => {
+        map.set(date, {
+          date,
+          breakfast: (meals && meals.breakfast) || [],
+          lunch: (meals && meals.lunch) || [],
+        });
+      });
+    }
+    return map;
+  }
+
   function weekDates(data, school) {
     let start = data && data.start;
-    if (!start && school && school.days && school.days[0]) start = mondayOf(school.days[0].date);
+    if (!start && school) {
+      const first = schoolDaysMap(school).keys().next().value;
+      if (first) start = mondayOf(first);
+    }
     if (!start) start = weekAnchor();
     return Array.from({ length: 7 }, (_, i) => addDays(start, i));
   }
@@ -155,7 +178,7 @@
 
   function dayMeta(data, school) {
     const today = toETDateStr(new Date());
-    const byDate = new Map((school.days || []).map(day => [day.date, day]));
+    const byDate = schoolDaysMap(school);
     return weekDates(data, school).map(iso => {
       const day = byDate.get(iso) || { date: iso, breakfast: [], lunch: [] };
       const date = parseIso(iso);
@@ -263,7 +286,7 @@
     const school = schoolMenus[index];
     if (!overlay || !school || !iso) return;
     openPlan = { index, iso };
-    const day = (school.days || []).find(d => d.date === iso) || { breakfast: [], lunch: [] };
+    const day = schoolDaysMap(school).get(iso) || { date: iso, breakfast: [], lunch: [] };
     const title = document.getElementById('mealPlanTitle');
     const schoolEl = document.getElementById('mealPlanSchool');
     const body = document.getElementById('mealPlanBody');

@@ -102,7 +102,26 @@ def _mdy(iso_date: str) -> str:
 def _date_keys(iso_date: str):
     y, m, d = iso_date.split("-")
     mi, di = int(m), int(d)
-    return {iso_date, f"{mi}/{di}/{y}", f"{m}/{d}/{y}"}
+    # SchoolCafe returns a mix of zero-padded and unpadded M/D/YYYY keys.
+    return {
+        iso_date,
+        f"{mi}/{di}/{y}",
+        f"{m}/{d}/{y}",
+        f"{mi:02d}/{di:02d}/{y}",
+        f"{int(m):02d}/{int(d):02d}/{y}",
+    }
+
+
+def _payload_has_items(payload: dict) -> bool:
+    if not isinstance(payload, dict) or not payload:
+        return False
+    for day in payload.values():
+        if not isinstance(day, dict):
+            continue
+        for rows in day.values():
+            if isinstance(rows, list) and rows:
+                return True
+    return False
 
 
 def _clean_name(name: str) -> str:
@@ -258,19 +277,31 @@ async def fetch_week_live(school_id: str, meal_type: str, iso_date: str, preferr
     monday = monday_of(iso_date)
     lines = await serving_lines(school_id, meal_type, iso_date)
     if not lines:
-        return {}, ""
-    line = preferred_line if preferred_line in lines else lines[0]
-    params = {
-        "SchoolId": school_id,
-        "ServingDate": _mdy(monday),
-        "ServingLine": line,
-        "MealType": meal_type,
-        "enabledWeekendMenus": "true",
-    }
+        raise SchoolCafeError(f"no serving lines for {school_id} {meal_type}")
+
+    ordered = []
+    if preferred_line and preferred_line in lines:
+        ordered.append(preferred_line)
+    ordered.extend(line for line in lines if line not in ordered)
+
+    last_payload, last_line = {}, ordered[0]
     async with _client() as client:
-        data = await _get_json(client, "CalendarView/GetWeeklyMenuitems", params)
-    payload = data if isinstance(data, dict) else {}
-    return payload, line
+        for line in ordered:
+            params = {
+                "SchoolId": school_id,
+                "ServingDate": _mdy(monday),
+                "ServingLine": line,
+                "MealType": meal_type,
+                "enabledWeekendMenus": "true",
+            }
+            data = await _get_json(client, "CalendarView/GetWeeklyMenuitems", params)
+            payload = data if isinstance(data, dict) else {}
+            last_payload, last_line = payload, line
+            if _payload_has_items(payload):
+                return payload, line
+
+    # Prefer returning whatever the last line gave us (may be empty for unpublished weeks).
+    return last_payload, last_line
 
 
 # ── Local-First Snapshot Read Path (called by GET /api/meals/*) ──────────────
@@ -279,25 +310,77 @@ def _snap_key(school_id: str, meal_type: str, monday: str, preferred_line: str) 
     return f"schoolcafe:{school_id}:{meal_type}:{monday}:{preferred_line or 'default'}"
 
 
-async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[dict, str, bool]:
-    """Read cached weekly SchoolCafe menu from PostgreSQL snapshot in <3ms.
+_INLINE_MEALS_LOCKS: dict[str, asyncio.Lock] = {}
+_INLINE_MEALS_LOCKS_GUARD = asyncio.Lock()
 
-    Returns (payload_dict, line_name, warming_bool). Never makes outbound HTTP calls.
+
+async def _inline_lock(lock_key: str) -> asyncio.Lock:
+    async with _INLINE_MEALS_LOCKS_GUARD:
+        lock = _INLINE_MEALS_LOCKS.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _INLINE_MEALS_LOCKS[lock_key] = lock
+        return lock
+
+
+def _snap_needs_fetch(row) -> bool:
+    """True when snapshot is missing, hard-failed, or stale empty cache."""
+    if not row or not isinstance(row[0], dict):
+        return True
+    payload = row[0].get("payload") or {}
+    if _payload_has_items(payload):
+        return False
+    err = row[2]
+    age = time.time() - float(row[1] or 0)
+    # Network/parse failures should retry. empty_menu is a finished (unpublished) result.
+    if err and err != "empty_menu":
+        return True
+    return age > _WEEK_FRESH_SECONDS
+
+
+async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[dict, str, bool]:
+    """Read cached weekly SchoolCafe menu from PostgreSQL snapshot.
+
+    Returns (payload_dict, line_name, warming_bool). Falls back to one inline
+    fetch when the snapshot is missing or failed so the UI does not stay blank.
     """
     monday = monday_of(iso_date)
     key = _snap_key(school_id, meal_type, monday, preferred_line)
     snap = await get_snapshot_async(key)
-    if snap is None:
+
+    if _snap_needs_fetch(snap):
         await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
-        return {}, "", True
+        lock_key = f"{school_id}:{monday}"
+        lock = await _inline_lock(lock_key)
+        if lock.locked():
+            for _ in range(40):
+                await asyncio.sleep(0.25)
+                snap = await get_snapshot_async(key)
+                if not _snap_needs_fetch(snap):
+                    break
+        else:
+            async with lock:
+                snap = await get_snapshot_async(key)
+                if _snap_needs_fetch(snap):
+                    try:
+                        await asyncio.wait_for(refresh_school_week_snapshot(school_id, monday), timeout=25.0)
+                    except Exception as exc:
+                        print(f"[schoolcafe] inline refresh error: {exc}")
+                    snap = await get_snapshot_async(key)
+        if not snap:
+            return {}, "", True
 
     data, updated_at, error = snap
     if time.time() - updated_at > _WEEK_FRESH_SECONDS:
         await notify_worker_async(f"refresh_meals_week:{school_id}:{monday}")
 
     if not isinstance(data, dict):
-        return {}, "", bool(error)
-    return data.get("payload") or {}, data.get("line") or "", False
+        return {}, "", True
+    payload = data.get("payload") or {}
+    line = data.get("line") or ""
+    if not _payload_has_items(payload) and error and error != "empty_menu":
+        return payload, line, True
+    return payload, line, False
 
 
 async def menu_items(school_id: str, meal_type: str, iso_date: str, preferred_line: str = "") -> tuple[list, str, bool]:
@@ -323,10 +406,18 @@ async def refresh_school_week_snapshot(school_id: str, anchor_iso: str):
         key = _snap_key(school_id, meal_type, monday, pref)
         try:
             payload, line = await fetch_week_live(school_id, meal_type, monday, pref)
-            await set_snapshot_async(key, {"payload": payload, "line": line}, error=None)
+            err = None if _payload_has_items(payload) else "empty_menu"
+            await set_snapshot_async(key, {"payload": payload, "line": line}, error=err)
+            print(
+                f"[schoolcafe] refreshed {school_id[:8]}… {meal_type} week={monday} "
+                f"line={line!r} items={'yes' if not err else 'no'}"
+            )
         except Exception as exc:
+            print(f"[schoolcafe] refresh error {school_id[:8]}… {meal_type} week={monday}: {exc}")
             existing = await get_snapshot_async(key)
             prev_payload = existing[0] if existing else {"payload": {}, "line": ""}
+            if not isinstance(prev_payload, dict):
+                prev_payload = {"payload": {}, "line": ""}
             await set_snapshot_async(key, prev_payload, error=str(exc))
 
 
