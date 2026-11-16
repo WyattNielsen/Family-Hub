@@ -379,6 +379,7 @@ input, select, textarea { font-family: var(--font); }
 
 /* ── Event Cards ───────────────────────────────────────────── */
 .event-card {
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
   border-radius: 14px;
   padding: 12px 14px;
@@ -497,8 +498,8 @@ input, select, textarea { font-family: var(--font); }
   overflow: hidden;
   background: var(--surface);
 }
-.cal-day:hover { background: color-mix(in srgb, var(--text) 5%, var(--surface)); }
-.cal-day.other-month { background: color-mix(in srgb, var(--bg) 72%, var(--surface)); }
+.cal-day:hover { background: var(--surface2); background: color-mix(in srgb, var(--text) 5%, var(--surface)); }
+.cal-day.other-month { background: var(--bg); background: color-mix(in srgb, var(--bg) 72%, var(--surface)); }
 .cal-day.other-month .cal-date { color: var(--text3); }
 .cal-day.today .cal-date {
   background: var(--today);
@@ -530,6 +531,7 @@ input, select, textarea { font-family: var(--font); }
   padding: 0 6px;
   border-radius: 7px;
   color: var(--text);
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
   border-left: 3px solid var(--event);
   white-space: nowrap;
@@ -660,6 +662,7 @@ input, select, textarea { font-family: var(--font); }
   cursor: pointer;
   font-family: inherit;
   color: var(--text);
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
 }
 .agenda-empty { margin: 12px 12px 0; }
@@ -698,6 +701,7 @@ input, select, textarea { font-family: var(--font); }
   cursor: pointer;
   font-family: inherit;
   color: var(--text);
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 80%, var(--surface));
 }
 .agenda-block strong {
@@ -792,6 +796,7 @@ input, select, textarea { font-family: var(--font); }
   display: flex;
   align-items: center;
   gap: 14px;
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 22%, var(--surface));
   border-radius: 14px;
   padding: 12px 16px;
@@ -1292,8 +1297,8 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   background-image: inherit;
   background-size: cover;
   background-position: center;
-  filter: blur(18px) brightness(0.7);
-  transform: scale(1.1);
+  filter: blur(8px) brightness(0.7);
+  transform: scale(1.05);
 }
 /* Sharp photo centered with contain */
 .slideshow-bg::after {
@@ -1446,6 +1451,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 22%, var(--surface));
   border-radius: 12px;
   margin-bottom: 6px;
@@ -1581,6 +1587,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   border-radius: 14px;
   margin-bottom: 8px;
   border: none;
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 22%, var(--surface));
   transition: background 0.2s;
 }
@@ -2187,6 +2194,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 [data-theme="dark"] .cal-event-dot,
 [data-theme="dark"] .agenda-block,
 [data-theme="dark"] .agenda-pill {
+  background: #252525;
   background: color-mix(in srgb, var(--event, var(--border)) 72%, #161616);
   color: #f2f2f2;
 }
@@ -2197,6 +2205,7 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 [data-theme="dark"] .chore-item,
 [data-theme="dark"] .dashboard-chore-item,
 [data-theme="dark"] .msg-card {
+  background: #1c1c1c;
   background: color-mix(in srgb, var(--event, var(--border)) 36%, #161616);
 }
 [data-theme="dark"] .chore-card:hover { filter: brightness(1.12); }
@@ -2220,8 +2229,24 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 [data-theme="dark"] .chore-tod-evening { background: rgba(175, 130, 255, 0.18); color: #d2c0ff; }
 
 /* ── Auto-dim overlay ──────────────────────────────────────── */
-html { transition: filter 2s ease; }
-html.dimmed { filter: brightness(0.04); cursor: none; }
+#screenDimOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 99998;
+  transition: opacity 1.5s ease;
+}
+html.dimmed #screenDimOverlay {
+  opacity: 0.94;
+}
+html.dimmed {
+  cursor: none;
+}
 
 /* ── Messages Page ─────────────────────────────────────────── */
 .msg-compose {
@@ -2246,6 +2271,7 @@ html.dimmed { filter: brightness(0.04); cursor: none; }
   gap: 16px;
 }
 .msg-card {
+  background: var(--surface2);
   background: color-mix(in srgb, var(--event, var(--border)) 24%, var(--surface));
   border-radius: var(--radius);
   padding: 16px 16px 14px;
@@ -2775,7 +2801,9 @@ button.section-link { background: none; border: none; cursor: pointer; font-fami
 .wx-temp { color: var(--wx); }
 .weather-modal .wx-temp { color: var(--wx); }
 .weather-widget[class*="wx-band-"] {
+  background: var(--surface2);
   background: color-mix(in srgb, var(--wx) 16%, var(--surface));
+  border-color: var(--border);
   border-color: color-mix(in srgb, var(--wx) 48%, var(--border));
 }
 .weather-modal-day[class*="wx-band-"] {

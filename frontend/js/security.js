@@ -167,7 +167,7 @@
               <div>Connecting to ${cam.name}…</div>
             </div>
             <img src="${streamUrl}" class="camera-feed-img" alt="${cam.name}"
-                 onload="this.classList.add('loaded');document.getElementById('ph-${cam.ha_entity_id}')?.remove()"
+                 onload="this.classList.add('loaded');var ph=document.getElementById('ph-${cam.ha_entity_id}');if(ph)ph.remove();"
                  onerror="const p=document.getElementById('ph-${cam.ha_entity_id}');if(p)p.innerHTML='<div class=camera-placeholder-icon>⚠️</div><div>Feed unavailable</div>'">
           </div>`;
       }).join('');
@@ -179,10 +179,13 @@
 
   function openCameraModal(name, _streamUrl) {
     const cards = document.querySelectorAll('.camera-feed-card');
-    _modalCameras = Array.from(cards).map(card => ({
-      name: card.querySelector('.camera-feed-label').textContent,
-      url:  card.querySelector('.camera-feed-img')?.src || ''
-    }));
+    _modalCameras = Array.from(cards).map(card => {
+      const feedImg = card.querySelector('.camera-feed-img');
+      return {
+        name: card.querySelector('.camera-feed-label').textContent,
+        url:  (feedImg && feedImg.src) || ''
+      };
+    });
     _modalIndex = _modalCameras.findIndex(c => c.name === name);
     if (_modalIndex < 0) _modalIndex = 0;
     _showModalCamera(_modalIndex);

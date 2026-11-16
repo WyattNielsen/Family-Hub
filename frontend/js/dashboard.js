@@ -62,7 +62,8 @@
 
   async function ackPreviewMessage(e) {
     e.preventDefault();
-    const id = document.getElementById('msgPreviewAck')?.dataset.id;
+    const ackEl = document.getElementById('msgPreviewAck');
+    const id = ackEl && ackEl.dataset ? ackEl.dataset.id : null;
     if (!id) return;
     try {
       await API.delete('/api/messages/' + id);
@@ -92,7 +93,10 @@
     } catch (_) {}
     document.getElementById('composeBody').value = '';
     document.getElementById('composeModal').style.display = 'flex';
-    setTimeout(() => document.getElementById('composeBody')?.focus(), 100);
+    setTimeout(() => {
+      const b = document.getElementById('composeBody');
+      if (b) b.focus();
+    }, 100);
   }
 
   function closeComposeModal() {

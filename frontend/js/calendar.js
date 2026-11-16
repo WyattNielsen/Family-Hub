@@ -53,7 +53,7 @@
   }
 
   function eventBodyHtml(raw) {
-    let text = String(raw ?? '').replace(/\r\n|\r/g, '\n');
+    let text = String(raw !== null && raw !== undefined ? raw : '').replace(/\r\n|\r/g, '\n');
     text = text.replace(/<a\b[^>]*\bhref\s*=\s*(?:"(https?:\/\/[^"]+)"|'(https?:\/\/[^']+)')[^>]*>([\s\S]*?)<\/a>/gi,
       (_, href1, href2, label) => {
         const href = href1 || href2;
@@ -74,7 +74,8 @@
     const re = /https?:\/\/[^\s]+/g;
     let out = '';
     let last = 0;
-    for (const m of text.matchAll(re)) {
+    let m;
+    while ((m = re.exec(text)) !== null) {
       out += escapeHtml(text.slice(last, m.index)).replace(/\n/g, '<br>');
       let url = m[0];
       let trail = '';

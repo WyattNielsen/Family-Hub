@@ -12,9 +12,17 @@ function _bustGetCache() {
 }
 
 function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  return fetch(path, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  const opts = ctrl ? Object.assign({}, options, { signal: ctrl.signal }) : options;
+  const p = fetch(path, opts);
+  if (p.finally) {
+    return p.finally(() => { if (timer) clearTimeout(timer); });
+  }
+  return p.then(
+    r => { if (timer) clearTimeout(timer); return r; },
+    err => { if (timer) clearTimeout(timer); throw err; }
+  );
 }
 
 async function _send(path, options) {
@@ -87,7 +95,7 @@ function showToast(msg, type = '') {
 }
 
 function escapeHtml(str) {
-  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str !== null && str !== undefined ? str : '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function eventDisplayColor(event) {
@@ -415,6 +423,11 @@ async function loadMessageBadge() {
 // Header cameras and Home Assistant status, plus the Messages count,
 // are part of the shell so every page shows the same icons.
 function ensureShell() {
+  if (!document.getElementById('screenDimOverlay')) {
+    const dim = document.createElement('div');
+    dim.id = 'screenDimOverlay';
+    document.body.appendChild(dim);
+  }
   const msgLink = document.querySelector('a.nav-link[href="/messages.html"]');
   if (msgLink && !document.getElementById('msgNavBadge')) {
     const badge = document.createElement('span');
@@ -536,7 +549,8 @@ function toggleAlarmPopover(evt, entityId) {
 }
 
 function closeAlarmPopover() {
-  document.getElementById('haAlarmPopover')?.remove();
+  const pop = document.getElementById('haAlarmPopover');
+  if (pop) pop.remove();
 }
 
 function optimisticHAUpdate(entityId, newState) {
@@ -589,7 +603,10 @@ function toggleCoverPopover(evt, entityId) {
   popover.style.right = (window.innerWidth - rect.right) + 'px';
   document.body.appendChild(popover);
 
-  setTimeout(() => document.addEventListener('click', () => document.getElementById('haCoverPopover')?.remove(), { once: true }), 0);
+  setTimeout(() => document.addEventListener('click', () => {
+    const pop = document.getElementById('haCoverPopover');
+    if (pop) pop.remove();
+  }, { once: true }), 0);
 }
 
 async function coverAction(action, entityId) {
@@ -598,7 +615,8 @@ async function coverAction(action, entityId) {
   try {
     await API.post(`/api/homeassistant/cover/${action}`, { entity_id: entityId });
     showToast(action === 'open_cover' ? '🔼 Opening garage…' : '🔽 Closing garage…', 'success');
-    document.getElementById('haCoverPopover')?.remove();
+    const pop = document.getElementById('haCoverPopover');
+    if (pop) pop.remove();
     optimisticHAUpdate(entityId, action === 'open_cover' ? 'opening' : 'closing');
     setTimeout(() => loadHAStatus(true), 4000);
   } catch(e) {
@@ -1040,7 +1058,8 @@ const FHRouter = (() => {
 
   function _unmountCurrent() {
     closeAlarmPopover();
-    document.getElementById('haCoverPopover')?.remove();
+    const pop = document.getElementById('haCoverPopover');
+    if (pop) pop.remove();
     killActiveStreams();
     onPersonFilterChange(null);
     if (_activeCleanup) {
@@ -1189,9 +1208,9 @@ const FHRouter = (() => {
     // Stagger background prefetch of all screen templates + scripts once initial page settles
     setTimeout(() => {
       Object.keys(ROUTES).forEach((r, idx) => {
-        setTimeout(() => prefetch(r), idx * 120);
+        setTimeout(() => prefetch(r), idx * 150);
       });
-    }, 900);
+    }, 4000);
   }
 
   return { register, navigate, prefetch, currentRoute, boot };

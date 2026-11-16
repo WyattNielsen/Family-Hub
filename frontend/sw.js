@@ -18,7 +18,7 @@ self.addEventListener('install', e => {
   self.skipWaiting();
   e.waitUntil(
     caches.open(CACHE).then(cache =>
-      Promise.allSettled(SHELL_HTML.map(url => cache.add(url)))
+      Promise.all(SHELL_HTML.map(url => cache.add(url).catch(() => {})))
     )
   );
 });
