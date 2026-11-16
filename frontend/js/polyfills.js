@@ -50,19 +50,19 @@
     };
   }
 
-  // Soft marker used by api.js for low-end / old-Chromium tweaks
+  // Soft marker used by api.js for low-end / old-Chromium tweaks.
+  // Treat every Android device as low-end — connection limits + weak CPUs.
   window.__FH_LOW_END = (function () {
     try {
-      var cores = navigator.hardwareConcurrency || 2;
       var mem = navigator.deviceMemory || 0;
       var ua = navigator.userAgent || '';
       var m = ua.match(/Chrome\/(\d+)/);
       var chromeVer = m ? parseInt(m[1], 10) : 0;
       var oldChrome = chromeVer > 0 && chromeVer < 80;
-      var android = /Android/.test(ua);
-      return oldChrome || (android && cores <= 2) || (mem > 0 && mem <= 2);
+      var android = /Android/i.test(ua);
+      return android || oldChrome || (mem > 0 && mem <= 2);
     } catch (_) {
-      return false;
+      return true;
     }
   })();
 })();

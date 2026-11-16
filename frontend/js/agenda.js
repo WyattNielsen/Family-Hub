@@ -39,12 +39,31 @@ function _agendaHourLabel(hour) {
 function _minutesInTZ(dateStr) {
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return 0;
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ, hour: 'numeric', minute: 'numeric', hourCycle: 'h23'
-  }).formatToParts(d);
-  const hour = Number((parts.find(p => p.type === 'hour') || {}).value || 0);
-  const minute = Number((parts.find(p => p.type === 'minute') || {}).value || 0);
-  return hour * 60 + minute;
+  try {
+    if (typeof Intl !== 'undefined' && Intl.DateTimeFormat && Intl.DateTimeFormat.prototype.formatToParts) {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: TZ, hour: 'numeric', minute: 'numeric', hour12: false
+      }).formatToParts(d);
+      let hour = 0;
+      let minute = 0;
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i].type === 'hour') hour = Number(parts[i].value || 0);
+        if (parts[i].type === 'minute') minute = Number(parts[i].value || 0);
+      }
+      if (hour === 24) hour = 0;
+      return hour * 60 + minute;
+    }
+  } catch (_) {}
+  try {
+    const raw = d.toLocaleTimeString('en-US', { timeZone: TZ, hour12: false });
+    const bits = String(raw).split(':');
+    let hour = parseInt(bits[0], 10) || 0;
+    const minute = parseInt(bits[1], 10) || 0;
+    if (hour === 24) hour = 0;
+    return hour * 60 + minute;
+  } catch (_) {
+    return d.getHours() * 60 + d.getMinutes();
+  }
 }
 
 function _isAllDayEvent(e) {

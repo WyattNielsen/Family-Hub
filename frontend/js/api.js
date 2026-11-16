@@ -11,21 +11,17 @@ function _bustGetCache() {
   _getCache.clear();
 }
 
-function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
-  // Stub AbortController (Android 7 polyfill) cannot cancel fetch — use Promise.race.
-  if (window.__FH_ABORT_STUB) {
-    const opts = Object.assign({}, options);
-    return Promise.race([
-      fetch(path, opts),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Request timed out')), timeoutMs)
-      )
-    ]);
-  }
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  const opts = Object.assign({}, options, { signal: ctrl.signal });
-  return fetch(path, opts).finally(() => clearTimeout(timer));
+function _fetchWithTimeout(path, options, timeoutMs) {
+  // Always use Promise.race for timeouts — works on Android 7 without AbortController.
+  const opts = options ? Object.assign({}, options) : {};
+  const ms = timeoutMs || FETCH_TIMEOUT_MS;
+  if (opts.signal) delete opts.signal;
+  return Promise.race([
+    fetch(path, opts),
+    new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error('Request timed out')); }, ms);
+    })
+  ]);
 }
 
 async function _send(path, options) {
@@ -1220,17 +1216,28 @@ document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   _updateFullscreenBtn();
   mountPersonFilter();
-  loadSidebarMembers();
+  // Sidebar members duplicate /api/members — skip on low-end (person chips already fetch it).
+  if (!window.__FH_LOW_END) loadSidebarMembers();
   FHRouter.boot();
   afterPagePaint(() => {
     loadWeather();
-    loadHAStatus();
-    loadDashCameras();
+    // Stagger shell network so dashboard API calls get connections first on Android.
+    setTimeout(() => { if (!document.hidden) loadHAStatus(); }, window.__FH_LOW_END ? 1500 : 0);
+    setTimeout(() => {
+      if (!document.hidden) loadDashCameras();
+    }, window.__FH_LOW_END ? 6000 : 0);
   });
-  setInterval(() => { if (!document.hidden) loadHAStatus(); }, 30000);
+  setInterval(() => { if (!document.hidden) loadHAStatus(); }, window.__FH_LOW_END ? 60000 : 30000);
   setInterval(() => { if (!document.hidden) loadMessageBadge(); }, 60000);
   ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
     document.addEventListener(ev, _onPersonActivity, { passive: true })
   );
   armPersonIdle();
+
+  // Force SW update so tablets leave stale cache-first HTML behind.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function (regs) {
+      regs.forEach(function (r) { try { r.update(); } catch (_) {} });
+    }).catch(function () {});
+  }
 });
