@@ -538,17 +538,25 @@
       </div>`).join('');
   }
 
+  let _lastRequests = null;
+
   async function loadRequests(opts) {
     const el = document.getElementById('requestList');
     if (!el) return;
-    const person = getPersonFilter();
     const url = '/api/meals/requests';
-    const paint = (rows) => _paintRequests(el, filterRowsByMember(rows || [], person), person);
-    const cached = API.peek(url);
-    if (cached) paint(cached);
+    const paint = (rows) => {
+      const person = getPersonFilter();
+      _paintRequests(el, filterRowsByMember(rows || [], person), person);
+    };
+    const cached = API.peek(url) || _lastRequests;
+    if (cached) {
+      _lastRequests = cached;
+      paint(cached);
+    }
     if (opts && opts.cacheOnly) return;
     try {
       const rows = await API.get(url);
+      _lastRequests = rows;
       if (document.getElementById('requestList') === el) paint(rows);
     } catch (e) {
       if (!cached && document.getElementById('requestList') === el) {

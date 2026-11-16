@@ -146,7 +146,6 @@
       // Instant client-side filter from cached Everyone data — no network.
       const cached = API.peek('/api/messages/');
       if (cached) _paintMessages(cached);
-      else loadMessages();
     });
     loadMemberOptions();
     loadMessages();

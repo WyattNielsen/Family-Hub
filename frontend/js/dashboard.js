@@ -316,10 +316,11 @@
     return html;
   }
 
-  async function _paintUpcomingChores(el, chores, members) {
+  async function _paintUpcomingChores(el, chores, members, opts) {
     const person = getPersonFilter();
     const visibleMembers = person === 'all' ? members : members.filter(m => String(m.id) === String(person));
     const visibleChores = person === 'all' ? chores : chores.filter(c => String(c.assigned_to) === String(person));
+    const cacheOnly = !!(opts && opts.cacheOnly);
 
     if (!visibleChores.length) {
       if (person !== 'all') {
@@ -350,6 +351,11 @@
       const cachedLb = API.peek('/api/chores/leaderboard');
       if (cachedLb) {
         paintLb(cachedLb);
+        return;
+      }
+      // Person-chip path must stay offline — never wait on leaderboard.
+      if (cacheOnly) {
+        el.innerHTML = '<div class="empty-state">🙌 All chores done!</div>';
         return;
       }
       try {
@@ -394,14 +400,19 @@
     el.innerHTML = html || '<div class="empty-state">🙌 All chores done!</div>';
   }
 
+  let _lastChoresData = null;
+  let _lastChoresMembers = null;
+
   async function loadUpcomingChores(opts) {
     const el = document.getElementById('upcomingChores');
     if (!el) return;
     const choresUrl = '/api/chores/?hide_future=true&completed=false&since_days=0';
-    const cachedChores = API.peek(choresUrl);
-    const cachedMembers = API.peek('/api/members/');
+    const cachedChores = API.peek(choresUrl) || _lastChoresData;
+    const cachedMembers = API.peek('/api/members/') || _lastChoresMembers;
     if (cachedChores && cachedMembers) {
-      _paintUpcomingChores(el, cachedChores, cachedMembers);
+      _lastChoresData = cachedChores;
+      _lastChoresMembers = cachedMembers;
+      _paintUpcomingChores(el, cachedChores, cachedMembers, opts);
     }
     if (opts && opts.cacheOnly) return;
     try {
@@ -409,6 +420,8 @@
         API.get(choresUrl),
         API.get('/api/members/')
       ]);
+      _lastChoresData = chores;
+      _lastChoresMembers = members;
       if (document.getElementById('upcomingChores') === el) {
         await _paintUpcomingChores(el, chores, members);
       }
@@ -577,6 +590,10 @@
     }
   }
 
+  let _lastMealsFast = null;
+  let _lastMealsFull = null;
+  let _lastMealsReqs = null;
+
   async function loadMeals(opts) {
     const el = document.getElementById('mealsBody');
     if (!el) return;
@@ -610,14 +627,14 @@
     const paintReqs = (reqs) => filterRowsByMember(reqs || [], getPersonFilter());
     const paintSchool = (data, loading) => mealsSchoolHtml(data, getPersonFilter(), dinnerDate, loading);
 
-    const cachedFast = API.peek(url + '&include_school=false');
-    const cachedFull = API.peek(url);
-    const cachedReqs = API.peek(reqUrl);
-    if (cachedFull && cachedReqs) {
-      paintDinner(el, cachedFull, paintReqs(cachedReqs), dinnerDate, paintSchool(cachedFull, false));
-    } else if (cachedFast && cachedReqs) {
+    const cachedFast = API.peek(url + '&include_school=false') || _lastMealsFast;
+    const cachedFull = API.peek(url) || _lastMealsFull;
+    const cachedReqs = API.peek(reqUrl) || _lastMealsReqs;
+    if (cachedFull) {
+      paintDinner(el, cachedFull, paintReqs(cachedReqs || []), dinnerDate, paintSchool(cachedFull, false));
+    } else if (cachedFast) {
       const wants = cachedFast.configured && !cachedFast.school_menus_hidden;
-      paintDinner(el, cachedFast, paintReqs(cachedReqs), dinnerDate, paintSchool(cachedFast, wants));
+      paintDinner(el, cachedFast, paintReqs(cachedReqs || []), dinnerDate, paintSchool(cachedFast, wants));
     }
     if (!network) return;
 
@@ -626,9 +643,11 @@
         API.get(url + '&include_school=false', { timeout: 45000 }),
         API.get(reqUrl).catch(() => []),
       ]);
+      _lastMealsFast = data;
+      _lastMealsReqs = requests;
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
       const wantsSchool = data.configured && !data.school_menus_hidden;
-      const fullCached = API.peek(url);
+      const fullCached = API.peek(url) || _lastMealsFull;
       if (fullCached && wantsSchool) {
         paintDinner(el, data, paintReqs(requests), dinnerDate, paintSchool(fullCached, false));
       } else {
@@ -637,6 +656,7 @@
       if (!wantsSchool) return;
       try {
         const menus = await API.get(url, { timeout: 45000 });
+        _lastMealsFull = menus;
         if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
         const slot = document.getElementById('mealsSchool');
         if (slot) slot.innerHTML = paintSchool(menus, false);
@@ -702,7 +722,6 @@
       loadMeals({ cacheOnly: true });
       const cachedMsgs = API.peek('/api/messages/');
       if (cachedMsgs) _renderMessagePreviewList(cachedMsgs);
-      else loadMessagePreview();
     });
     setDashboardDate();
 

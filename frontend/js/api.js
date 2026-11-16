@@ -198,30 +198,27 @@ function _renderPersonFilterChips(el, members) {
       if (String(getPersonFilter()) === String(next)) return;
       setPersonFilter(next);
       el.querySelectorAll('.person-chip').forEach(b => b.classList.toggle('active', b === btn));
-      // Person views filter cached Everyone data client-side — no abort/refetch.
+      // Person views filter cached Everyone data client-side — never network on chip click.
       if (_personFilterChange) _personFilterChange(getPersonFilter());
       const cachedMsgs = API.peek('/api/messages/');
-      if (cachedMsgs) {
-        const counts = { all: 0 };
-        for (const m of cachedMsgs) {
-          if (!m.recipient_id) counts.all += 1;
-          else {
-            const id = String(m.recipient_id);
-            counts[id] = (counts[id] || 0) + 1;
-          }
+      if (!cachedMsgs) return;
+      const counts = { all: 0 };
+      for (const m of cachedMsgs) {
+        if (!m.recipient_id) counts.all += 1;
+        else {
+          const id = String(m.recipient_id);
+          counts[id] = (counts[id] || 0) + 1;
         }
-        el.querySelectorAll('.person-chip').forEach(chip => {
-          paintCountBadge(chip.querySelector('.person-badge'), counts[chip.dataset.person] || 0);
-        });
-        const person = getPersonFilter();
-        const nav = document.getElementById('msgNavBadge');
-        const navCount = person === 'all'
-          ? cachedMsgs.length
-          : cachedMsgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person)).length;
-        paintCountBadge(nav, navCount);
-      } else {
-        loadMessageBadge();
       }
+      el.querySelectorAll('.person-chip').forEach(chip => {
+        paintCountBadge(chip.querySelector('.person-badge'), counts[chip.dataset.person] || 0);
+      });
+      const person = getPersonFilter();
+      const nav = document.getElementById('msgNavBadge');
+      const navCount = person === 'all'
+        ? cachedMsgs.length
+        : cachedMsgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person)).length;
+      paintCountBadge(nav, navCount);
     };
   });
 }
