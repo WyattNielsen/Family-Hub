@@ -658,25 +658,20 @@
         paintDinner(el, data, paintReqs(requests), dinnerDate, paintSchool(data, wantsSchool));
       }
       if (!wantsSchool) return;
-      // SchoolCafe menus are slow — on tablets defer so the rest of the dashboard stays responsive.
-      const schoolDelay = window.__FH_LOW_END ? 2500 : 0;
-      const fetchSchool = async () => {
-        try {
-          const menus = await API.get(url, { timeout: window.__FH_LOW_END ? 20000 : 45000 });
-          _lastMealsFull = menus;
-          if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-          const slot = document.getElementById('mealsSchool');
-          if (slot) slot.innerHTML = paintSchool(menus, false);
-        } catch (e) {
-          const slot = document.getElementById('mealsSchool');
-          if (slot && gen === _mealsGen) {
-            _schoolPaint = null;
-            slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
-          }
+      try {
+        // Keep school menus on a shorter leash so a slow SchoolCafe call can't saturate connections.
+        const menus = await API.get(url, { timeout: 20000 });
+        _lastMealsFull = menus;
+        if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
+        const slot = document.getElementById('mealsSchool');
+        if (slot) slot.innerHTML = paintSchool(menus, false);
+      } catch (e) {
+        const slot = document.getElementById('mealsSchool');
+        if (slot && gen === _mealsGen) {
+          _schoolPaint = null;
+          slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
         }
-      };
-      if (schoolDelay) setTimeout(fetchSchool, schoolDelay);
-      else await fetchSchool();
+      }
     } catch (e) {
       if (!cachedFast && gen === _mealsGen && document.getElementById('mealsBody') === el) {
         el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
@@ -755,19 +750,13 @@
     initAppTimezone().then(() => {
       if (FHRouter.currentRoute() !== '/') return;
       setDashboardDate();
-      // Critical path first — avoid flooding Android HTTP/1.1 (~6 connections).
       loadTodayEvents();
       loadUpcomingChores();
+      loadMeals();
+      loadShoppingStrip();
       loadMessagePreview();
-      const deferMs = window.__FH_LOW_END ? 800 : 0;
-      setTimeout(() => {
-        if (FHRouter.currentRoute() !== '/') return;
-        loadShoppingStrip();
-        loadMeals();
-      }, deferMs);
     });
-    if (!window.__FH_LOW_END) afterPagePaint(loadStocks);
-    else setTimeout(() => { if (!document.hidden && FHRouter.currentRoute() === '/') loadStocks(); }, 5000);
+    afterPagePaint(loadStocks);
 
     _stocksTimer = setInterval(() => { if (!document.hidden) loadStocks(); }, 5 * 60 * 1000);
     _refreshTimer = setInterval(() => {
