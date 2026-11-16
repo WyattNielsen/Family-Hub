@@ -155,20 +155,23 @@
       }
       notConfigured.style.display = 'none';
       section.style.display = 'block';
+      // Snapshots in the grid; MJPEG only when a camera modal is opened (saves Android 7 decode/HTTP slots)
       grid.innerHTML = cameras.map(cam => {
-        const streamUrl = `/api/security/camera/${encodeURIComponent(cam.ha_entity_id)}/stream`;
+        const id = encodeURIComponent(cam.ha_entity_id);
+        const streamUrl = `/api/security/camera/${id}/stream`;
+        const snapUrl = `/api/security/camera/${id}/snapshot?t=${Date.now()}`;
         const safeUrl = streamUrl.replace(/'/g, "\\'");
-        const safeName = cam.name.replace(/'/g, "\\'");
+        const safeName = String(cam.name || '').replace(/'/g, "\\'");
         return `
-          <div class="camera-feed-card" onclick="openCameraModal('${safeName}','${safeUrl}')">
+          <div class="camera-feed-card" data-stream-url="${streamUrl}" onclick="openCameraModal('${safeName}','${safeUrl}')">
             <div class="camera-feed-label">${cam.name}</div>
             <div class="camera-placeholder" id="ph-${cam.ha_entity_id}">
               <div class="camera-placeholder-icon">📷</div>
-              <div>Connecting to ${cam.name}…</div>
+              <div>Loading ${cam.name}…</div>
             </div>
-            <img src="${streamUrl}" class="camera-feed-img" alt="${cam.name}"
-                 onload="this.classList.add('loaded');document.getElementById('ph-${cam.ha_entity_id}')?.remove()"
-                 onerror="const p=document.getElementById('ph-${cam.ha_entity_id}');if(p)p.innerHTML='<div class=camera-placeholder-icon>⚠️</div><div>Feed unavailable</div>'">
+            <img src="${snapUrl}" class="camera-feed-img" alt="${cam.name}" data-stream="${streamUrl}"
+                 onload="this.classList.add('loaded');var _ph=document.getElementById('ph-${cam.ha_entity_id}');if(_ph)_ph.remove()"
+                 onerror="var p=document.getElementById('ph-${cam.ha_entity_id}');if(p)p.innerHTML='<div class=camera-placeholder-icon>⚠️</div><div>Feed unavailable</div>'">
           </div>`;
       }).join('');
     } catch (e) {
@@ -177,12 +180,16 @@
     }
   }
 
-  function openCameraModal(name, _streamUrl) {
+  function openCameraModal(name, streamUrl) {
     const cards = document.querySelectorAll('.camera-feed-card');
-    _modalCameras = Array.from(cards).map(card => ({
-      name: card.querySelector('.camera-feed-label').textContent,
-      url:  card.querySelector('.camera-feed-img')?.src || ''
-    }));
+    _modalCameras = Array.from(cards).map(card => {
+      const img = card.querySelector('.camera-feed-img');
+      const label = card.querySelector('.camera-feed-label');
+      return {
+        name: label ? label.textContent : '',
+        url: (card.getAttribute('data-stream-url') || (img && img.getAttribute('data-stream')) || (img && img.src) || streamUrl || '')
+      };
+    });
     _modalIndex = _modalCameras.findIndex(c => c.name === name);
     if (_modalIndex < 0) _modalIndex = 0;
     _showModalCamera(_modalIndex);
@@ -196,6 +203,7 @@
   function _showModalCamera(idx) {
     const cam = _modalCameras[idx];
     document.getElementById('cameraModalTitle').textContent = cam.name;
+    // Live MJPEG only in the modal
     document.getElementById('cameraModalImg').src = cam.url;
     const dots = document.getElementById('cameraModalDots');
     dots.innerHTML = _modalCameras.map((_, i) =>

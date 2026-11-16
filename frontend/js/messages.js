@@ -13,7 +13,7 @@
   }
 
   function messageHtmlEscape(str) {
-    return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\n/g,'<br>');
+    return String(str != null ? str : '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\n/g,'<br>');
   }
 
   function messagesForPerson(msgs) {
@@ -102,7 +102,8 @@
   async function ackMessage(id) {
     try {
       await API.delete(`/api/messages/${id}`);
-      document.getElementById(`msg-${id}`)?.remove();
+      const msgEl = document.getElementById(`msg-${id}`);
+      if (msgEl) msgEl.remove();
       const board = document.getElementById('msgBoard');
       if (board && !board.children.length) {
         const empty = document.getElementById('msgEmpty');

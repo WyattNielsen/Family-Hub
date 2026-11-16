@@ -20,7 +20,7 @@
   let _photosLoadedForMount = false;
 
   function _escapeHtml(str) {
-    return String(str ?? '')
+    return String(str != null ? str : '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -273,7 +273,7 @@
     } else {
       calendarAccounts = [];
       const el = document.getElementById('calendarAccountsList');
-      if (el) el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load accounts: ${_escapeHtml(acctsRes.reason?.message || '')}</div>`;
+      if (el) el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load accounts: ${_escapeHtml((acctsRes.reason && acctsRes.reason.message) || '')}</div>`;
     }
 
     if (memsRes.status === 'fulfilled') {
@@ -287,10 +287,12 @@
     } else {
       calendarSources = [];
       const el = document.getElementById('calendarSourcesList');
-      if (el) el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load calendars: ${_escapeHtml(srcsRes.reason?.message || '')}</div>`;
+      if (el) el.innerHTML = `<div style="font-size:13px;color:var(--red)">Could not load calendars: ${_escapeHtml((srcsRes.reason && srcsRes.reason.message) || '')}</div>`;
     }
 
-    familyWriteSourceId = fwRes.status === 'fulfilled' ? (fwRes.value.source_id ?? null) : null;
+    familyWriteSourceId = fwRes.status === 'fulfilled'
+      ? (fwRes.value.source_id != null ? fwRes.value.source_id : null)
+      : null;
     renderWriteCalendars();
   }
 
@@ -306,9 +308,12 @@
   }
 
   async function connectIcloudAccount() {
-    const apple_id = document.getElementById('icloudAppleId')?.value.trim();
-    const app_password = document.getElementById('icloudAppPassword')?.value.trim();
-    const label = document.getElementById('icloudLabel')?.value.trim();
+    const appleIdEl = document.getElementById('icloudAppleId');
+    const appPwEl = document.getElementById('icloudAppPassword');
+    const labelEl = document.getElementById('icloudLabel');
+    const apple_id = appleIdEl && appleIdEl.value.trim();
+    const app_password = appPwEl && appPwEl.value.trim();
+    const label = labelEl && labelEl.value.trim();
     if (!apple_id || !app_password) {
       showToast('Enter Apple ID and app-specific password', 'error');
       return;
@@ -418,13 +423,16 @@
   }
 
   async function addIcsSource() {
-    const name = document.getElementById('icsSourceName')?.value.trim();
-    const url = document.getElementById('icsSourceUrl')?.value.trim();
+    const nameEl = document.getElementById('icsSourceName');
+    const urlEl = document.getElementById('icsSourceUrl');
+    const name = nameEl && nameEl.value.trim();
+    const url = urlEl && urlEl.value.trim();
     if (!name || !url) {
       showToast('Enter a name and calendar URL', 'error');
       return;
     }
-    const color = document.getElementById('icsSourceColor')?.value.trim() || '#5B8DEF';
+    const colorEl = document.getElementById('icsSourceColor');
+    const color = (colorEl && colorEl.value.trim()) || '#5B8DEF';
     try {
       await API.post('/api/calendar/sources', { kind: 'ics', url, name, color });
       showToast('✅ ICS calendar added', 'success');
@@ -476,7 +484,7 @@
     const source_id = sel.value === '' ? null : Number(sel.value);
     try {
       const r = await API.put('/api/calendar/family/write-calendar', { source_id });
-      familyWriteSourceId = r.source_id ?? null;
+      familyWriteSourceId = r.source_id != null ? r.source_id : null;
       showToast('✅ Family write calendar saved', 'success');
     } catch (e) {
       showToast(e.message || 'Failed to save', 'error');
@@ -533,7 +541,8 @@
       `<button type="button" class="emoji-tab${g.id === activeEmojiGroup ? ' active' : ''}" onclick="showEmojiGroup('${g.id}')">${g.label}</button>`
     ).join('');
     const group = EMOJI_GROUPS.find(g => g.id === activeEmojiGroup) || EMOJI_GROUPS[0];
-    const current = document.getElementById('memberAvatar')?.value;
+    const avatarEl = document.getElementById('memberAvatar');
+    const current = avatarEl && avatarEl.value;
     picker.innerHTML = group.emojis.map(e =>
       `<div class="emoji-opt${e === current ? ' selected' : ''}" data-emoji="${e}" onclick="selectEmoji('${e}')">${e}</div>`
     ).join('');
@@ -560,7 +569,9 @@
       el.innerHTML = memberAvatarHtml(m, 'avatar-lg');
       return;
     }
-    el.innerHTML = memberAvatarHtml({ avatar: document.getElementById('memberAvatar')?.value || '👤', color: document.getElementById('memberColor')?.value }, 'avatar-lg');
+    const avEl = document.getElementById('memberAvatar');
+    const colEl = document.getElementById('memberColor');
+    el.innerHTML = memberAvatarHtml({ avatar: (avEl && avEl.value) || '👤', color: colEl && colEl.value }, 'avatar-lg');
   }
 
   async function fillSchoolSelect(selectedId) {
@@ -584,7 +595,8 @@
 
   async function loadMemberLines() {
     const box = document.getElementById('memberLines');
-    const schoolId = document.getElementById('memberSchool')?.value || '';
+    const schoolSelEl = document.getElementById('memberSchool');
+    const schoolId = (schoolSelEl && schoolSelEl.value) || '';
     if (!box) return;
     if (!schoolId) { box.style.display = 'none'; return; }
     try {
@@ -669,7 +681,8 @@
     const schoolSel = document.getElementById('memberSchool');
     const schoolId = schoolSel && !schoolSel.value.startsWith('Set ') && !schoolSel.value.startsWith('Could ')
       ? schoolSel.value : '';
-    const schoolName = schoolId ? (schoolSel.selectedOptions[0]?.textContent || '').trim() : '';
+    const schoolOpt = schoolId && schoolSel.selectedOptions[0];
+    const schoolName = schoolId ? ((schoolOpt && schoolOpt.textContent) || '').trim() : '';
     const payload = {
       name,
       color: document.getElementById('memberColor').value,
@@ -684,10 +697,12 @@
       const id = saved.id;
       const lines = document.getElementById('memberLines');
       if (schoolId && lines && lines.style.display !== 'none') {
+        const bfEl = document.getElementById('memberBreakfastLine');
+        const lnEl = document.getElementById('memberLunchLine');
         await API.put('/api/schoolcafe/lines', {
           school_id: schoolId,
-          breakfast: document.getElementById('memberBreakfastLine')?.value || '',
-          lunch: document.getElementById('memberLunchLine')?.value || '',
+          breakfast: (bfEl && bfEl.value) || '',
+          lunch: (lnEl && lnEl.value) || '',
         });
       }
       if (removeAvatar && !pendingAvatarFile) {
@@ -834,9 +849,9 @@
     const darkStart = document.getElementById('darkStart');
     const darkEnd = document.getElementById('darkEnd');
     const dimMin = document.getElementById('dimMinutes');
-    if (darkStart) darkStart.value = s.dark_mode_start ?? '21';
-    if (darkEnd)   darkEnd.value   = s.dark_mode_end ?? '7';
-    if (dimMin)    dimMin.value    = s.dim_minutes ?? '5';
+    if (darkStart) darkStart.value = s.dark_mode_start != null ? s.dark_mode_start : '21';
+    if (darkEnd)   darkEnd.value   = s.dark_mode_end != null ? s.dark_mode_end : '7';
+    if (dimMin)    dimMin.value    = s.dim_minutes != null ? s.dim_minutes : '5';
   }
 
   async function loadAllSettingsFields() {
@@ -923,7 +938,7 @@
         showToast(`✅ ${result.uploaded} photos added to slideshow`, 'success');
         await loadPhotosGrid();
       }
-      if (result.errors?.length) statusEl.textContent += ` (${result.errors.length} failed)`;
+      if (result.errors && result.errors.length) statusEl.textContent += ` (${result.errors.length} failed)`;
       setTimeout(() => { statusEl.style.display = 'none'; }, 3000);
     } catch (e) {
       statusEl.textContent = '❌ Upload failed: ' + e.message;
@@ -955,7 +970,8 @@
   }
 
   async function saveWeatherZip() {
-    const zip = (document.getElementById('weatherZip')?.value || '').trim();
+    const zipEl = document.getElementById('weatherZip');
+    const zip = ((zipEl && zipEl.value) || '').trim();
     try {
       await API.post('/api/settings/', { weather_zip: zip, weather_lat: '', weather_lon: '', weather_city: '' });
       showToast('✅ Weather location saved!', 'success');
@@ -966,7 +982,8 @@
   }
 
   async function saveTimezone() {
-    const tz = document.getElementById('timezoneSelect')?.value || 'America/New_York';
+    const tzSel = document.getElementById('timezoneSelect');
+    const tz = (tzSel && tzSel.value) || 'America/New_York';
     try {
       await API.post('/api/settings/', { timezone: tz });
       await initAppTimezone(true);
@@ -1027,17 +1044,22 @@
   }
 
   async function saveHASettings() {
-    const url = document.getElementById('haUrl')?.value.trim() || '';
-    const token = document.getElementById('haToken')?.value.trim() || '';
+    const haUrlEl = document.getElementById('haUrl');
+    const haTokenEl = document.getElementById('haToken');
+    const url = (haUrlEl && haUrlEl.value.trim()) || '';
+    const token = (haTokenEl && haTokenEl.value.trim()) || '';
     const rows = document.querySelectorAll('#haEntityList > div');
     const entities = [];
     rows.forEach(row => {
-      const eid = row.querySelector('.ha-entity-id')?.value.trim();
-      const name = row.querySelector('.ha-entity-name')?.value.trim();
+      const eidEl = row.querySelector('.ha-entity-id');
+      const nameEl = row.querySelector('.ha-entity-name');
+      const eid = eidEl && eidEl.value.trim();
+      const name = nameEl && nameEl.value.trim();
       if (eid) entities.push({ entity_id: eid, name: name || eid });
     });
     try {
-      const alarmCode = document.getElementById('haAlarmCode')?.value.trim() || '';
+      const alarmCodeEl = document.getElementById('haAlarmCode');
+      const alarmCode = (alarmCodeEl && alarmCodeEl.value.trim()) || '';
       const pathEl = document.getElementById('haDashboardPath');
       const body = {
         ha_url: url,
@@ -1057,7 +1079,8 @@
   }
 
   async function searchSchoolDistricts() {
-    const q = (document.getElementById('districtSearch')?.value || '').trim();
+    const distEl = document.getElementById('districtSearch');
+    const q = ((distEl && distEl.value) || '').trim();
     const el = document.getElementById('districtResults');
     if (!el) return;
     if (q.length < 2) { showToast('Type at least 2 letters', 'error'); return; }
@@ -1142,7 +1165,8 @@
   }
 
   async function saveSchoolMenuVisibility() {
-    const hidden = document.getElementById('lunchHidden')?.checked ?? false;
+    const lunchEl = document.getElementById('lunchHidden');
+    const hidden = lunchEl ? !!lunchEl.checked : false;
     const body = { lunch_hidden: String(hidden) };
     const root = document.getElementById('settingsMealType');
     if (root && (root.dataset.loaded === '1' || root.dataset.touched === '1')) {
@@ -1157,7 +1181,8 @@
   }
 
   async function saveStockSettings() {
-    const symbols = (document.getElementById('stockSymbols')?.value || '').trim();
+    const stockEl = document.getElementById('stockSymbols');
+    const symbols = ((stockEl && stockEl.value) || '').trim();
     try {
       await API.post('/api/settings/', { stock_symbols: symbols });
       showToast('✅ Stock tickers saved!', 'success');
@@ -1214,8 +1239,10 @@
     const rows = document.querySelectorAll('#cameraList > div');
     const cameras = [];
     rows.forEach(row => {
-      const name = row.querySelector('.cam-name')?.value.trim();
-      const haEntity = row.querySelector('.cam-ha-entity')?.value.trim();
+      const nameEl = row.querySelector('.cam-name');
+      const haEl = row.querySelector('.cam-ha-entity');
+      const name = nameEl && nameEl.value.trim();
+      const haEntity = haEl && haEl.value.trim();
       if (name && haEntity) cameras.push({ name, ha_entity_id: haEntity });
     });
     try {
@@ -1246,15 +1273,20 @@
     const rows = document.querySelectorAll('#reminderRows > div');
     const reminders = [];
     rows.forEach(row => {
-      const message = row.querySelector('.rem-message')?.value.trim();
-      const entity_id = row.querySelector('.rem-entity')?.value.trim();
+      const msgEl = row.querySelector('.rem-message');
+      const entEl = row.querySelector('.rem-entity');
+      const message = msgEl && msgEl.value.trim();
+      const entity_id = entEl && entEl.value.trim();
       if (message && entity_id) {
+        const enEl = row.querySelector('.rem-enabled');
+        const timeEl = row.querySelector('.rem-time');
+        const ttsEl = row.querySelector('.rem-tts-engine');
         reminders.push({
-          enabled: row.querySelector('.rem-enabled')?.checked ?? true,
-          time: row.querySelector('.rem-time')?.value || '07:40',
+          enabled: enEl ? !!enEl.checked : true,
+          time: (timeEl && timeEl.value) || '07:40',
           message,
           entity_id,
-          tts_engine: row.querySelector('.rem-tts-engine')?.value.trim() || 'tts.google_translate_en_com',
+          tts_engine: (ttsEl && ttsEl.value.trim()) || 'tts.google_translate_en_com',
         });
       }
     });
@@ -1273,9 +1305,12 @@
   async function testReminder() {
     const firstRow = document.querySelector('#reminderRows > div');
     if (!firstRow) { showToast('Add a reminder first', 'error'); return; }
-    const message = firstRow.querySelector('.rem-message')?.value.trim();
-    const entity_id = firstRow.querySelector('.rem-entity')?.value.trim();
-    const tts_engine = firstRow.querySelector('.rem-tts-engine')?.value.trim() || 'tts.google_translate_en_com';
+    const msgEl = firstRow.querySelector('.rem-message');
+    const entEl = firstRow.querySelector('.rem-entity');
+    const ttsEl = firstRow.querySelector('.rem-tts-engine');
+    const message = msgEl && msgEl.value.trim();
+    const entity_id = entEl && entEl.value.trim();
+    const tts_engine = (ttsEl && ttsEl.value.trim()) || 'tts.google_translate_en_com';
     if (!message || !entity_id) { showToast('Fill in message and speaker', 'error'); return; }
     try {
       await API.post('/api/homeassistant/tts', { message, entity_id, tts_engine });
@@ -1286,8 +1321,10 @@
   }
 
   async function saveSlideShowSettings() {
-    const timeout = document.getElementById('slideshowTimeout')?.value || '120';
-    const interval = document.getElementById('slideshowInterval')?.value || '5';
+    const timeoutEl = document.getElementById('slideshowTimeout');
+    const intervalEl = document.getElementById('slideshowInterval');
+    const timeout = (timeoutEl && timeoutEl.value) || '120';
+    const interval = (intervalEl && intervalEl.value) || '5';
     try {
       await API.post('/api/settings/', {
         slideshow_timeout: timeout,

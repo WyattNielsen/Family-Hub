@@ -1,7 +1,7 @@
 // App shell cache. Versioned JS/CSS (?v=N) are served cache-first.
 // HTML pages are pre-cached on install and served immediately from cache.
 // API calls skip the worker completely.
-const CACHE = 'familyhub-v5';
+const CACHE = 'familyhub-v6';
 const SHELL_HTML = [
   '/',
   '/calendar.html',
@@ -18,7 +18,7 @@ self.addEventListener('install', e => {
   self.skipWaiting();
   e.waitUntil(
     caches.open(CACHE).then(cache =>
-      Promise.allSettled(SHELL_HTML.map(url => cache.add(url)))
+      Promise.all(SHELL_HTML.map(url => cache.add(url).catch(() => null)))
     )
   );
 });

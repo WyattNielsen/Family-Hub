@@ -12,9 +12,20 @@ function _bustGetCache() {
 }
 
 function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  // Stub AbortController (Android 7 polyfill) cannot cancel fetch — use Promise.race.
+  if (window.__FH_ABORT_STUB) {
+    const opts = Object.assign({}, options);
+    return Promise.race([
+      fetch(path, opts),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timed out')), timeoutMs)
+      )
+    ]);
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  return fetch(path, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+  const opts = Object.assign({}, options, { signal: ctrl.signal });
+  return fetch(path, opts).finally(() => clearTimeout(timer));
 }
 
 async function _send(path, options) {
@@ -87,7 +98,7 @@ function showToast(msg, type = '') {
 }
 
 function escapeHtml(str) {
-  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str != null ? str : '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function eventDisplayColor(event) {
@@ -536,7 +547,8 @@ function toggleAlarmPopover(evt, entityId) {
 }
 
 function closeAlarmPopover() {
-  document.getElementById('haAlarmPopover')?.remove();
+  const el = document.getElementById('haAlarmPopover');
+  if (el) el.remove();
 }
 
 function optimisticHAUpdate(entityId, newState) {
@@ -589,7 +601,10 @@ function toggleCoverPopover(evt, entityId) {
   popover.style.right = (window.innerWidth - rect.right) + 'px';
   document.body.appendChild(popover);
 
-  setTimeout(() => document.addEventListener('click', () => document.getElementById('haCoverPopover')?.remove(), { once: true }), 0);
+  setTimeout(() => document.addEventListener('click', () => {
+    const el = document.getElementById('haCoverPopover');
+    if (el) el.remove();
+  }, { once: true }), 0);
 }
 
 async function coverAction(action, entityId) {
@@ -598,7 +613,8 @@ async function coverAction(action, entityId) {
   try {
     await API.post(`/api/homeassistant/cover/${action}`, { entity_id: entityId });
     showToast(action === 'open_cover' ? '🔼 Opening garage…' : '🔽 Closing garage…', 'success');
-    document.getElementById('haCoverPopover')?.remove();
+    const coverPop = document.getElementById('haCoverPopover');
+    if (coverPop) coverPop.remove();
     optimisticHAUpdate(entityId, action === 'open_cover' ? 'opening' : 'closing');
     setTimeout(() => loadHAStatus(true), 4000);
   } catch(e) {
@@ -650,7 +666,8 @@ async function loadDashCameras(force) {
   if (!strip) return;
   try {
     const data = await API.get('/api/security/cameras', force ? { force: true } : undefined);
-    const cameras = (data.cameras || []).slice(0, 2);
+    const camLimit = window.__FH_LOW_END ? 1 : 2;
+    const cameras = (data.cameras || []).slice(0, camLimit);
     if (!cameras.length) {
       strip.style.display = 'none';
       strip.innerHTML = '';
@@ -683,7 +700,7 @@ async function loadDashCameras(force) {
           img.src = `/api/security/camera/${encodeURIComponent(cam.ha_entity_id)}/snapshot?t=${b}`;
         }
       });
-    }, 10000);
+    }, window.__FH_LOW_END ? 20000 : 10000);
   } catch(e) {}
 }
 
@@ -1040,7 +1057,8 @@ const FHRouter = (() => {
 
   function _unmountCurrent() {
     closeAlarmPopover();
-    document.getElementById('haCoverPopover')?.remove();
+    const coverPop = document.getElementById('haCoverPopover');
+    if (coverPop) coverPop.remove();
     killActiveStreams();
     onPersonFilterChange(null);
     if (_activeCleanup) {
@@ -1186,12 +1204,14 @@ const FHRouter = (() => {
       navigate(location.pathname + location.search + location.hash, { fromPopstate: true, force: true });
     });
 
-    // Stagger background prefetch of all screen templates + scripts once initial page settles
-    setTimeout(() => {
-      Object.keys(ROUTES).forEach((r, idx) => {
-        setTimeout(() => prefetch(r), idx * 120);
-      });
-    }, 900);
+    // Stagger background prefetch — skip on low-end / Android 7 (warm on hover/touch only)
+    if (!window.__FH_LOW_END) {
+      setTimeout(() => {
+        Object.keys(ROUTES).forEach((r, idx) => {
+          setTimeout(() => prefetch(r), idx * 120);
+        });
+      }, 900);
+    }
   }
 
   return { register, navigate, prefetch, currentRoute, boot };
@@ -1210,7 +1230,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHAStatus();
     loadDashCameras();
   });
-  setInterval(() => loadHAStatus(), 30000);
+  setInterval(() => { if (!document.hidden) loadHAStatus(); }, 30000);
   setInterval(() => { if (!document.hidden) loadMessageBadge(); }, 60000);
   ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
     document.addEventListener(ev, _onPersonActivity, { passive: true })

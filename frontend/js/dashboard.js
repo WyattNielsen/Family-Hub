@@ -62,7 +62,8 @@
 
   async function ackPreviewMessage(e) {
     e.preventDefault();
-    const id = document.getElementById('msgPreviewAck')?.dataset.id;
+    const ackEl = document.getElementById('msgPreviewAck');
+    const id = ackEl && ackEl.dataset.id;
     if (!id) return;
     try {
       await API.delete('/api/messages/' + id);
@@ -92,7 +93,10 @@
     } catch (_) {}
     document.getElementById('composeBody').value = '';
     document.getElementById('composeModal').style.display = 'flex';
-    setTimeout(() => document.getElementById('composeBody')?.focus(), 100);
+    setTimeout(() => {
+      const body = document.getElementById('composeBody');
+      if (body) body.focus();
+    }, 100);
   }
 
   function closeComposeModal() {
@@ -730,7 +734,7 @@
     });
     afterPagePaint(loadStocks);
 
-    _stocksTimer = setInterval(loadStocks, 5 * 60 * 1000);
+    _stocksTimer = setInterval(() => { if (!document.hidden) loadStocks(); }, 5 * 60 * 1000);
     _refreshTimer = setInterval(() => {
       if (document.hidden) return;
       setDashboardDate();

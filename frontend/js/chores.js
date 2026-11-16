@@ -272,7 +272,7 @@
     const viewMembers = person === 'all' ? members : members.filter(m => String(m.id) === String(person));
     let cols = '';
     for (const m of viewMembers) {
-      if (!byMember[m.id]?.length) continue;
+      if (!(byMember[m.id] && byMember[m.id].length)) continue;
       cols += `
         <div class="chore-column">
           <div class="chore-column-header" style="border-bottom:3px solid ${m.color}">
@@ -299,7 +299,8 @@
     const color = c.member_color || '#9AA0B8';
     const isDone = c.completed;
     const rec = c.recurrence ? `🔁 ${c.recurrence === 'custom_days' ? c.recurrence_days : c.recurrence}` : '';
-    const tod = c.time_of_day ? `<span class="chore-tod chore-tod-${c.time_of_day}">${TOD_CONFIG[c.time_of_day]?.emoji} ${c.time_of_day}</span>` : '';
+    const todCfg = c.time_of_day ? TOD_CONFIG[c.time_of_day] : null;
+    const tod = c.time_of_day ? `<span class="chore-tod chore-tod-${c.time_of_day}">${todCfg && todCfg.emoji} ${c.time_of_day}</span>` : '';
     return `
       <div class="chore-item ${isDone ? 'completed' : ''}" id="chore-${c.id}" style="--event:${color}">
         <div class="chore-check ${isDone ? 'checked' : ''}"
@@ -413,7 +414,8 @@
       : null;
     const checkedMembers = [...document.querySelectorAll('#multiAssignCheckboxes input:checked')].map(cb => parseInt(cb.value, 10));
     const singleAssign = document.getElementById('choreAssigned').value || null;
-    const timeOfDay = document.querySelector('input[name="timeOfDay"]:checked')?.value || null;
+    const todChecked = document.querySelector('input[name="timeOfDay"]:checked');
+    const timeOfDay = (todChecked && todChecked.value) || null;
     const payload = {
       title,
       description: document.getElementById('choreDesc').value.trim(),
