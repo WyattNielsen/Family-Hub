@@ -13,15 +13,19 @@ function _bustGetCache() {
 
 function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      if (ctrl && ctrl.abort) {
+        try { ctrl.abort(); } catch (_) {}
+      }
+      reject(new Error('Request timeout'));
+    }, timeoutMs);
+  });
   const opts = ctrl ? Object.assign({}, options, { signal: ctrl.signal }) : options;
-  const p = fetch(path, opts);
-  if (p.finally) {
-    return p.finally(() => { if (timer) clearTimeout(timer); });
-  }
-  return p.then(
-    r => { if (timer) clearTimeout(timer); return r; },
-    err => { if (timer) clearTimeout(timer); throw err; }
+  return Promise.race([fetch(path, opts), timeoutPromise]).then(
+    r => { clearTimeout(timer); return r; },
+    err => { clearTimeout(timer); throw err; }
   );
 }
 

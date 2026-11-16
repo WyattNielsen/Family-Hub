@@ -216,7 +216,6 @@ def _advance_recurring_to_today(conn):
         GROUP BY title, COALESCE(assigned_to, -1)
         HAVING date(MAX(due_date)) < date('now')
     """).fetchall()
-    created = False
     for row in rows:
         chore = dict(row)
         chore["due_date"] = chore["max_due"]
@@ -262,9 +261,7 @@ def _advance_recurring_to_today(conn):
                 """, (chore["title"], chore.get("description"), chore["assigned_to"],
                       next_due_str, chore["recurrence"], chore.get("recurrence_days"),
                       interval, chore["points"], chore.get("time_of_day")))
-                created = True
             chore["due_date"] = next_due_str
-    if created:
         conn.commit()
 
 def _create_next_recurrence(conn, chore: dict):
