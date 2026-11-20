@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
+from datetime import date
 import asyncio
 import os
 
@@ -40,12 +41,24 @@ async def _reminder_loop():
         except Exception as e:
             print(f"Reminder loop error: {e}")
 
+_chores_advanced_on = None
+
+async def _advance_chores_if_new_day():
+    """New occurrences only appear when the date changes, so run once per day.
+    A failed run leaves the date unset and is retried on the next check."""
+    global _chores_advanced_on
+    today = date.today()
+    if _chores_advanced_on == today:
+        return
+    await asyncio.to_thread(chores.advance_recurring_chores)
+    _chores_advanced_on = today
+
 async def _chore_advance_loop():
     """Catch up recurring chores away from request handlers."""
     while True:
         try:
             await asyncio.sleep(60)
-            await asyncio.to_thread(chores.advance_recurring_chores)
+            await _advance_chores_if_new_day()
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -71,7 +84,7 @@ async def _auto_sync_loop():
 async def lifespan(app: FastAPI):
     init_db()
     try:
-        await asyncio.to_thread(chores.advance_recurring_chores)
+        await _advance_chores_if_new_day()
     except Exception as e:
         print(f"Chore advance error: {e}")
     sync_task = asyncio.create_task(_auto_sync_loop())

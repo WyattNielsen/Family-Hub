@@ -30,41 +30,43 @@ async def get_settings():
 @router.post("/")
 def update_settings(payload: dict):
     conn = get_db()
-    for key, value in payload.items():
-        if key in WRITE_ONLY_KEYS:
-            # null clears. Blank or the old mask leaves the stored secret alone,
-            # so saving the rest of the form cannot wipe it.
-            if value is None:
-                conn.execute("DELETE FROM settings WHERE key=?", (key,))
+    try:
+        for key, value in payload.items():
+            if key in WRITE_ONLY_KEYS:
+                # null clears. Blank or the old mask leaves the stored secret alone,
+                # so saving the rest of the form cannot wipe it.
+                if value is None:
+                    conn.execute("DELETE FROM settings WHERE key=?", (key,))
+                    continue
+                text = str(value).strip()
+                if not text or text == MASK_PLACEHOLDER:
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (key, text),
+                )
                 continue
-            text = str(value).strip()
-            if not text or text == MASK_PLACEHOLDER:
+            # Flags are derived. Don't persist them if a client echoes the GET body.
+            if key.endswith("_set") and key[: -len("_set")] in WRITE_ONLY_KEYS:
                 continue
             conn.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (key, text),
+                (key, str(value)),
             )
-            continue
-        # Flags are derived. Don't persist them if a client echoes the GET body.
-        if key.endswith("_set") and key[: -len("_set")] in WRITE_ONLY_KEYS:
-            continue
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            (key, str(value)),
-        )
-    conn.commit()
-    conn.close()
-    invalidate_settings_cache()
-    if "stock_symbols" in payload:
-        from routers import stocks
-        stocks._quote_cache.clear()
-    if any(k in payload for k in ("weather_zip", "weather_lat", "weather_lon")):
-        from routers import weather
-        weather._forecast_cache["payload"] = None
-    if any(k in payload for k in ("ha_url", "ha_token", "ha_entities")):
-        from routers import homeassistant
-        homeassistant.invalidate_ha_cache()
-    return {"ok": True}
+        conn.commit()
+        invalidate_settings_cache()
+        if "stock_symbols" in payload:
+            from routers import stocks
+            stocks._quote_cache.clear()
+        if any(k in payload for k in ("weather_zip", "weather_lat", "weather_lon")):
+            from routers import weather
+            weather._forecast_cache["payload"] = None
+        if any(k in payload for k in ("ha_url", "ha_token", "ha_entities")):
+            from routers import homeassistant
+            homeassistant.invalidate_ha_cache()
+        return {"ok": True}
+    finally:
+        conn.close()
 
 
 @router.get("/{key}")

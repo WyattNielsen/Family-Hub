@@ -136,11 +136,13 @@ async def get_cameras():
 def save_cameras(data: dict):
     cameras = data.get("cameras", [])
     conn = get_db()
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('cameras', ?)",
-        (json.dumps(cameras),),
-    )
-    conn.commit()
-    conn.close()
-    invalidate_settings_cache()
-    return {"ok": True}
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('cameras', ?)",
+            (json.dumps(cameras),),
+        )
+        conn.commit()
+        invalidate_settings_cache()
+        return {"ok": True}
+    finally:
+        conn.close()

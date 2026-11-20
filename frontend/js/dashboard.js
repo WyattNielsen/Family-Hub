@@ -743,14 +743,18 @@
       loadMeals();
       loadShoppingStrip();
       loadWeather();
-      loadMessagePreview();
-      loadMessageBadge();
     }, 5 * 60 * 1000);
+    document.addEventListener('fh:messages', _onMessages);
 
     return unmount;
   }
 
+  function _onMessages(e) {
+    if (document.getElementById('msgPreviewContent')) _renderMessagePreviewList(e.detail);
+  }
+
   function unmount() {
+    document.removeEventListener('fh:messages', _onMessages);
     clearInterval(_stocksTimer);
     clearInterval(_refreshTimer);
     _stocksTimer = null;

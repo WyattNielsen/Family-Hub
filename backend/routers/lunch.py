@@ -3,38 +3,28 @@ from datetime import datetime
 import pytz
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
-from database import get_db
+from database import get_settings_map
 
 router = APIRouter()
 
 _cache = {}
 
-def get_lunch_config():
-    """Read lunch settings from DB, falling back to BCPS defaults."""
+def _settings() -> dict:
     try:
-        conn = get_db()
-        rows = conn.execute(
-            "SELECT key, value FROM settings WHERE key IN ('lunch_district','lunch_school_slug','lunch_menu_type')"
-        ).fetchall()
-        conn.close()
-        s = {r["key"]: r["value"] for r in rows}
+        return get_settings_map()
     except Exception:
-        s = {}
+        return {}
+
+def get_lunch_config():
+    """Read lunch settings, falling back to BCPS defaults."""
+    s = _settings()
     district = s.get("lunch_district") or "bcps"
     slug = s.get("lunch_school_slug") or "bcps-weekly-menus"
     menu_type = s.get("lunch_menu_type") or "weekly-menus"
     return district, slug, menu_type
 
 def get_app_tz() -> str:
-    try:
-        conn = get_db()
-        row = conn.execute("SELECT value FROM settings WHERE key = 'timezone'").fetchone()
-        conn.close()
-        if row and row["value"]:
-            return row["value"]
-    except Exception:
-        pass
-    return "America/New_York"
+    return _settings().get("timezone") or "America/New_York"
 
 def get_today_local():
     tz = pytz.timezone(get_app_tz())

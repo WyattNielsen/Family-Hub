@@ -18,53 +18,58 @@ class MessageCreate(BaseModel):
 def get_messages():
     global _last_expire_check
     conn = get_db()
-    # A write on every page view locks the database while the rest of the
-    # page is also reading. Expire at most once a minute, and only if a row
-    # is actually old.
-    now = time.monotonic()
-    if now - _last_expire_check > 60:
-        cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-        expired = conn.execute(
-            "SELECT 1 FROM messages WHERE created_at < ? LIMIT 1", (cutoff,)
-        ).fetchone()
-        if expired:
-            conn.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
-            conn.commit()
-        _last_expire_check = now
-    rows = conn.execute("""
-        SELECT msg.id, msg.body, msg.created_at, msg.recipient_id,
-               m.id as member_id, m.name, m.color, m.avatar, m.avatar_photo,
-               r.name as recipient_name, r.color as recipient_color,
-               r.avatar as recipient_avatar, r.avatar_photo as recipient_avatar_photo
-        FROM messages msg
-        LEFT JOIN members m ON m.id = msg.author_id
-        LEFT JOIN members r ON r.id = msg.recipient_id
-        ORDER BY msg.created_at DESC
-    """).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        # A write on every page view locks the database while the rest of the
+        # page is also reading. Expire at most once a minute, and only if a row
+        # is actually old.
+        now = time.monotonic()
+        if now - _last_expire_check > 60:
+            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            expired = conn.execute(
+                "SELECT 1 FROM messages WHERE created_at < ? LIMIT 1", (cutoff,)
+            ).fetchone()
+            if expired:
+                conn.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
+                conn.commit()
+            _last_expire_check = now
+        rows = conn.execute("""
+            SELECT msg.id, msg.body, msg.created_at, msg.recipient_id,
+                   m.id as member_id, m.name, m.color, m.avatar, m.avatar_photo,
+                   r.name as recipient_name, r.color as recipient_color,
+                   r.avatar as recipient_avatar, r.avatar_photo as recipient_avatar_photo
+            FROM messages msg
+            LEFT JOIN members m ON m.id = msg.author_id
+            LEFT JOIN members r ON r.id = msg.recipient_id
+            ORDER BY msg.created_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 @router.post("/")
 def create_message(payload: MessageCreate):
     if not payload.body.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     conn = get_db()
-    if payload.recipient_id is not None:
-        if not conn.execute("SELECT id FROM members WHERE id=?", (payload.recipient_id,)).fetchone():
-            conn.close()
-            raise HTTPException(status_code=400, detail="Unknown person")
-    conn.execute(
-        "INSERT INTO messages (author_id, body, recipient_id) VALUES (?, ?, ?)",
-        (payload.author_id, payload.body.strip(), payload.recipient_id)
-    )
-    conn.commit()
-    conn.close()
-    return {"ok": True}
+    try:
+        if payload.recipient_id is not None:
+            if not conn.execute("SELECT id FROM members WHERE id=?", (payload.recipient_id,)).fetchone():
+                raise HTTPException(status_code=400, detail="Unknown person")
+        conn.execute(
+            "INSERT INTO messages (author_id, body, recipient_id) VALUES (?, ?, ?)",
+            (payload.author_id, payload.body.strip(), payload.recipient_id)
+        )
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
 
 @router.delete("/{msg_id}")
 def delete_message(msg_id: int):
     conn = get_db()
-    conn.execute("DELETE FROM messages WHERE id=?", (msg_id,))
-    conn.commit()
-    conn.close()
-    return {"ok": True}
+    try:
+        conn.execute("DELETE FROM messages WHERE id=?", (msg_id,))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()

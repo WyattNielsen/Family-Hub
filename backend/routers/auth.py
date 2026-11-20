@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
 import outbound
+import asyncio
 import os
 import secrets
 import urllib.parse
@@ -55,8 +56,9 @@ async def google_callback_account(code: str = Query(...), state: str = Query(...
     redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/account"
     tokens = await _exchange_code(code, redirect_uri)
     email = await _get_google_email(tokens["access_token"])
-    account_id = _store_account_tokens(
-        tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email
+    account_id = await asyncio.to_thread(
+        _store_account_tokens,
+        tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email,
     )
     return RedirectResponse(f"{APP_BASE_URL}/settings.html?connected=account&id={account_id}")
 
@@ -82,7 +84,10 @@ async def google_callback_photos(code: str = Query(...), state: str = Query(...)
     redirect_uri = f"{APP_BASE_URL}/api/auth/google/callback/photos"
     tokens = await _exchange_code(code, redirect_uri)
     email = await _get_google_email(tokens["access_token"])
-    _store_photos_tokens(tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email)
+    await asyncio.to_thread(
+        _store_photos_tokens,
+        tokens["access_token"], tokens.get("refresh_token"), tokens.get("expires_in", 3600), email,
+    )
     return RedirectResponse(f"{APP_BASE_URL}/settings.html?connected=photos")
 
 
@@ -115,7 +120,8 @@ async def import_google_tokens(
 
     account_id = None
     if payload.target == "account":
-        account_id = _store_account_tokens(
+        account_id = await asyncio.to_thread(
+            _store_account_tokens,
             payload.access_token,
             payload.refresh_token,
             payload.expires_in,
@@ -123,7 +129,10 @@ async def import_google_tokens(
             label=payload.label,
         )
     else:
-        _store_photos_tokens(payload.access_token, payload.refresh_token, payload.expires_in, email)
+        await asyncio.to_thread(
+            _store_photos_tokens,
+            payload.access_token, payload.refresh_token, payload.expires_in, email,
+        )
 
     return {
         "ok": True,
@@ -135,23 +144,27 @@ async def import_google_tokens(
 @router.delete("/google/disconnect/photos")
 def disconnect_photos():
     conn = get_db()
-    conn.execute("DELETE FROM photos_auth")
-    conn.execute("DELETE FROM photos_cache")
-    conn.commit()
-    conn.close()
-    return {"ok": True}
+    try:
+        conn.execute("DELETE FROM photos_auth")
+        conn.execute("DELETE FROM photos_cache")
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
 
 @router.get("/google/photos/status")
 def get_photos_status():
     conn = get_db()
-    auth = conn.execute("SELECT google_email FROM photos_auth LIMIT 1").fetchone()
-    count = conn.execute("SELECT COUNT(*) as c FROM photos_cache").fetchone()
-    conn.close()
-    return {
-        "connected": bool(auth),
-        "email": auth["google_email"] if auth else None,
-        "cached_photos": count["c"] if count else 0
-    }
+    try:
+        auth = conn.execute("SELECT google_email FROM photos_auth LIMIT 1").fetchone()
+        count = conn.execute("SELECT COUNT(*) as c FROM photos_cache").fetchone()
+        return {
+            "connected": bool(auth),
+            "email": auth["google_email"] if auth else None,
+            "cached_photos": count["c"] if count else 0
+        }
+    finally:
+        conn.close()
 
 def _token_expiry(expires_in: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
@@ -168,55 +181,59 @@ def _store_account_tokens(
     expiry = _token_expiry(expires_in)
     email = (email or "").strip()
     conn = get_db()
-    existing = None
-    if email:
-        existing = conn.execute(
-            "SELECT id FROM calendar_accounts WHERE provider='google' AND email=?",
-            (email,),
-        ).fetchone()
-    if existing:
-        conn.execute(
-            """UPDATE calendar_accounts
-               SET access_token=?, refresh_token=COALESCE(?, refresh_token),
-                   token_expiry=?, email=?, label=COALESCE(?, label),
-                   updated_at=datetime('now')
-               WHERE id=?""",
-            (access_token, refresh_token, expiry, email, label, existing["id"]),
-        )
-        account_id = existing["id"]
-    else:
-        cur = conn.execute(
-            """INSERT INTO calendar_accounts
-               (provider, email, label, access_token, refresh_token, token_expiry)
-               VALUES ('google', ?, ?, ?, ?, ?)""",
-            (email or None, label or email or "Google", access_token, refresh_token, expiry),
-        )
-        account_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return account_id
+    try:
+        existing = None
+        if email:
+            existing = conn.execute(
+                "SELECT id FROM calendar_accounts WHERE provider='google' AND email=?",
+                (email,),
+            ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE calendar_accounts
+                   SET access_token=?, refresh_token=COALESCE(?, refresh_token),
+                       token_expiry=?, email=?, label=COALESCE(?, label),
+                       updated_at=datetime('now')
+                   WHERE id=?""",
+                (access_token, refresh_token, expiry, email, label, existing["id"]),
+            )
+            account_id = existing["id"]
+        else:
+            cur = conn.execute(
+                """INSERT INTO calendar_accounts
+                   (provider, email, label, access_token, refresh_token, token_expiry)
+                   VALUES ('google', ?, ?, ?, ?, ?)""",
+                (email or None, label or email or "Google", access_token, refresh_token, expiry),
+            )
+            account_id = cur.lastrowid
+        conn.commit()
+        return account_id
+    finally:
+        conn.close()
 
 
 def _store_photos_tokens(access_token: str, refresh_token: Optional[str], expires_in: int, email: str) -> None:
     expiry = _token_expiry(expires_in)
     conn = get_db()
-    existing = conn.execute("SELECT id FROM photos_auth LIMIT 1").fetchone()
-    if existing:
-        conn.execute(
-            """UPDATE photos_auth
-               SET google_access_token=?, google_refresh_token=COALESCE(?, google_refresh_token),
-                   google_token_expiry=?, google_email=?, updated_at=datetime('now')""",
-            (access_token, refresh_token, expiry, email),
-        )
-    else:
-        conn.execute(
-            """INSERT INTO photos_auth
-               (google_access_token, google_refresh_token, google_token_expiry, google_email)
-               VALUES (?, ?, ?, ?)""",
-            (access_token, refresh_token, expiry, email),
-        )
-    conn.commit()
-    conn.close()
+    try:
+        existing = conn.execute("SELECT id FROM photos_auth LIMIT 1").fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE photos_auth
+                   SET google_access_token=?, google_refresh_token=COALESCE(?, google_refresh_token),
+                       google_token_expiry=?, google_email=?, updated_at=datetime('now')""",
+                (access_token, refresh_token, expiry, email),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO photos_auth
+                   (google_access_token, google_refresh_token, google_token_expiry, google_email)
+                   VALUES (?, ?, ?, ?)""",
+                (access_token, refresh_token, expiry, email),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 async def _exchange_code(code: str, redirect_uri: str) -> dict:

@@ -18,6 +18,17 @@ except ImportError:  # pragma: no cover
     recurring_ical_events = None
 
 ICLOUD_CALDAV_URL = "https://caldav.icloud.com/"
+# caldav has no default timeout. A stalled iCloud request would otherwise
+# hold its worker thread forever.
+CALDAV_TIMEOUT = 20
+
+
+def _dav_client(apple_id: str, app_password: str):
+    from caldav import DAVClient
+
+    return DAVClient(
+        url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=CALDAV_TIMEOUT
+    )
 
 
 def normalize_ics_url(url: str) -> str:
@@ -143,9 +154,7 @@ async def fetch_ics_events(url: str, color: Optional[str] = None) -> list[dict]:
 
 
 def list_icloud_calendars(apple_id: str, app_password: str) -> list[dict]:
-    from caldav import DAVClient
-
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = _dav_client(apple_id, app_password)
     principal = client.principal()
     calendars = []
     for cal in principal.calendars():
@@ -164,9 +173,7 @@ def list_icloud_calendars(apple_id: str, app_password: str) -> list[dict]:
 
 
 def fetch_caldav_events(apple_id: str, app_password: str, calendar_url: str, color: Optional[str] = None) -> list[dict]:
-    from caldav import DAVClient
-
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password, timeout=20)
+    client = _dav_client(apple_id, app_password)
     # Re-bind to the specific calendar URL
     cal = client.calendar(url=calendar_url)
     start, end = sync_window()
@@ -289,11 +296,10 @@ def _vevent_ical(event_row: dict, uid: str) -> bytes:
 def create_caldav_event(apple_id: str, app_password: str, calendar_url: str, event_row: dict) -> str:
     """Create a CalDAV event; returns the UID used as the remote id."""
     import uuid
-    from caldav import DAVClient
 
     uid = str(uuid.uuid4())
     ical = _vevent_ical(event_row, uid)
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = _dav_client(apple_id, app_password)
     cal = client.calendar(url=calendar_url)
     cal.save_event(ical)
     return uid
@@ -303,9 +309,7 @@ def update_caldav_event(
     apple_id: str, app_password: str, calendar_url: str, uid: str, event_row: dict
 ) -> bool:
     """Update an existing CalDAV event by UID. Returns True on success."""
-    from caldav import DAVClient
-
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = _dav_client(apple_id, app_password)
     cal = client.calendar(url=calendar_url)
     try:
         existing = cal.event_by_uid(uid)
@@ -324,9 +328,7 @@ def update_caldav_event(
 
 def delete_caldav_event(apple_id: str, app_password: str, calendar_url: str, uid: str) -> bool:
     """Delete a CalDAV event by UID. Returns True if deleted."""
-    from caldav import DAVClient
-
-    client = DAVClient(url=ICLOUD_CALDAV_URL, username=apple_id, password=app_password)
+    client = _dav_client(apple_id, app_password)
     cal = client.calendar(url=calendar_url)
     try:
         existing = cal.event_by_uid(uid)

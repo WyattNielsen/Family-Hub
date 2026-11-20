@@ -1,6 +1,9 @@
 (function () {
   let _members = [];
-  let _msgTimer = null;
+
+  function _onMessages(e) {
+    if (FHRouter.currentRoute() === '/messages.html') _paintMessages(e.detail);
+  }
 
   function timeAgo(isoStr) {
     const diff = Date.now() - new Date(isoStr + 'Z').getTime();
@@ -150,9 +153,7 @@
     });
     loadMemberOptions();
     loadMessages();
-    _msgTimer = setInterval(() => {
-      if (!document.hidden) loadMessages();
-    }, 60000);
+    document.addEventListener('fh:messages', _onMessages);
 
     document.getElementById('msgBody').addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') postMessage();
@@ -162,8 +163,7 @@
   }
 
   function unmount() {
-    clearInterval(_msgTimer);
-    _msgTimer = null;
+    document.removeEventListener('fh:messages', _onMessages);
   }
 
   FHRouter.register('/messages.html', { mount, unmount });

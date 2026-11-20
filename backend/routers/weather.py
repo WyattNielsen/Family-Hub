@@ -9,10 +9,8 @@ router = APIRouter()
 
 # Open-Meteo changes slowly. A page load on every screen was hitting it each time.
 _FORECAST_TTL = 10 * 60
-_FORECAST_STALE_TTL = 2 * 3600
 _forecast_cache = {"key": None, "at": 0.0, "payload": None}
 _forecast_lock = asyncio.Lock()
-_forecast_bg: asyncio.Task | None = None
 
 WMO_CONDITIONS = {
     0:  ("Clear", "☀️"),
@@ -184,21 +182,13 @@ async def _do_fetch_forecast(lat, lon, city: str, key: tuple) -> dict:
 
 
 async def _forecast(lat, lon, city: str) -> dict:
-    global _forecast_bg
     key = (str(lat), str(lon))
-    now = time.monotonic()
-    cached = _forecast_cache
-    if cached["payload"] is not None and cached["key"] == key:
-        age = now - cached["at"]
-        if age < _FORECAST_TTL:
-            return cached["payload"]
-        if age < _FORECAST_STALE_TTL:
-            if _forecast_bg is None or _forecast_bg.done():
-                _forecast_bg = asyncio.create_task(_do_fetch_forecast(lat, lon, city, key))
-            return cached["payload"]
-
     async with _forecast_lock:
         cached = _forecast_cache
-        if cached["payload"] is not None and cached["key"] == key and time.monotonic() - cached["at"] < _FORECAST_TTL:
+        same_place = cached["payload"] is not None and cached["key"] == key
+        if same_place and time.monotonic() - cached["at"] < _FORECAST_TTL:
             return cached["payload"]
-        return await _do_fetch_forecast(lat, lon, city, key)
+        payload = await _do_fetch_forecast(lat, lon, city, key)
+        if payload.get("error") and same_place:
+            return cached["payload"]
+        return payload

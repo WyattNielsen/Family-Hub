@@ -120,14 +120,16 @@ def save_line_override(school_id, breakfast, lunch):
         current["Lunch"] = lunch
     data[school_id] = current
     conn = get_db()
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('schoolcafe_lines', ?)",
-        (json.dumps(data),),
-    )
-    conn.commit()
-    conn.close()
-    invalidate_settings_cache()
-    return current
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('schoolcafe_lines', ?)",
+            (json.dumps(data),),
+        )
+        conn.commit()
+        invalidate_settings_cache()
+        return current
+    finally:
+        conn.close()
 
 
 def monday_of(iso_date: str) -> str:

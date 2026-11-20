@@ -40,18 +40,20 @@ def _add_days(iso_date: str, days: int) -> str:
 
 def _members(member_id: Optional[int]):
     conn = get_db()
-    query = (
-        "SELECT id, name, color, avatar, avatar_photo, school_id, school_name "
-        "FROM members WHERE school_id IS NOT NULL AND school_id != ''"
-    )
-    params = []
-    if member_id:
-        query += " AND id = ?"
-        params.append(member_id)
-    query += " ORDER BY sort_order, name, id"
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        query = (
+            "SELECT id, name, color, avatar, avatar_photo, school_id, school_name "
+            "FROM members WHERE school_id IS NOT NULL AND school_id != ''"
+        )
+        params = []
+        if member_id:
+            query += " AND id = ?"
+            params.append(member_id)
+        query += " ORDER BY sort_order, name, id"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 async def _school_block(member: dict, school_date: str):
@@ -214,17 +216,19 @@ def meal_history(before: Optional[str] = None, limit: int = 80):
     cutoff = _valid_date(before) if before else today
     limit = max(1, min(int(limit or 80), 200))
     conn = get_db()
-    rows = conn.execute(
-        """
-        SELECT meal_date, title, notes FROM family_meals
-        WHERE meal_date < ? AND trim(title) != ''
-        ORDER BY meal_date DESC
-        LIMIT ?
-        """,
-        (cutoff, limit),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            """
+            SELECT meal_date, title, notes FROM family_meals
+            WHERE meal_date < ? AND trim(title) != ''
+            ORDER BY meal_date DESC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 @router.put("/dinner")
@@ -233,44 +237,47 @@ def save_dinner(body: DinnerIn):
     title = (body.title or "").strip()
     notes = (body.notes or "").strip()
     conn = get_db()
-    if not title:
-        conn.execute("DELETE FROM family_meals WHERE meal_date = ?", (meal_date,))
+    try:
+        if not title:
+            conn.execute("DELETE FROM family_meals WHERE meal_date = ?", (meal_date,))
+            conn.commit()
+            return {"ok": True, "deleted": True, "meal_date": meal_date}
+        conn.execute(
+            """
+            INSERT INTO family_meals (meal_date, title, notes, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(meal_date) DO UPDATE SET
+                title = excluded.title,
+                notes = excluded.notes,
+                updated_at = excluded.updated_at
+            """,
+            (meal_date, title, notes),
+        )
         conn.commit()
+        return {"ok": True, "meal_date": meal_date, "title": title, "notes": notes}
+    finally:
         conn.close()
-        return {"ok": True, "deleted": True, "meal_date": meal_date}
-    conn.execute(
-        """
-        INSERT INTO family_meals (meal_date, title, notes, updated_at)
-        VALUES (?, ?, ?, datetime('now'))
-        ON CONFLICT(meal_date) DO UPDATE SET
-            title = excluded.title,
-            notes = excluded.notes,
-            updated_at = excluded.updated_at
-        """,
-        (meal_date, title, notes),
-    )
-    conn.commit()
-    conn.close()
-    return {"ok": True, "meal_date": meal_date, "title": title, "notes": notes}
 
 
 @router.get("/requests")
 def list_requests(member_id: Optional[int] = Query(None)):
     conn = get_db()
-    query = """
-        SELECT r.id, r.title, r.created_at, r.member_id,
-               m.name, m.color, m.avatar, m.avatar_photo
-        FROM meal_requests r
-        JOIN members m ON m.id = r.member_id
-    """
-    params = []
-    if member_id:
-        query += " WHERE r.member_id = ?"
-        params.append(member_id)
-    query += " ORDER BY r.id"
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        query = """
+            SELECT r.id, r.title, r.created_at, r.member_id,
+                   m.name, m.color, m.avatar, m.avatar_photo
+            FROM meal_requests r
+            JOIN members m ON m.id = r.member_id
+        """
+        params = []
+        if member_id:
+            query += " WHERE r.member_id = ?"
+            params.append(member_id)
+        query += " ORDER BY r.id"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 @router.post("/requests")
@@ -279,24 +286,27 @@ def create_request(body: RequestIn):
     if not title:
         raise HTTPException(status_code=400, detail="Say what they want")
     conn = get_db()
-    member = conn.execute("SELECT id FROM members WHERE id=?", (body.member_id,)).fetchone()
-    if not member:
+    try:
+        member = conn.execute("SELECT id FROM members WHERE id=?", (body.member_id,)).fetchone()
+        if not member:
+            raise HTTPException(status_code=400, detail="Unknown person")
+        cur = conn.execute(
+            "INSERT INTO meal_requests (member_id, title) VALUES (?, ?)",
+            (body.member_id, title),
+        )
+        conn.commit()
+        new_id = cur.lastrowid
+        return {"ok": True, "id": new_id}
+    finally:
         conn.close()
-        raise HTTPException(status_code=400, detail="Unknown person")
-    cur = conn.execute(
-        "INSERT INTO meal_requests (member_id, title) VALUES (?, ?)",
-        (body.member_id, title),
-    )
-    conn.commit()
-    new_id = cur.lastrowid
-    conn.close()
-    return {"ok": True, "id": new_id}
 
 
 @router.delete("/requests/{request_id}")
 def delete_request(request_id: int):
     conn = get_db()
-    conn.execute("DELETE FROM meal_requests WHERE id=?", (request_id,))
-    conn.commit()
-    conn.close()
-    return {"ok": True}
+    try:
+        conn.execute("DELETE FROM meal_requests WHERE id=?", (request_id,))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()

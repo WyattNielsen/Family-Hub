@@ -421,6 +421,8 @@ async function loadMessageBadge() {
       ? msgs.length
       : msgs.filter(m => !m.recipient_id || String(m.recipient_id) === String(person)).length;
     paintCountBadge(nav, navCount);
+    // The badge poll is the only messages poll. Screens that list messages listen for this.
+    document.dispatchEvent(new CustomEvent('fh:messages', { detail: msgs }));
   } catch(e) {}
 }
 
