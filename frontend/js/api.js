@@ -666,12 +666,12 @@ window.addEventListener('pagehide', killActiveStreams);
 window.addEventListener('beforeunload', killActiveStreams);
 
 function _snapBucket() {
-  return Math.floor(Date.now() / 10000);
+  return Math.floor(Date.now() / 60000);
 }
 
 async function loadDashCameras(force) {
   const strip = document.getElementById('dashCameras');
-  if (!strip) return;
+  if (!strip || document.hidden) return;
   try {
     const data = await API.get('/api/security/cameras', force ? { force: true } : undefined);
     const cameras = (data.cameras || []).slice(0, 2);
@@ -707,7 +707,7 @@ async function loadDashCameras(force) {
           img.src = `/api/security/camera/${encodeURIComponent(cam.ha_entity_id)}/snapshot?t=${b}`;
         }
       });
-    }, 10000);
+    }, 60000);
   } catch(e) {}
 }
 
@@ -750,6 +750,21 @@ document.addEventListener('fullscreenchange', _updateFullscreenBtn);
 
 function afterPagePaint(fn) {
   requestAnimationFrame(() => setTimeout(fn, 0));
+}
+
+function afterPageVisible(fn, delay) {
+  setTimeout(() => {
+    if (!document.hidden) {
+      fn();
+      return;
+    }
+    const onVisible = () => {
+      if (document.hidden) return;
+      document.removeEventListener('visibilitychange', onVisible);
+      fn();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+  }, delay);
 }
 
 let _weatherForecast = null;
@@ -1211,12 +1226,6 @@ const FHRouter = (() => {
       navigate(location.pathname + location.search + location.hash, { fromPopstate: true, force: true });
     });
 
-    // Stagger background prefetch of all screen templates + scripts once initial page settles
-    setTimeout(() => {
-      Object.keys(ROUTES).forEach((r, idx) => {
-        setTimeout(() => prefetch(r), idx * 150);
-      });
-    }, 4000);
   }
 
   return { register, navigate, prefetch, currentRoute, boot };
@@ -1231,9 +1240,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSidebarMembers();
   FHRouter.boot();
   afterPagePaint(() => {
-    loadWeather();
-    loadHAStatus();
-    loadDashCameras();
+    afterPageVisible(loadWeather, 1500);
+    afterPageVisible(loadHAStatus, 3000);
+    afterPageVisible(loadDashCameras, 5000);
   });
   setInterval(() => loadHAStatus(), 30000);
   setInterval(() => { if (!document.hidden) loadMessageBadge(); }, 60000);

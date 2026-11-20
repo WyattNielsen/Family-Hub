@@ -260,24 +260,28 @@ input, select, textarea { font-family: var(--font); }
 
 /* ── Dashboard 3-column grid ───────────────────────────────── */
 .dashboard-grid {
+  display: flex;
+  flex-wrap: wrap;
   display: grid;
   grid-template-columns: 2fr 1.5fr 1.5fr;
   gap: 18px;
   flex: 1;
   min-height: 0;
 }
+.dashboard-col { flex: 1 1 30%; }
 @media (max-width: 1400px) {
   .dashboard-grid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-rows: repeat(2, minmax(0, 1fr));
   }
-  .dashboard-col { min-width: 0; }
+  .dashboard-col { flex-basis: 45%; min-width: 0; }
 }
 @media (max-width: 1100px) {
   .dashboard-grid {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(3, minmax(0, 1fr));
   }
+  .dashboard-col { flex-basis: 100%; }
 }
 .dashboard-col {
   display: flex;
@@ -287,6 +291,13 @@ input, select, textarea { font-family: var(--font); }
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
   padding-right: 4px;
+}
+@supports not (display: grid) {
+  .dashboard-grid {
+    gap: 0;
+    margin: -9px;
+  }
+  .dashboard-col { margin: 9px; }
 }
 
 .header-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -1138,6 +1149,17 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
   border-radius: 6px;
+}
+@media (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background: var(--border);
+  }
+  .modal-overlay,
+  .slideshow-btn {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 .sk-card {
   background: var(--surface);

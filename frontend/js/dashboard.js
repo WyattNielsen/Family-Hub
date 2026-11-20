@@ -5,6 +5,36 @@
   let _stocksTimer = null;
   let _refreshTimer = null;
   let _cachedStocks = null;
+  let _cachedSchoolMenus = null;
+  let _schoolLoadedAt = 0;
+  let _schoolTimer = null;
+  let _deferredTimers = [];
+  let _pendingDeferred = [];
+
+  function runDashboardTask(fn) {
+    if (FHRouter.currentRoute() !== '/') return;
+    if (document.hidden) {
+      if (!_pendingDeferred.includes(fn)) _pendingDeferred.push(fn);
+      return;
+    }
+    fn();
+  }
+
+  function scheduleDashboard(fn, delay) {
+    const timer = setTimeout(() => {
+      _deferredTimers = _deferredTimers.filter(t => t !== timer);
+      runDashboardTask(fn);
+    }, delay);
+    _deferredTimers.push(timer);
+    return timer;
+  }
+
+  function flushDashboardTasks() {
+    if (document.hidden || FHRouter.currentRoute() !== '/') return;
+    const pending = _pendingDeferred;
+    _pendingDeferred = [];
+    pending.forEach(fn => fn());
+  }
 
   function setDashboardDate() {
     const el = document.getElementById('todayDate');
@@ -148,7 +178,7 @@
   }
 
   function _renderEventsList(el, allFetched, now) {
-    const events = allFetched.filter(e => eventStillGoing(e, now));
+    const events = allFetched.filter(e => eventStillGoing(e, now)).slice(0, 12);
     if (!events.length) {
       el.innerHTML = '<div class="empty-state">🎉 Nothing coming up!</div>';
       return;
@@ -580,7 +610,7 @@
   async function loadMeals(opts) {
     const el = document.getElementById('mealsBody');
     if (!el) return;
-    const gen = ++_mealsGen;
+    const gen = opts && opts.cacheOnly ? _mealsGen : ++_mealsGen;
     const dinnerDate = toETDateStr(new Date());
     if (typeof window.__fhSchoolMealType === 'string') {
       schoolMealTypes = normalizeMealType(window.__fhSchoolMealType);
@@ -611,7 +641,8 @@
     const paintSchool = (data, loading) => mealsSchoolHtml(data, getPersonFilter(), dinnerDate, loading);
 
     const cachedFast = API.peek(url + '&include_school=false');
-    const cachedFull = API.peek(url);
+    const cachedFull = API.peek(url)
+      || (_cachedSchoolMenus && _cachedSchoolMenus.url === url ? _cachedSchoolMenus.data : null);
     const cachedReqs = API.peek(reqUrl);
     if (cachedFull && cachedReqs) {
       paintDinner(el, cachedFull, paintReqs(cachedReqs), dinnerDate, paintSchool(cachedFull, false));
@@ -628,24 +659,43 @@
       ]);
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
       const wantsSchool = data.configured && !data.school_menus_hidden;
-      const fullCached = API.peek(url);
+      const fullCached = API.peek(url)
+        || (_cachedSchoolMenus && _cachedSchoolMenus.url === url ? _cachedSchoolMenus.data : null);
       if (fullCached && wantsSchool) {
         paintDinner(el, data, paintReqs(requests), dinnerDate, paintSchool(fullCached, false));
       } else {
         paintDinner(el, data, paintReqs(requests), dinnerDate, paintSchool(data, wantsSchool));
       }
       if (!wantsSchool) return;
-      try {
-        const menus = await API.get(url, { timeout: 45000 });
+      if (opts && opts.includeSchool === false) return;
+
+      const loadSchool = async () => {
         if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-        const slot = document.getElementById('mealsSchool');
-        if (slot) slot.innerHTML = paintSchool(menus, false);
-      } catch (e) {
-        const slot = document.getElementById('mealsSchool');
-        if (slot && gen === _mealsGen) {
-          _schoolPaint = null;
-          slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+        try {
+          const menus = await API.get(url, { timeout: 45000 });
+          if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
+          _cachedSchoolMenus = { url, data: menus };
+          _schoolLoadedAt = Date.now();
+          const slot = document.getElementById('mealsSchool');
+          if (slot) slot.innerHTML = paintSchool(menus, false);
+        } catch (e) {
+          const slot = document.getElementById('mealsSchool');
+          if (slot && gen === _mealsGen) {
+            _schoolPaint = null;
+            slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
+          }
         }
+      };
+
+      const deferSchoolMs = opts && opts.deferSchoolMs;
+      if (deferSchoolMs) {
+        clearTimeout(_schoolTimer);
+        _schoolTimer = setTimeout(() => {
+          _schoolTimer = null;
+          runDashboardTask(loadSchool);
+        }, deferSchoolMs);
+      } else {
+        await loadSchool();
       }
     } catch (e) {
       if (!cachedFast && gen === _mealsGen && document.getElementById('mealsBody') === el) {
@@ -728,23 +778,32 @@
       setDashboardDate();
       loadTodayEvents();
       loadUpcomingChores();
-      loadMeals();
-      loadShoppingStrip();
-      loadMessagePreview();
+      loadMeals({ deferSchoolMs: 2500 });
+      scheduleDashboard(loadMessagePreview, 500);
+      scheduleDashboard(loadShoppingStrip, 1000);
     });
-    afterPagePaint(loadStocks);
+    scheduleDashboard(loadStocks, 4000);
 
-    _stocksTimer = setInterval(loadStocks, 5 * 60 * 1000);
+    _stocksTimer = setInterval(() => scheduleDashboard(loadStocks, 4000), 5 * 60 * 1000);
     _refreshTimer = setInterval(() => {
       if (document.hidden) return;
       setDashboardDate();
       loadTodayEvents();
-      loadUpcomingChores();
-      loadMeals();
-      loadShoppingStrip();
-      loadWeather();
+      scheduleDashboard(loadUpcomingChores, 300);
+      const dinnerDate = toETDateStr(new Date());
+      const schoolDate = schoolMenuDate(dinnerDate);
+      const expectedSchoolUrl = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
+      const schoolDateChanged = !_cachedSchoolMenus || _cachedSchoolMenus.url !== expectedSchoolUrl;
+      const refreshSchool = schoolDateChanged || Date.now() - _schoolLoadedAt >= 30 * 60 * 1000;
+      scheduleDashboard(() => loadMeals({
+        includeSchool: refreshSchool,
+        deferSchoolMs: refreshSchool ? 2500 : 0
+      }), 700);
+      scheduleDashboard(loadShoppingStrip, 1100);
+      scheduleDashboard(loadWeather, 1500);
     }, 5 * 60 * 1000);
     document.addEventListener('fh:messages', _onMessages);
+    document.addEventListener('visibilitychange', flushDashboardTasks);
 
     return unmount;
   }
@@ -755,10 +814,16 @@
 
   function unmount() {
     document.removeEventListener('fh:messages', _onMessages);
+    document.removeEventListener('visibilitychange', flushDashboardTasks);
     clearInterval(_stocksTimer);
     clearInterval(_refreshTimer);
+    clearTimeout(_schoolTimer);
+    _deferredTimers.forEach(clearTimeout);
     _stocksTimer = null;
     _refreshTimer = null;
+    _schoolTimer = null;
+    _deferredTimers = [];
+    _pendingDeferred = [];
     _mealsGen += 1;
   }
 
