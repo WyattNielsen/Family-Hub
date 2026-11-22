@@ -193,7 +193,10 @@ input, select, textarea { font-family: var(--font); }
 .main-content.calendar-layout .calendar-grid {
   flex: 1;
   min-height: 0;
-  grid-template-rows: auto repeat(6, 1fr);
+  height: 100%;
+  /* minmax(0, 1fr) lets six weeks shrink into a short tablet viewport.
+     Plain 1fr is minmax(auto, 1fr) and the last week gets clipped. */
+  grid-template-rows: auto repeat(6, minmax(0, 1fr));
 }
 .main-content.calendar-layout .cal-day {
   min-height: 0;
@@ -251,7 +254,7 @@ input, select, textarea { font-family: var(--font); }
 .page-header .weather-condition { font-size: 12px; max-width: 110px; }
 .page-header .weather-meta { font-size: 11px; margin-top: 0; }
 .page-header .weather-tomorrow { padding-left: 8px; gap: 4px; }
-@media (max-width: 1280px) {
+@media (max-width: 1100px) {
   .page-header .weather-condition,
   .page-header .weather-tmr-label { display: none; }
 }
@@ -272,9 +275,10 @@ input, select, textarea { font-family: var(--font); }
 @media (max-width: 1400px) {
   .dashboard-grid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1.15fr) minmax(0, 0.85fr);
   }
   .dashboard-col { flex-basis: 45%; min-width: 0; }
+  .dashboard-col:nth-child(3) { grid-column: 1 / -1; }
 }
 @media (max-width: 1100px) {
   .dashboard-grid {
@@ -2833,7 +2837,14 @@ button.section-link { background: none; border: none; cursor: pointer; font-fami
 }
 
 /* School week grid and full-menu modal */
-.school-week { min-width: 0; }
+.school-week { min-width: 0; container-type: inline-size; }
+@container (max-width: 860px) {
+  .school-week-grid { gap: 4px 3px; }
+  .school-day-cell { min-height: 88px; padding: 6px 4px; border-radius: 10px; }
+  .school-day-name,
+  .school-day-empty { font-size: 10px; }
+  .school-week-dow { font-size: 10px; }
+}
 .school-week-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -3052,4 +3063,150 @@ button.section-link { background: none; border: none; cursor: pointer; font-fami
   background: #2e2e2e;
   color: var(--text);
   box-shadow: none;
+}
+
+/* ── Galaxy Tab 10 (~10", CSS viewport about 1280×800 landscape
+   and 800×1280 portrait). Phone rules stay at ≤768px.
+   Desktop 3-column stays above 1400px. ─────────────────────── */
+
+/* Narrow icon rail: the install label does not fit in 78px. */
+#pwaInstallBtn {
+  width: 44px !important;
+  height: 44px;
+  margin: 6px auto 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  font-size: 0 !important;
+  justify-content: center;
+  overflow: hidden;
+}
+#pwaInstallBtn::before {
+  content: "⬇";
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Short landscape: keep all nine nav items on screen. */
+@media (max-height: 840px) and (min-width: 700px) {
+  .sidebar { padding: 6px 0; }
+  .sidebar-logo { padding-bottom: 8px; margin-bottom: 6px; }
+  .nav-link { padding: 5px 2px 4px; gap: 1px; margin-bottom: 0; }
+  #fullscreenBtn { margin-top: 4px !important; }
+  .main-content.calendar-layout { padding-top: 8px; padding-bottom: 8px; }
+  .main-content.calendar-layout .calendar-nav { margin-bottom: 8px; }
+  .main-content.calendar-layout .calendar-wrapper { padding-top: 4px; }
+  .cal-day-header { padding: 4px 4px 6px; }
+}
+
+/* Landscape tablet: three dashboard columns across the short screen. */
+@media (orientation: landscape) and (min-width: 900px) and (max-width: 1400px) and (max-height: 920px) {
+  .main-content.dashboard-layout { padding: 8px 16px 10px; }
+  .dashboard-layout .page-header { margin-bottom: 6px; }
+  .dashboard-layout .stock-ticker,
+  .dashboard-layout .shopping-strip { margin-bottom: 6px; }
+  .dashboard-layout .msg-preview-pill { margin-bottom: 8px; }
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .dashboard-col,
+  .dashboard-col:nth-child(3) {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .dashboard-col .section-header { margin-bottom: 8px; gap: 8px; }
+  .dashboard-col .section-title { font-size: 16px; }
+
+  main.main-content:has(#choresList) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: 100vh;
+    max-height: 100vh;
+    overflow: hidden;
+    column-gap: 18px;
+  }
+  main.main-content:has(#choresList) > .page-header {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  main.main-content:has(#choresList) > .page-toolbar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  main.main-content:has(#choresList) > #choresList {
+    grid-column: 1;
+    grid-row: 3;
+    min-height: 0;
+    overflow: auto;
+  }
+  main.main-content:has(#choresList) > .dashboard-section {
+    grid-column: 2;
+    grid-row: 3;
+    margin-top: 0 !important;
+    margin-bottom: 0;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .msg-compose {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "who send" "text send";
+    align-items: stretch;
+    gap: 10px 12px;
+  }
+  .msg-who { grid-area: who; }
+  .msg-textarea { grid-area: text; min-height: 52px; }
+  .msg-send-btn { grid-area: send; align-self: end; }
+
+  .settings-tab-panel.active {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 4px 28px;
+    align-items: start;
+  }
+}
+
+/* Portrait tablet: events across the top, chores and meals side by side. */
+@media (orientation: portrait) and (min-width: 700px) and (max-width: 1100px) {
+  .page-header { flex-wrap: wrap; row-gap: 6px; }
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.2fr) minmax(0, 0.9fr);
+    gap: 14px;
+  }
+  .dashboard-col,
+  .dashboard-col:nth-child(3) { grid-column: auto; grid-row: auto; }
+  .dashboard-col:first-child { grid-column: 1 / -1; }
+  .main-content { padding: 12px 16px 16px; }
+}
+
+/* Tablet width, either orientation: use the row, larger camera tiles. */
+@media (min-width: 700px) and (max-width: 1400px) {
+  .shop-add #shopName { flex: 1 1 180px; max-width: none; }
+  .settings-tab { min-height: 44px; padding: 10px 18px; }
+  .camera-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .msg-board { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+}
+
+/* The shared .shop-add max-width was clamping the meal request field. */
+.shop-add.meal-request-form .form-input { max-width: none; }
+.shop-add.meal-request-form select.form-input { flex: 0 0 170px; max-width: 170px; }
+
+/* Finger targets. Edit and delete stay visible without a hover. */
+@media (pointer: coarse) and (min-width: 700px) and (min-height: 600px) {
+  .person-chip { min-height: 40px; padding-top: 4px; padding-bottom: 4px; }
+  .filter-tab { min-height: 40px; }
+  .chore-actions,
+  .chore-card-actions { opacity: 1; }
+  .chore-check,
+  .chore-card-check,
+  .dashboard-chore-check,
+  .shop-check {
+    width: 36px;
+    height: 36px;
+  }
+  .nav-link { min-height: 44px; }
 }
