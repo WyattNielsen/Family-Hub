@@ -235,6 +235,31 @@ def upsert_apple_events(
         )
         for ev in events
     ]
+    # Skip a remote copy of an event we already wrote (google_event_id) and a
+    # deleted local event whose remote id is still on a tombstone. CalDAV
+    # occurrence ids are "{uid}@{start}"; the uid itself may contain "@".
+    known_remote_ids = {
+        r[0]
+        for r in conn.execute(
+            """SELECT google_event_id FROM events
+               WHERE google_calendar_id IS NOT NULL AND google_event_id IS NOT NULL"""
+        ).fetchall()
+        if r[0]
+    }
+    known_remote_ids.update(
+        r[0]
+        for r in conn.execute(
+            "SELECT remote_id FROM event_push_tombstones WHERE remote_id IS NOT NULL"
+        ).fetchall()
+        if r[0]
+    )
+
+    def _already_stored(external_event_id: str) -> bool:
+        rest = external_event_id[len(prefix):] if external_event_id.startswith(prefix) else external_event_id
+        base = rest.rsplit("@", 1)[0]
+        return rest in known_remote_ids or base in known_remote_ids
+
+    rows_to_insert = [r for r in rows_to_insert if not _already_stored(r[9])]
     conn.execute(
         """DELETE FROM events
            WHERE external_source_id=? AND google_calendar_id IS NULL""",

@@ -3,8 +3,10 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
+import traceback
 from database import get_db, get_setting_value, get_settings_map_async, invalidate_settings_cache
 import apple_sync
+import jobs
 import outbound
 import os as _os
 from datetime import datetime, timezone, timedelta
@@ -200,6 +202,9 @@ def _build_google_body(event_row: dict, tz: str = "America/New_York") -> dict:
         "summary": event_row["title"],
         "description": event_row.get("description") or "",
         "location": event_row.get("location") or "",
+        "extendedProperties": {
+            "private": {"familyhub_id": str(event_row["id"])},
+        },
     }
     if event_row.get("all_day"):
         body["start"] = {"date": str(event_row["start_datetime"])[:10]}
@@ -472,7 +477,7 @@ def _save_remote_ids(event_id: int, remote_id: str, cal_id: str, source_id: int)
     try:
         conn.execute(
             """UPDATE events
-               SET google_event_id=?, google_calendar_id=?, external_source_id=?
+               SET google_event_id=?, google_calendar_id=?, external_source_id=?, push_error=NULL
                WHERE id=?""",
             (remote_id, cal_id, source_id, event_id),
         )
@@ -481,35 +486,205 @@ def _save_remote_ids(event_id: int, remote_id: str, cal_id: str, source_id: int)
         conn.close()
 
 
-async def _push_and_record(row: dict) -> bool:
-    remote_id, cal_id, source_id = await _push_event_to_write_calendar(row)
+_PUSH_ERROR = "Saved here, not on Google yet"
+_push_tails: dict[int, asyncio.Task] = {}
+_push_chain_lock = asyncio.Lock()
+
+
+def _get_event_row(event_id: int) -> Optional[dict]:
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _get_tombstone(event_id: int) -> Optional[dict]:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM event_push_tombstones WHERE event_id=?", (event_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _delete_tombstone(event_id: int):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM event_push_tombstones WHERE event_id=?", (event_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_push_error(event_id: int, message: str):
+    conn = get_db()
+    try:
+        conn.execute("UPDATE events SET push_error=? WHERE id=?", (message, event_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _source_external_id(source_id: int) -> Optional[str]:
+    """Calendar id for a source, when that source can accept a delete."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT external_id, kind FROM calendar_sources WHERE id=?", (source_id,)
+        ).fetchone()
+        if not row or row["kind"] not in ("google", "caldav"):
+            return None
+        return row["external_id"]
+    finally:
+        conn.close()
+
+
+def _tombstone_and_delete(event_id: int) -> bool:
+    """Remember the remote id, then remove the local row. One transaction."""
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        if not row:
+            return False
+        row = dict(row)
+        conn.execute(
+            """INSERT OR REPLACE INTO event_push_tombstones
+               (event_id, remote_id, calendar_id, source_id)
+               VALUES (?, ?, ?, ?)""",
+            (
+                event_id,
+                row.get("google_event_id"),
+                row.get("google_calendar_id"),
+                row.get("external_source_id"),
+            ),
+        )
+        conn.execute("DELETE FROM events WHERE id=?", (event_id,))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+async def _push_row(event_id: int, row: dict):
+    """Create or update the provider event from the row loaded for this step."""
+    try:
+        remote_id, cal_id, source_id = await _push_event_to_write_calendar(row)
+    except Exception as exc:
+        print(f"Event {event_id} push error: {exc}")
+        await asyncio.to_thread(_set_push_error, event_id, _PUSH_ERROR)
+        return
     if not remote_id:
-        return False
-    await asyncio.to_thread(_save_remote_ids, row["id"], remote_id, cal_id, source_id)
-    row["google_event_id"] = remote_id
-    row["google_calendar_id"] = cal_id
-    row["external_source_id"] = source_id
-    return True
+        print(f"Event {event_id} saved locally but not pushed to the write calendar")
+        await asyncio.to_thread(_set_push_error, event_id, _PUSH_ERROR)
+        return
+    await asyncio.to_thread(_save_remote_ids, event_id, remote_id, cal_id, source_id)
+    # Deleted while this push was in flight: remove the remote we just wrote.
+    tomb = await asyncio.to_thread(_get_tombstone, event_id)
+    if not tomb:
+        return
+    await _delete_from_write_calendar({
+        "google_event_id": remote_id,
+        "google_calendar_id": cal_id,
+        "external_source_id": source_id,
+    })
+    await asyncio.to_thread(_delete_tombstone, event_id)
+
+
+async def _delete_tombstone_remote(event_id: int):
+    """Delete the provider event recorded on the tombstone, when we know its id."""
+    tomb = await asyncio.to_thread(_get_tombstone, event_id)
+    if not tomb:
+        return
+    remote_id = tomb.get("remote_id")
+    calendar_id = tomb.get("calendar_id")
+    source_id = tomb.get("source_id")
+    if not remote_id:
+        # Earlier steps in this chain have already finished. None of them
+        # stored a provider id, so there is no remote event left to delete.
+        await asyncio.to_thread(_delete_tombstone, event_id)
+        return
+    if not calendar_id and source_id:
+        # Inbound rows store the calendar on the source, not on the event.
+        calendar_id = await asyncio.to_thread(_source_external_id, source_id)
+    if not calendar_id:
+        return
+    await _delete_from_write_calendar({
+        "google_event_id": remote_id,
+        "google_calendar_id": calendar_id,
+        "external_source_id": source_id,
+    })
+    await asyncio.to_thread(_delete_tombstone, event_id)
+
+
+async def _run_event_push(event_id: int):
+    """One chain step. Reads the database as it is now, not when it was queued."""
+    row = await asyncio.to_thread(_get_event_row, event_id)
+    if row is not None:
+        tomb = await asyncio.to_thread(_get_tombstone, event_id)
+        if tomb or _is_inbound_only(row):
+            return
+        await _push_row(event_id, row)
+        return
+    await _delete_tombstone_remote(event_id)
+
+
+async def _chained_event_push(event_id: int, prev: Optional[asyncio.Task]):
+    if prev is not None:
+        try:
+            await prev
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+    try:
+        await _run_event_push(event_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        print(f"Event push {event_id} error:\n{traceback.format_exc()}", end="")
+    finally:
+        async with _push_chain_lock:
+            if _push_tails.get(event_id) is asyncio.current_task():
+                _push_tails.pop(event_id, None)
+
+
+async def schedule_event_push(event_id: int):
+    """Run this event's push after any push already queued for the same id.
+
+    Returns once the step is scheduled. It does not wait for Google or CalDAV.
+    """
+    async with _push_chain_lock:
+        prev = _push_tails.get(event_id)
+        task = asyncio.create_task(
+            _chained_event_push(event_id, prev),
+            name=f"event-push-{event_id}",
+        )
+        _push_tails[event_id] = task
 
 
 @router.post("/events")
 async def create_event(event: EventCreate):
     row = await asyncio.to_thread(_insert_event, event)
-    if not await _push_and_record(row):
-        target = "family" if row["is_family"] else f"member {row['member_id']}"
-        print(f"Event {row['id']} saved locally but not pushed to write calendar ({target})")
+    await schedule_event_push(row["id"])
     return row
 
 
 def _update_event_row(event_id: int, event: EventUpdate) -> dict:
     conn = get_db()
     try:
-        existing = conn.execute("SELECT id FROM events WHERE id=?", (event_id,)).fetchone()
+        existing = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Event not found")
+        existing = dict(existing)
         updates = {k: v for k, v in event.dict().items() if v is not None}
         if "all_day" in updates: updates["all_day"] = 1 if updates["all_day"] else 0
         if "is_family" in updates: updates["is_family"] = 1 if updates["is_family"] else 0
+        if not _is_inbound_only(existing):
+            updates["push_error"] = None
         if updates:
             set_clause = ", ".join(f"{k}=?" for k in updates)
             conn.execute(f"UPDATE events SET {set_clause} WHERE id=?", (*updates.values(), event_id))
@@ -523,34 +698,16 @@ def _update_event_row(event_id: int, event: EventUpdate) -> dict:
 async def update_event(event_id: int, event: EventUpdate):
     row = await asyncio.to_thread(_update_event_row, event_id, event)
     if not _is_inbound_only(row):
-        await _push_and_record(row)
+        await schedule_event_push(event_id)
     return row
-
-
-def _get_event_row(event_id: int) -> Optional[dict]:
-    conn = get_db()
-    try:
-        row = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def _delete_event_row(event_id: int):
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM events WHERE id=?", (event_id,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 @router.delete("/events/{event_id}")
 async def delete_event(event_id: int):
-    row = await asyncio.to_thread(_get_event_row, event_id)
-    if row:
-        await _delete_from_write_calendar(row)
-    await asyncio.to_thread(_delete_event_row, event_id)
+    deleted = await asyncio.to_thread(_tombstone_and_delete, event_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Event not found")
+    await schedule_event_push(event_id)
     return {"ok": True}
 
 # ── Token Refresh ─────────────────────────────────────────────────────────────
@@ -978,12 +1135,29 @@ GOOGLE_COLOR_MAP = {
 }
 
 
+def _google_familyhub_id(ge: dict) -> Optional[int]:
+    private = ((ge.get("extendedProperties") or {}).get("private") or {})
+    raw = private.get("familyhub_id")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _store_google_events(source: dict, google_events: list, cal_color) -> int:
     """Replace inbound Google rows using a single batch transaction so the
-    SQLite write lock is held for milliseconds rather than seconds."""
+    SQLite write lock is held for milliseconds rather than seconds.
+
+    A provider event tagged with our local id is attached to that row instead
+    of inserted again. A tombstone means the user already deleted it.
+    """
     source_id = source["id"]
     member_id = source["member_id"]
     family_flag = 1 if source.get("is_family") else 0
+    calendar_ext = source.get("external_id")
 
     # Prepare rows in memory BEFORE opening a DB write transaction
     prepared = []
@@ -1001,7 +1175,11 @@ def _store_google_events(source: dict, google_events: list, cal_color) -> int:
         all_day = 1 if "date" in ge["start"] and "dateTime" not in ge["start"] else 0
         color_id = ge.get("colorId")
         event_color = GOOGLE_COLOR_MAP.get(color_id) if color_id else cal_color
-        prepared.append((title, desc, location, start, end, all_day, member_id, family_flag, gid, event_color, source_id))
+        prepared.append({
+            "gid": gid,
+            "fh_id": _google_familyhub_id(ge),
+            "row": (title, desc, location, start, end, all_day, member_id, family_flag, gid, event_color, source_id),
+        })
 
     conn = get_db()
     try:
@@ -1010,8 +1188,40 @@ def _store_google_events(source: dict, google_events: list, cal_color) -> int:
             for r in conn.execute(
                 "SELECT google_event_id FROM events WHERE google_calendar_id IS NOT NULL AND google_event_id IS NOT NULL"
             ).fetchall()
+            if r[0]
         }
-        rows_to_insert = [r for r in prepared if r[8] not in written_ids]
+        existing_ids = {r[0] for r in conn.execute("SELECT id FROM events").fetchall()}
+        tombstone_event_ids = {
+            r[0] for r in conn.execute("SELECT event_id FROM event_push_tombstones").fetchall()
+        }
+        tombstone_remote_ids = {
+            r[0]
+            for r in conn.execute(
+                "SELECT remote_id FROM event_push_tombstones WHERE remote_id IS NOT NULL"
+            ).fetchall()
+            if r[0]
+        }
+        rows_to_insert = []
+        for item in prepared:
+            gid = item["gid"]
+            fh_id = item["fh_id"]
+            if gid in written_ids or gid in tombstone_remote_ids:
+                continue
+            if fh_id is not None:
+                # Our id on a provider event must not become a second local row.
+                # A live row gets the remote ids; a deleted row (tombstone or
+                # already removed) is left out of this sync.
+                if fh_id in tombstone_event_ids or fh_id not in existing_ids:
+                    continue
+                conn.execute(
+                    """UPDATE events
+                       SET google_event_id=?, google_calendar_id=?, external_source_id=?, push_error=NULL
+                       WHERE id=?""",
+                    (gid, calendar_ext, source_id, fh_id),
+                )
+                written_ids.add(gid)
+                continue
+            rows_to_insert.append(item["row"])
         conn.execute(
             "DELETE FROM events WHERE external_source_id=? AND google_calendar_id IS NULL",
             (source_id,),
@@ -1242,38 +1452,51 @@ async def run_full_sync():
     await asyncio.to_thread(_touch_last_synced)
     return total
 
-@router.post("/sync/all")
-async def sync_all_calendars():
-    synced = await run_full_sync()
-    return {"synced": synced}
+def _member_sync_ready(member_id: int):
+    conn = get_db()
+    try:
+        member = conn.execute("SELECT id FROM members WHERE id=?", (member_id,)).fetchone()
+        if not member:
+            raise HTTPException(status_code=404, detail="Member not found")
+        if not _assigned_sources(conn, member_id=member_id):
+            raise HTTPException(status_code=400, detail="No calendars assigned to this member")
+    finally:
+        conn.close()
 
 
-
-@router.post("/sync/member/{member_id}")
-async def sync_member_calendars(member_id: int):
-    """Sync all enabled calendar_sources assigned to this member."""
+async def _sync_member_sources(member_id: int):
+    """Sync enabled calendars for one member. Runs inside the shared sync job."""
     def _load():
         conn = get_db()
         try:
-            member = conn.execute("SELECT id FROM members WHERE id=?", (member_id,)).fetchone()
-            if not member:
-                raise HTTPException(status_code=404, detail="Member not found")
             return _assigned_sources(conn, member_id=member_id)
         finally:
             conn.close()
 
     sources = await asyncio.to_thread(_load)
-    if not sources:
-        raise HTTPException(status_code=400, detail="No calendars assigned to this member")
-
-    synced = 0
-    by_kind = {"google": 0, "ics": 0, "caldav": 0}
     for src in sources:
-        count = await _sync_source(src, _account_from_source_row(src))
-        synced += count
-        by_kind[src["kind"]] = by_kind.get(src["kind"], 0) + count
-    return {
-        "synced": synced,
-        "google": by_kind.get("google", 0),
-        "apple": by_kind.get("ics", 0) + by_kind.get("caldav", 0),
-    }
+        try:
+            await _sync_source(src, _account_from_source_row(src))
+        except Exception as e:
+            print(f"Member sync source {src.get('id')} failed: {e}")
+
+
+@router.post("/sync/all")
+async def sync_all_calendars():
+    result = await jobs.run_background("calendar-sync", run_full_sync)
+    return {"ok": True, "started": bool(result["started"])}
+
+
+@router.post("/sync/member/{member_id}")
+async def sync_member_calendars(member_id: int):
+    """Start a sync of this member's calendars without waiting for the providers.
+
+    Shares the calendar-sync job with sync/all and the auto-sync loop.
+    """
+    await asyncio.to_thread(_member_sync_ready, member_id)
+
+    def start_member_sync(mid=member_id):
+        return _sync_member_sources(mid)
+
+    result = await jobs.run_background("calendar-sync", start_member_sync)
+    return {"ok": True, "started": bool(result["started"])}

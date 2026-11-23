@@ -5,6 +5,7 @@
   let selectedDay = null;
   window.selectedDay = null;
   let currentView = localStorage.getItem('fh_cal_view') === 'agenda' ? 'agenda' : 'month';
+  const seenPushErrors = new Set();
 
   function dateStrFromCurrent() {
     return `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
@@ -286,6 +287,18 @@
     grid.innerHTML = html;
   }
 
+  function toastPushErrors(events) {
+    let message = '';
+    for (const e of events || []) {
+      if (!e || !e.push_error) continue;
+      const key = String(e.id) + '\0' + e.push_error;
+      if (seenPushErrors.has(key)) continue;
+      seenPushErrors.add(key);
+      if (!message) message = e.push_error;
+    }
+    if (message) showToast(message, 'error');
+  }
+
   async function loadEvents(opts) {
     // Always fetch Everyone for the month; person chips filter client-side.
     const year = currentDate.getFullYear();
@@ -301,10 +314,14 @@
       allEvents = cached;
       renderActiveView();
     }
-    if (opts && opts.cacheOnly) return;
+    if (opts && opts.cacheOnly) {
+      if (cached) toastPushErrors(cached);
+      return;
+    }
 
     try {
       allEvents = await API.get(url);
+      toastPushErrors(allEvents);
       if (FHRouter.currentRoute() === '/calendar.html') renderActiveView();
     } catch (e) {
       if (!cached) showToast('Failed to load events', 'error');
@@ -464,20 +481,13 @@
   }
 
   async function syncGoogle() {
-    const btn = document.getElementById('syncBtn');
-    if (!btn) return;
-    btn.textContent = '⏳ Syncing...';
-    btn.disabled = true;
     try {
       const r = await API.post('/api/calendar/sync/all', {});
-      showToast(`✅ Synced ${r.synced || 0} events`, 'success');
+      if (r && r.started === false) showToast('Sync already running', 'info');
+      else showToast('Sync started', 'success');
       loadEvents();
-      loadSyncStatus();
     } catch (e) {
       showToast('Sync failed — check calendar connections in Settings', 'error');
-    } finally {
-      btn.textContent = '🔄 Sync Calendars';
-      btn.disabled = false;
     }
   }
 
@@ -558,6 +568,7 @@
   }
 
   function unmount() {
+    seenPushErrors.clear();
     document.removeEventListener('dragover', _blockFileDrop);
     document.removeEventListener('drop', _blockFileDrop);
   }

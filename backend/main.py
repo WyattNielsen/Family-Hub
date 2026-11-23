@@ -10,6 +10,7 @@ import os
 from database import init_db, get_setting_value_async
 from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
 import json
+import jobs
 import outbound
 
 async def _reminder_loop():
@@ -71,7 +72,8 @@ async def _auto_sync_loop():
             raw = await get_setting_value_async("google_sync_interval", "")
             interval = int(raw) if raw else 0
             if interval > 0:
-                await calendar.run_full_sync()
+                # Same job name as the Sync button, so the two cannot overlap.
+                await jobs.run_background("calendar-sync", calendar.run_full_sync)
                 await asyncio.sleep(interval * 60)
             else:
                 await asyncio.sleep(60)  # check again in 1 min

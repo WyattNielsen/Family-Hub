@@ -202,8 +202,16 @@ def init_db():
             external_source_id INTEGER DEFAULT NULL,
             color TEXT DEFAULT NULL,
             recurrence TEXT DEFAULT NULL,
+            push_error TEXT DEFAULT NULL,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS event_push_tombstones (
+            event_id INTEGER PRIMARY KEY,
+            remote_id TEXT,
+            calendar_id TEXT,
+            source_id INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS settings (
@@ -326,6 +334,7 @@ def init_db():
         "ALTER TABLE events ADD COLUMN google_calendar_id TEXT DEFAULT NULL",
         "ALTER TABLE events ADD COLUMN external_event_id TEXT DEFAULT NULL",
         "ALTER TABLE events ADD COLUMN external_source_id INTEGER DEFAULT NULL",
+        "ALTER TABLE events ADD COLUMN push_error TEXT DEFAULT NULL",
         "ALTER TABLE chores ADD COLUMN recurrence_days TEXT DEFAULT NULL",
         "ALTER TABLE chores ADD COLUMN time_of_day TEXT DEFAULT NULL",
         "ALTER TABLE members ADD COLUMN school_id TEXT DEFAULT NULL",
