@@ -2,35 +2,32 @@
   let _mealsGen = 0;
   let _schoolPaint = null;
   let schoolMealTypes = 'both';
-  let _stocksTimer = null;
-  let _refreshTimer = null;
+  let _dashboardTimer = null;
+  let _dashboardRefreshPending = false;
   let _cachedStocks = null;
-  let _deferredTimers = [];
-  let _pendingDeferred = [];
 
-  function runDashboardTask(fn) {
+  // One pass over the local rows. Hidden tablets skip the work and catch up
+  // on the next visibility change instead of stacking delayed timers.
+  function refreshDashboard() {
     if (FHRouter.currentRoute() !== '/') return;
     if (document.hidden) {
-      if (!_pendingDeferred.includes(fn)) _pendingDeferred.push(fn);
+      _dashboardRefreshPending = true;
       return;
     }
-    fn();
+    _dashboardRefreshPending = false;
+    setDashboardDate();
+    loadTodayEvents();
+    loadUpcomingChores();
+    loadMeals();
+    loadShoppingStrip();
+    loadWeather();
+    loadStocks();
   }
 
-  function scheduleDashboard(fn, delay) {
-    const timer = setTimeout(() => {
-      _deferredTimers = _deferredTimers.filter(t => t !== timer);
-      runDashboardTask(fn);
-    }, delay);
-    _deferredTimers.push(timer);
-    return timer;
-  }
-
-  function flushDashboardTasks() {
+  function flushDashboardRefresh() {
     if (document.hidden || FHRouter.currentRoute() !== '/') return;
-    const pending = _pendingDeferred;
-    _pendingDeferred = [];
-    pending.forEach(fn => fn());
+    if (!_dashboardRefreshPending) return;
+    refreshDashboard();
   }
 
   function setDashboardDate() {
@@ -712,29 +709,16 @@
     if (todayBtn) todayBtn.onclick = () => { dashAgendaDate = toETDateStr(new Date()); loadTodayEvents(); };
     applyDashCalView();
 
+    // One read when the page opens. Later updates come from the message
+    // badge timer through the fh:messages event, not from this dashboard timer.
+    loadMessagePreview();
     initAppTimezone().then(() => {
-      if (FHRouter.currentRoute() !== '/') return;
-      setDashboardDate();
-      loadTodayEvents();
-      loadUpcomingChores();
-      loadMeals();
-      scheduleDashboard(loadMessagePreview, 500);
-      scheduleDashboard(loadShoppingStrip, 1000);
+      refreshDashboard();
     });
-    scheduleDashboard(loadStocks, 4000);
 
-    _stocksTimer = setInterval(() => scheduleDashboard(loadStocks, 4000), 5 * 60 * 1000);
-    _refreshTimer = setInterval(() => {
-      if (document.hidden) return;
-      setDashboardDate();
-      loadTodayEvents();
-      scheduleDashboard(loadUpcomingChores, 300);
-      scheduleDashboard(loadMeals, 700);
-      scheduleDashboard(loadShoppingStrip, 1100);
-      scheduleDashboard(loadWeather, 1500);
-    }, 5 * 60 * 1000);
+    _dashboardTimer = setInterval(refreshDashboard, 5 * 60 * 1000);
     document.addEventListener('fh:messages', _onMessages);
-    document.addEventListener('visibilitychange', flushDashboardTasks);
+    document.addEventListener('visibilitychange', flushDashboardRefresh);
 
     return unmount;
   }
@@ -745,14 +729,10 @@
 
   function unmount() {
     document.removeEventListener('fh:messages', _onMessages);
-    document.removeEventListener('visibilitychange', flushDashboardTasks);
-    clearInterval(_stocksTimer);
-    clearInterval(_refreshTimer);
-    _deferredTimers.forEach(clearTimeout);
-    _stocksTimer = null;
-    _refreshTimer = null;
-    _deferredTimers = [];
-    _pendingDeferred = [];
+    document.removeEventListener('visibilitychange', flushDashboardRefresh);
+    clearInterval(_dashboardTimer);
+    _dashboardTimer = null;
+    _dashboardRefreshPending = false;
     _mealsGen += 1;
   }
 

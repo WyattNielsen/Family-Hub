@@ -8,7 +8,7 @@ import asyncio
 import os
 
 from database import init_db, get_setting_value_async
-from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
+from routers import calendar, chores, members, auth, settings, photos, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
 import json
 import jobs
 import outbound
@@ -199,7 +199,6 @@ app.include_router(members.router, prefix="/api/members", tags=["members"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(photos.router, prefix="/api/photos", tags=["photos"])
-app.include_router(lunch.router, prefix="/api/lunch", tags=["lunch"])
 app.include_router(weather.router, prefix="/api/weather", tags=["weather"])
 app.include_router(homeassistant.router, prefix="/api/homeassistant", tags=["homeassistant"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
