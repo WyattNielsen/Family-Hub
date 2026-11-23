@@ -20,18 +20,97 @@ _settings_gen = 0
 _SETTINGS_TTL = 60.0
 
 
-def get_db():
-    # WAL is persisted on the database file by init_db. Asking for it again
-    # on every connection takes a lock, and a page load opens many connections
-    # at once. foreign_keys and synchronous are per connection and cheap.
-    conn = sqlite3.connect(DB_PATH, timeout=15)
+# Idle connections only. Checked-out connections are not in this list, so a
+# given connection has one borrower at a time. Cap is the idle pool, not the
+# number of connections that may be open at once.
+_POOL_CAP = 8
+_pool: list[sqlite3.Connection] = []
+_pool_lock = threading.Lock()
+
+
+def _connect() -> sqlite3.Connection:
+    # check_same_thread=False: the connection is opened on whichever thread
+    # first fills the pool and later used on another. Callers do not share
+    # one borrowed connection across threads.
+    conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # Once per physical connection, not on checkout. journal_mode is persisted
+    # on the database file by init_db(); asking for it again takes a lock.
     conn.execute("PRAGMA busy_timeout=15000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA cache_size=-8000")
     return conn
+
+
+def _close_raw(conn: sqlite3.Connection) -> None:
+    try:
+        conn.close()
+    except sqlite3.Error:
+        pass
+
+
+def _release(conn: sqlite3.Connection) -> None:
+    with _pool_lock:
+        if len(_pool) < _POOL_CAP:
+            _pool.append(conn)
+            return
+    _close_raw(conn)
+
+
+class _PooledConnection:
+    """Delegates to a sqlite3 connection. close() returns it to the pool."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._closed = False
+        self._close_lock = threading.Lock()
+
+    def __getattr__(self, name):
+        if self._closed or self._conn is None:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        return getattr(self._conn, name)
+
+    @property
+    def row_factory(self):
+        if self._closed or self._conn is None:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        return self._conn.row_factory
+
+    @row_factory.setter
+    def row_factory(self, value):
+        if self._closed or self._conn is None:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        self._conn.row_factory = value
+
+    def close(self):
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            conn = self._conn
+            self._conn = None
+        # Roll back before reuse so the next borrower does not see an open
+        # transaction. After commit(), there is nothing to undo.
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            _close_raw(conn)
+            return
+        if conn.in_transaction:
+            _close_raw(conn)
+            return
+        _release(conn)
+
+
+def get_db():
+    """Borrow a SQLite connection. close() returns it to the pool."""
+    with _pool_lock:
+        raw = _pool.pop() if _pool else None
+    if raw is None:
+        raw = _connect()
+    return _PooledConnection(raw)
 
 
 def get_settings_map() -> dict[str, str]:
