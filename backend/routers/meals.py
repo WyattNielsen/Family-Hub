@@ -57,7 +57,7 @@ def _members(member_id: Optional[int]):
 
 
 async def _school_block(member: dict, school_date: str):
-    overrides = schoolcafe.line_overrides().get(member["school_id"]) or {}
+    overrides = (await asyncio.to_thread(schoolcafe.line_overrides)).get(member["school_id"]) or {}
     block = {
         "member_id": member["id"],
         "member_name": member["name"],
@@ -101,12 +101,12 @@ async def day_menu(
     member_id: Optional[int] = Query(None),
     include_school: bool = Query(True),
 ):
-    today, _hour = schoolcafe.app_today()
+    today, _hour = await asyncio.to_thread(schoolcafe.app_today)
     dinner_date = _valid_date(date) if date else today
     menu_date = _valid_date(school_date) if school_date else dinner_date
     menu_date = schoolcafe.next_school_day(menu_date)
-    hidden = schoolcafe.setting("lunch_hidden", "false") == "true"
-    district_id = (schoolcafe.setting("schoolcafe_district_id") or "").strip()
+    hidden = (await asyncio.to_thread(schoolcafe.setting, "lunch_hidden", "false")) == "true"
+    district_id = ((await asyncio.to_thread(schoolcafe.setting, "schoolcafe_district_id")) or "").strip()
 
     dinner = await asyncio.to_thread(_get_dinner, dinner_date)
 
@@ -127,7 +127,7 @@ async def day_menu(
 
 
 async def _school_week(member: dict, dates: list):
-    overrides = schoolcafe.line_overrides().get(member["school_id"]) or {}
+    overrides = (await asyncio.to_thread(schoolcafe.line_overrides)).get(member["school_id"]) or {}
     block = {
         "member_id": member["id"],
         "member_name": member["name"],
@@ -177,7 +177,7 @@ async def week_menu(
     member_id: Optional[int] = Query(None),
     include_school: bool = Query(True),
 ):
-    today, _hour = schoolcafe.app_today()
+    today, _hour = await asyncio.to_thread(schoolcafe.app_today)
     anchor = _valid_date(start) if start else today
     start_date = schoolcafe.monday_of(anchor)
     dates = [_add_days(start_date, i) for i in range(7)]
@@ -191,8 +191,8 @@ async def week_menu(
             "notes": saved.get("notes") or "",
         })
 
-    hidden = schoolcafe.setting("lunch_hidden", "false") == "true"
-    district_id = (schoolcafe.setting("schoolcafe_district_id") or "").strip()
+    hidden = (await asyncio.to_thread(schoolcafe.setting, "lunch_hidden", "false")) == "true"
+    district_id = ((await asyncio.to_thread(schoolcafe.setting, "schoolcafe_district_id")) or "").strip()
     schools = []
     if include_school and district_id and not hidden:
         members = await asyncio.to_thread(_members, member_id)

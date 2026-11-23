@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
-from database import get_db, get_setting_value, get_settings_map, invalidate_settings_cache
+from database import get_db, get_setting_value, get_settings_map_async, invalidate_settings_cache
 import apple_sync
 import outbound
 import os as _os
@@ -331,7 +331,7 @@ async def _push_event_to_write_calendar(event_row: dict) -> tuple:
         if not account or not account.get("access_token"):
             return None, None, None
         access_token = await refresh_account_token_if_needed(account)
-        body = _build_google_body(event_row, tz=get_app_tz())
+        body = _build_google_body(event_row, tz=await asyncio.to_thread(get_app_tz))
         encoded = quote(calendar_ext, safe="")
         try:
             async with outbound.client(timeout=10.0) as client:
@@ -1065,6 +1065,7 @@ async def _sync_google_source(access_token: str, source: dict) -> int:
                         break
 
         window_start, window_end = apple_sync.sync_window()
+        tz_name = await asyncio.to_thread(get_app_tz)
         google_events = []
         page_token = None
         # Google returns at most 2500 per page, oldest first. A busy calendar
@@ -1076,7 +1077,7 @@ async def _sync_google_source(access_token: str, source: dict) -> int:
                 "singleEvents": "true",
                 "orderBy": "startTime",
                 "maxResults": "2500",
-                "timeZone": get_app_tz(),
+                "timeZone": tz_name,
             }
             if page_token:
                 params["pageToken"] = page_token
@@ -1197,7 +1198,7 @@ def _account_from_source_row(source: dict) -> Optional[dict]:
 
 @router.get("/sync/status")
 async def get_sync_status():
-    s = get_settings_map()
+    s = await get_settings_map_async()
     last = s.get("google_last_synced")
     interval = s.get("google_sync_interval")
     return {

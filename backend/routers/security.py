@@ -6,7 +6,7 @@ import json
 import time
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
-from database import get_db, get_settings_map, invalidate_settings_cache
+from database import get_db, get_settings_map_async, invalidate_settings_cache
 
 router = APIRouter()
 
@@ -20,15 +20,15 @@ _snap_lock = asyncio.Lock()
 _STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
 
-def get_ha_config():
-    s = get_settings_map()
+async def get_ha_config():
+    s = await get_settings_map_async()
     return s.get("ha_url", "").rstrip("/"), s.get("ha_token", "")
 
 
 @router.get("/camera/{entity_id}/stream")
 async def proxy_camera_stream(entity_id: str, request: Request):
     """Proxy HA MJPEG camera stream so the browser never needs the HA token."""
-    ha_url, ha_token = get_ha_config()
+    ha_url, ha_token = await get_ha_config()
     if not ha_url or not ha_token:
         raise HTTPException(status_code=503, detail="Home Assistant not configured")
 
@@ -65,7 +65,7 @@ def _snapshot_response(media: str, body: bytes) -> Response:
 
 
 async def _load_snapshot(entity_id: str):
-    ha_url, ha_token = get_ha_config()
+    ha_url, ha_token = await get_ha_config()
     if not ha_url or not ha_token:
         raise HTTPException(status_code=503, detail="Home Assistant not configured")
     async with outbound.client(timeout=5.0) as client:
@@ -127,7 +127,7 @@ async def proxy_camera_snapshot(entity_id: str):
 
 @router.get("/cameras")
 async def get_cameras():
-    raw = get_settings_map().get("cameras", "")
+    raw = (await get_settings_map_async()).get("cameras", "")
     cameras = json.loads(raw) if raw else []
     return {"cameras": cameras}
 

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
@@ -31,7 +32,7 @@ async def districts(q: str = ""):
 
 @router.get("/schools")
 async def schools():
-    district_id, district_name = _district()
+    district_id, district_name = await asyncio.to_thread(_district)
     if not district_id:
         return {"configured": False, "district_name": "", "schools": []}
     try:
@@ -48,13 +49,13 @@ async def lines(school_id: str):
     school_id = (school_id or "").strip()
     if not school_id:
         raise HTTPException(status_code=400, detail="school_id is required")
-    today, _hour = schoolcafe.app_today()
+    today, _hour = await asyncio.to_thread(schoolcafe.app_today)
     try:
         breakfast = await schoolcafe.serving_lines(school_id, "Breakfast", today)
         lunch = await schoolcafe.serving_lines(school_id, "Lunch", today)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"SchoolCafe lines failed: {e}")
-    selected = schoolcafe.line_overrides().get(school_id) or {}
+    selected = (await asyncio.to_thread(schoolcafe.line_overrides)).get(school_id) or {}
     return {"breakfast": breakfast, "lunch": lunch, "selected": selected}
 
 

@@ -5,7 +5,7 @@ import asyncio
 import json
 import time
 import outbound
-from database import get_settings_map
+from database import get_settings_map_async
 
 router = APIRouter()
 
@@ -132,7 +132,7 @@ async def _refresh_ha_states(cache_key: tuple, ha_url: str, ha_token: str, named
 @router.get("/states")
 async def get_ha_states():
     global _ha_inflight
-    s = get_settings_map()
+    s = await get_settings_map_async()
 
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
@@ -183,7 +183,7 @@ async def cover_action(action: str, body: HAActionRequest):
     if action not in valid_actions:
         raise HTTPException(status_code=400, detail="Invalid action")
 
-    s = get_settings_map()
+    s = await get_settings_map_async()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
 
@@ -218,7 +218,7 @@ async def alarm_action(action: str, body: HAActionRequest):
     if action not in valid_actions:
         raise HTTPException(status_code=400, detail="Invalid action")
 
-    s = get_settings_map()
+    s = await get_settings_map_async()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
     alarm_code = s.get("ha_alarm_code", "").strip()
@@ -264,7 +264,7 @@ class TTSRequest(BaseModel):
 
 @router.post("/tts")
 async def speak_tts(body: TTSRequest):
-    s = get_settings_map()
+    s = await get_settings_map_async()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
     if not ha_url or not ha_token:
@@ -295,7 +295,7 @@ async def speak_tts(body: TTSRequest):
 
 async def fire_tts(message: str, entity_id: str, tts_engine: str = "tts.google_translate_en_com"):
     """Called by the reminder background loop — no HTTP context."""
-    s = get_settings_map()
+    s = await get_settings_map_async()
     ha_url = s.get("ha_url", "").strip()
     ha_token = s.get("ha_token", "").strip()
     if not ha_url or not ha_token:

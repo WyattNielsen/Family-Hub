@@ -1,6 +1,6 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
-from database import get_db, get_settings_map, invalidate_settings_cache
+from database import get_db, get_settings_map_async, invalidate_settings_cache
 
 router = APIRouter()
 
@@ -21,7 +21,7 @@ def _write_only_flags(stored: dict) -> dict:
 
 @router.get("/")
 async def get_settings():
-    stored = get_settings_map()
+    stored = await get_settings_map_async()
     out = {key: value for key, value in stored.items() if key not in WRITE_ONLY_KEYS}
     out.update(_write_only_flags(stored))
     return out
@@ -71,7 +71,7 @@ def update_settings(payload: dict):
 
 @router.get("/{key}")
 async def get_setting(key: str):
-    stored = get_settings_map()
+    stored = await get_settings_map_async()
     if key in WRITE_ONLY_KEYS:
         return {"key": key, "set": _is_set(stored.get(key))}
     if key not in stored:

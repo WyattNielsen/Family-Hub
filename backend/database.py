@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 import os
 import threading
@@ -12,7 +13,11 @@ DB_PATH = (
 
 _settings_lock = threading.Lock()
 _settings_cache: tuple[float, dict[str, str]] | None = None
-_SETTINGS_TTL = 5.0
+_settings_gen = 0
+# Writes call invalidate_settings_cache(), so this only bounds how long a
+# change made outside this process stays invisible. A short TTL made every
+# poll reopen SQLite on the event loop.
+_SETTINGS_TTL = 60.0
 
 
 def get_db():
@@ -30,8 +35,12 @@ def get_db():
 
 
 def get_settings_map() -> dict[str, str]:
-    """Return all settings from a short-lived in-memory cache to avoid opening
-    SQLite connections on the asyncio event loop during page transitions."""
+    """Return all settings from memory. The SQLite read runs outside the lock.
+
+    Holding the lock across get_db() deadlocks a save: the event loop waits
+    inside SQLite for the writer's transaction, and the writer waits on this
+    lock in invalidate_settings_cache() before it can commit and close.
+    """
     global _settings_cache
     now = time.monotonic()
     hit = _settings_cache
@@ -41,13 +50,20 @@ def get_settings_map() -> dict[str, str]:
         hit = _settings_cache
         if hit is not None and time.monotonic() - hit[0] < _SETTINGS_TTL:
             return hit[1]
-        conn = get_db()
-        try:
-            rows = conn.execute("SELECT key, value FROM settings").fetchall()
-            data = {r["key"]: r["value"] for r in rows}
-        finally:
-            conn.close()
-        _settings_cache = (time.monotonic(), data)
+        gen = _settings_gen
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        data = {r["key"]: r["value"] for r in rows}
+    finally:
+        conn.close()
+    with _settings_lock:
+        if _settings_gen == gen:
+            _settings_cache = (time.monotonic(), data)
+            return data
+        hit = _settings_cache
+        if hit is not None:
+            return hit[1]
         return data
 
 
@@ -56,10 +72,25 @@ def get_setting_value(key: str, default: str = "") -> str:
     return default if val is None else val
 
 
+async def get_settings_map_async() -> dict[str, str]:
+    """Settings read for async routes and background tasks.
+
+    A cache miss opens SQLite. Doing that on the event loop freezes every
+    request, including the save whose response is waiting to be written.
+    """
+    return await asyncio.to_thread(get_settings_map)
+
+
+async def get_setting_value_async(key: str, default: str = "") -> str:
+    val = (await get_settings_map_async()).get(key)
+    return default if val is None else val
+
+
 def invalidate_settings_cache():
-    global _settings_cache
+    global _settings_cache, _settings_gen
     with _settings_lock:
         _settings_cache = None
+        _settings_gen += 1
 
 def init_db():
     conn = get_db()

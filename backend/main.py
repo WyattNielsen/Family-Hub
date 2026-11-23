@@ -7,7 +7,7 @@ from datetime import date
 import asyncio
 import os
 
-from database import init_db, get_setting_value
+from database import init_db, get_setting_value_async
 from routers import calendar, chores, members, auth, settings, photos, lunch, weather, homeassistant, stocks, security, messages, meals, schoolcafe, shopping
 import json
 import outbound
@@ -25,7 +25,7 @@ async def _reminder_loop():
                 _fired_today.clear()
                 _last_date = today
             hhmm = now.strftime("%H:%M")
-            raw = get_setting_value("chore_reminders", "")
+            raw = await get_setting_value_async("chore_reminders", "")
             if not raw:
                 continue
             reminders = json.loads(raw)
@@ -68,7 +68,7 @@ async def _auto_sync_loop():
     await asyncio.sleep(30)  # let the app fully start first
     while True:
         try:
-            raw = get_setting_value("google_sync_interval", "")
+            raw = await get_setting_value_async("google_sync_interval", "")
             interval = int(raw) if raw else 0
             if interval > 0:
                 await calendar.run_full_sync()

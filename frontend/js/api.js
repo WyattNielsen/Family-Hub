@@ -1,6 +1,7 @@
 // ── API Helper (In-Memory Cache + Stale-While-Revalidate + Deduplication) ──
 const _getCache = new Map();
 const _getInflight = new Map();
+const _getAbort = new Map();
 let _getCacheGen = 0;
 const GET_CACHE_MS = 10000;       // Fresh hit window across rapid screen switches
 const GET_STALE_MAX_MS = 600000;  // Up to 10m for instant optimistic paint via API.peek()
@@ -9,20 +10,44 @@ const FETCH_TIMEOUT_MS = 12000;
 function _bustGetCache() {
   _getCacheGen += 1;
   _getCache.clear();
+  // This app is served over LAN HTTP/1.1, which allows about six connections.
+  // A save has to be able to take one of them. Abort the reads that were
+  // holding the others so the write is not queued behind a 45s menu fetch.
+  _getAbort.forEach(ctrl => {
+    try { ctrl.abort(); } catch (_) {}
+  });
+  _getAbort.clear();
+}
+
+function _isAbortError(e) {
+  return !!(e && e.name === 'AbortError');
 }
 
 function _fetchWithTimeout(path, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
-  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const own = typeof AbortController !== 'undefined' ? new AbortController() : null;
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(() => {
-      if (ctrl && ctrl.abort) {
-        try { ctrl.abort(); } catch (_) {}
+      if (own) {
+        try { own.abort(); } catch (_) {}
       }
       reject(new Error('Request timeout'));
     }, timeoutMs);
   });
-  const opts = ctrl ? Object.assign({}, options, { signal: ctrl.signal }) : options;
+  let opts = options;
+  if (own) {
+    const incoming = options.signal;
+    if (incoming) {
+      if (incoming.aborted) {
+        try { own.abort(); } catch (_) {}
+      } else {
+        incoming.addEventListener('abort', () => {
+          try { own.abort(); } catch (_) {}
+        });
+      }
+    }
+    opts = Object.assign({}, options, { signal: own.signal });
+  }
   return Promise.race([fetch(path, opts), timeoutPromise]).then(
     r => { clearTimeout(timer); return r; },
     err => { clearTimeout(timer); throw err; }
@@ -51,13 +76,26 @@ const API = {
     }
     const pending = _getInflight.get(path);
     if (pending) return pending;
-    const gen = _getCacheGen;
     const request = (async () => {
-      const r = await _fetchWithTimeout(path, {}, timeoutMs);
-      if (!r.ok) throw new Error(await r.text());
-      const data = await r.json();
-      if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
-      return data;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const gen = _getCacheGen;
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        if (ctrl) _getAbort.set(path, ctrl);
+        try {
+          const r = await _fetchWithTimeout(path, ctrl ? { signal: ctrl.signal } : {}, timeoutMs);
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          if (gen === _getCacheGen) _getCache.set(path, { at: Date.now(), data });
+          return data;
+        } catch (e) {
+          // A save aborted this read to free a connection. Fetch again once
+          // the write has a slot, instead of failing the screen that was loading.
+          if (_isAbortError(e) && gen !== _getCacheGen && attempt < 3) continue;
+          throw e;
+        } finally {
+          if (ctrl && _getAbort.get(path) === ctrl) _getAbort.delete(path);
+        }
+      }
     })();
     _getInflight.set(path, request);
     try {

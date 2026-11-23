@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from datetime import datetime
+import asyncio
 import pytz
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
@@ -32,7 +33,7 @@ def get_today_local():
     return now.strftime("%Y/%m/%d"), now.strftime("%Y-%m-%d")
 
 async def fetch_items_for_date(date_key: str):
-    district, slug, menu_type = get_lunch_config()
+    district, slug, menu_type = await asyncio.to_thread(get_lunch_config)
     cache_key = f"{district}:{slug}:{date_key}"
     if cache_key in _cache:
         return _cache[cache_key]
@@ -111,16 +112,16 @@ async def fetch_items_for_date(date_key: str):
     return result
 
 async def fetch_todays_items():
-    _, date_key = get_today_local()
+    _, date_key = await asyncio.to_thread(get_today_local)
     return await fetch_items_for_date(date_key)
 
 @router.get("/today")
 async def get_todays_menu(date: str = None):
-    district, slug, menu_type = get_lunch_config()
+    district, slug, menu_type = await asyncio.to_thread(get_lunch_config)
     if not district:
         return {"not_configured": True, "breakfast": [], "lunch": []}
     if not date:
-        _, date = get_today_local()
+        _, date = await asyncio.to_thread(get_today_local)
     result = await fetch_items_for_date(date)
     if result is None:
         return {"date": date, "breakfast": [], "lunch": [], "error": "Could not fetch menu"}
@@ -133,8 +134,8 @@ async def get_todays_menu(date: str = None):
 @router.get("/debug")
 async def debug_menu():
     """Returns raw menu items with image URLs so we can verify section detection."""
-    district, slug, menu_type = get_lunch_config()
-    date_path, date_key = get_today_local()
+    district, slug, menu_type = await asyncio.to_thread(get_lunch_config)
+    date_path, date_key = await asyncio.to_thread(get_today_local)
     url = f"https://{district}.api.nutrislice.com/menu/api/weeks/school/{slug}/menu-type/{menu_type}/{date_path}/"
     async with outbound.client(timeout=10.0) as client:
         resp = await client.get(url, headers={"Accept": "application/json"})

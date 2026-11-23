@@ -3,7 +3,7 @@ import asyncio
 import time
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
-from database import get_setting_value
+from database import get_setting_value_async
 
 router = APIRouter()
 
@@ -30,8 +30,8 @@ def format_price(price: float) -> str:
     else:
         return f"{price:.4f}"
 
-def configured_symbols() -> str:
-    val = get_setting_value("stock_symbols", "")
+async def configured_symbols() -> str:
+    val = await get_setting_value_async("stock_symbols", "")
     return val if val else "BTC,TSLA,SPY"
 
 
@@ -48,7 +48,7 @@ async def _refresh_quotes_bg(cache_key: str, symbol_list: list[str]):
 async def get_stocks(symbols: str | None = None):
     """Quotes for the saved ticker, or for `symbols` when a caller passes them."""
     if symbols is None or not symbols.strip():
-        symbols = configured_symbols()
+        symbols = await configured_symbols()
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if not symbol_list:
         return []
@@ -136,4 +136,4 @@ async def _fetch_quotes(symbol_list: list[str]) -> list:
 
 @router.get("/settings")
 async def get_stock_settings():
-    return {"symbols": configured_symbols()}
+    return {"symbols": await configured_symbols()}

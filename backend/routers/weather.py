@@ -3,7 +3,7 @@ from fastapi import APIRouter
 import asyncio
 import time
 import outbound
-from database import get_db, get_settings_map, invalidate_settings_cache
+from database import get_db, get_settings_map_async, invalidate_settings_cache
 
 router = APIRouter()
 
@@ -61,7 +61,7 @@ def _save_geo(lat: str, lon: str, city: str):
 
 @router.get("/")
 async def get_weather():
-    s = get_settings_map()
+    s = await get_settings_map_async()
 
     zip_code = s.get("weather_zip", "").strip()
     if not zip_code:
