@@ -1,16 +1,16 @@
+import json
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter
 import asyncio
 import time
 import outbound
-from database import get_db, get_settings_map_async, invalidate_settings_cache
+import jobs
+from database import get_db, get_setting_value, get_settings_map_async, invalidate_settings_cache
 
 router = APIRouter()
 
-# Open-Meteo changes slowly. A page load on every screen was hitting it each time.
+# Open-Meteo changes slowly. A stored copy is served while a refresh runs.
 _FORECAST_TTL = 10 * 60
-_forecast_cache = {"key": None, "at": 0.0, "payload": None}
-_forecast_lock = asyncio.Lock()
 
 WMO_CONDITIONS = {
     0:  ("Clear", "☀️"),
@@ -59,40 +59,114 @@ def _save_geo(lat: str, lon: str, city: str):
     invalidate_settings_cache()
 
 
+def _load_forecast():
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT cache_key, payload, fetched_at FROM weather_forecast WHERE id = 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    try:
+        payload = json.loads(row["payload"])
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "cache_key": row["cache_key"],
+        "payload": payload,
+        "fetched_at": row["fetched_at"],
+    }
+
+
+def _save_forecast(key: str, payload: dict):
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO weather_forecast (id, cache_key, payload, fetched_at)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                cache_key = excluded.cache_key,
+                payload = excluded.payload,
+                fetched_at = excluded.fetched_at
+            """,
+            (key, json.dumps(payload), time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _save_forecast_if_current(key: str, payload: dict):
+    """Drop a refresh that finished after the zip code changed."""
+    lat = (get_setting_value("weather_lat") or "").strip()
+    lon = (get_setting_value("weather_lon") or "").strip()
+    if f"{lat},{lon}" != key:
+        return
+    _save_forecast(key, payload)
+
+
 @router.get("/")
 async def get_weather():
     s = await get_settings_map_async()
 
-    zip_code = s.get("weather_zip", "").strip()
+    zip_code = (s.get("weather_zip") or "").strip()
     if not zip_code:
         return {"error": "no_location"}
 
-    lat = s.get("weather_lat")
-    lon = s.get("weather_lon")
-    city = s.get("weather_city", "")
+    lat = (s.get("weather_lat") or "").strip()
+    lon = (s.get("weather_lon") or "").strip()
+    city = s.get("weather_city") or ""
+    stored = await asyncio.to_thread(_load_forecast)
 
-    # Geocode if lat/lon not cached
-    if not lat or not lon:
-        try:
-            async with outbound.client(timeout=5.0) as client:
-                resp = await client.get(
-                    f"https://api.zippopotam.us/us/{zip_code}",
-                    headers={"Accept": "application/json"}
+    if lat and lon:
+        key = f"{lat},{lon}"
+        if stored and stored["cache_key"] == key and not stored["payload"].get("error"):
+            age = time.time() - float(stored["fetched_at"] or 0)
+            if age >= _FORECAST_TTL:
+                await jobs.run_background(
+                    "weather-forecast",
+                    lambda lat=lat, lon=lon, city=city, key=key: _refresh_forecast(lat, lon, city, key),
                 )
-                if resp.status_code != 200:
-                    return {"error": "geocode_failed"}
-                geo = resp.json()
-                place = geo["places"][0]
-                lat = place["latitude"]
-                lon = place["longitude"]
-                city = f"{place['place name']}, {place['state abbreviation']}"
-        except Exception as e:
-            print(f"Geocode error: {e}")
+            return stored["payload"]
+
+    # Nothing stored for this place. The widget cannot paint an empty payload,
+    # so this first request fetches once. Later requests read the stored copy.
+    if not lat or not lon:
+        geo = await _geocode(zip_code)
+        if not geo:
             return {"error": "geocode_failed"}
-
+        lat, lon, city = geo
         await asyncio.to_thread(_save_geo, lat, lon, city)
+    key = f"{lat},{lon}"
+    payload = await _fetch_open_meteo(lat, lon, city)
+    if not payload.get("error"):
+        await asyncio.to_thread(_save_forecast, key, payload)
+    return payload
 
-    return await _forecast(lat, lon, city)
+
+async def _geocode(zip_code: str):
+    try:
+        async with outbound.client(timeout=5.0) as client:
+            resp = await client.get(
+                f"https://api.zippopotam.us/us/{zip_code}",
+                headers={"Accept": "application/json"}
+            )
+            if resp.status_code != 200:
+                return None
+            geo = resp.json()
+            place = geo["places"][0]
+            lat = place["latitude"]
+            lon = place["longitude"]
+            city = f"{place['place name']}, {place['state abbreviation']}"
+            return lat, lon, city
+    except Exception as e:
+        print(f"Geocode error: {e}")
+        return None
 
 
 def _at(seq, i):
@@ -152,7 +226,7 @@ def _forecast_payload(data: dict, city: str) -> dict:
     }
 
 
-async def _do_fetch_forecast(lat, lon, city: str, key: tuple) -> dict:
+async def _fetch_open_meteo(lat, lon, city: str) -> dict:
     try:
         async with outbound.client(timeout=5.0) as client:
             resp = await client.get(
@@ -170,25 +244,14 @@ async def _do_fetch_forecast(lat, lon, city: str, key: tuple) -> dict:
             )
             if resp.status_code != 200:
                 return {"error": "weather_fetch_failed"}
-            payload = _forecast_payload(resp.json(), city)
+            return _forecast_payload(resp.json(), city)
     except Exception as e:
         print(f"Weather fetch error: {e}")
         return {"error": "weather_fetch_failed"}
 
-    _forecast_cache["key"] = key
-    _forecast_cache["at"] = time.monotonic()
-    _forecast_cache["payload"] = payload
-    return payload
 
-
-async def _forecast(lat, lon, city: str) -> dict:
-    key = (str(lat), str(lon))
-    async with _forecast_lock:
-        cached = _forecast_cache
-        same_place = cached["payload"] is not None and cached["key"] == key
-        if same_place and time.monotonic() - cached["at"] < _FORECAST_TTL:
-            return cached["payload"]
-        payload = await _do_fetch_forecast(lat, lon, city, key)
-        if payload.get("error") and same_place:
-            return cached["payload"]
-        return payload
+async def _refresh_forecast(lat, lon, city: str, key: str):
+    payload = await _fetch_open_meteo(lat, lon, city)
+    if payload.get("error"):
+        return
+    await asyncio.to_thread(_save_forecast_if_current, key, payload)

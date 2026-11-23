@@ -1,3 +1,4 @@
+import asyncio
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import APIRouter, HTTPException
 from database import get_db, get_settings_map_async, invalidate_settings_cache
@@ -27,8 +28,7 @@ async def get_settings():
     return out
 
 
-@router.post("/")
-def update_settings(payload: dict):
+def _write_settings(payload: dict):
     conn = get_db()
     try:
         for key, value in payload.items():
@@ -55,18 +55,21 @@ def update_settings(payload: dict):
             )
         conn.commit()
         invalidate_settings_cache()
-        if "stock_symbols" in payload:
-            from routers import stocks
-            stocks._quote_cache.clear()
-        if any(k in payload for k in ("weather_zip", "weather_lat", "weather_lon")):
-            from routers import weather
-            weather._forecast_cache["payload"] = None
-        if any(k in payload for k in ("ha_url", "ha_token", "ha_entities")):
-            from routers import homeassistant
-            homeassistant.invalidate_ha_cache()
-        return {"ok": True}
     finally:
         conn.close()
+
+
+@router.post("/")
+async def update_settings(payload: dict):
+    await asyncio.to_thread(_write_settings, payload)
+    if any(k in payload for k in ("ha_url", "ha_token", "ha_entities")):
+        from routers import homeassistant
+        homeassistant.invalidate_ha_cache()
+    # District and serving-line changes should show up without waiting on SchoolCafe.
+    if any(k in payload for k in ("schoolcafe_district_id", "schoolcafe_lines")):
+        import schoolcafe
+        await schoolcafe.kick_school_menu_refresh()
+    return {"ok": True}
 
 
 @router.get("/{key}")

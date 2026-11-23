@@ -2,11 +2,15 @@
 
 Weekly menus are a dict keyed by M/D/YYYY, then category, then item list.
 Serving lines come from GetServiceLine (the schools list leaves them blank).
+
+Fetched weeks are stored in school_menus. Meal pages read that table.
+SchoolCafe itself runs only from the school-menus background job and from
+the settings screens that search districts, schools, and serving lines.
 """
 import asyncio
 import json
-import time
-from datetime import datetime, timedelta
+import threading
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import sys, os
@@ -16,10 +20,11 @@ import outbound
 
 BASE = "https://webapis.schoolcafe.com/api"
 HEADERS = {"Accept": "application/json", "User-Agent": "FamilyHub/1.0"}
-_CACHE = {}
-_INFLIGHT: dict[str, asyncio.Task] = {}
-_TTL = 6 * 3600
-_STALE_TTL = 48 * 3600
+
+# Weeks a reader asked for that the current job has not picked up yet.
+_plan_lock = threading.Lock()
+_pending_weeks: set[str] = set()
+_again = False
 
 
 class SchoolCafeError(Exception):
@@ -30,59 +35,6 @@ def _client(timeout: float = 6.0):
     # Shares the process-wide client (IPv4, no env proxy). Headers stay on
     # this call so other APIs are not forced to SchoolCafe's Accept.
     return outbound.client(timeout=timeout, headers=HEADERS)
-
-
-def _cache_get(key):
-    hit = _CACHE.get(key)
-    if not hit:
-        return None
-    ts, value = hit
-    if time.monotonic() - ts > _TTL:
-        return None
-    return value
-
-
-def _cache_get_stale(key):
-    hit = _CACHE.get(key)
-    if not hit:
-        return None
-    ts, value = hit
-    if time.monotonic() - ts > _STALE_TTL:
-        return None
-    return value
-
-
-def _cache_set(key, value):
-    _CACHE[key] = (time.monotonic(), value)
-    return value
-
-
-async def _cached_fetch(cache_key: str, loader):
-    fresh = _cache_get(cache_key)
-    if fresh is not None:
-        return fresh
-    stale = _cache_get_stale(cache_key)
-    if stale is not None:
-        task = _INFLIGHT.get(cache_key)
-        if task is None or task.done():
-            async def _bg():
-                try:
-                    await loader()
-                except Exception:
-                    pass
-                finally:
-                    _INFLIGHT.pop(cache_key, None)
-            _INFLIGHT[cache_key] = asyncio.create_task(_bg())
-        return stale
-    task = _INFLIGHT.get(cache_key)
-    if task is None or task.done():
-        task = asyncio.create_task(loader())
-        _INFLIGHT[cache_key] = task
-    try:
-        return await task
-    finally:
-        if _INFLIGHT.get(cache_key) is task and task.done():
-            _INFLIGHT.pop(cache_key, None)
 
 
 def app_today():
@@ -96,8 +48,26 @@ def app_today():
     return now.strftime("%Y-%m-%d"), now.hour
 
 
+def school_menu_date(dinner_iso: str, hour: int) -> str:
+    """School menu to show for a dinner date.
+
+    After 17:00 the next calendar day is used. Saturday and Sunday have no
+    published menu, so those roll forward to Monday.
+    """
+    day = datetime.strptime(dinner_iso, "%Y-%m-%d").date()
+    if hour >= 17:
+        day += timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day.isoformat()
+
+
 def setting(key, default=""):
     return get_setting_value(key, default)
+
+
+def _lunch_hidden() -> bool:
+    return (setting("lunch_hidden", "false") or "").strip().lower() == "true"
 
 
 def line_overrides():
@@ -144,6 +114,20 @@ def next_school_day(iso_date: str) -> str:
     while day.weekday() >= 5:
         day += timedelta(days=1)
     return day.isoformat()
+
+
+def _shift(iso_date: str, days: int) -> str:
+    day = datetime.strptime(iso_date, "%Y-%m-%d").date() + timedelta(days=days)
+    return day.isoformat()
+
+
+def _default_weeks() -> set[str]:
+    today, _hour = app_today()
+    weeks = {monday_of(today)}
+    day = datetime.strptime(today, "%Y-%m-%d").date()
+    if day.weekday() == 4:
+        weeks.add(monday_of(_shift(today, 7)))
+    return weeks
 
 
 def _mdy(iso_date: str) -> str:
@@ -243,82 +227,65 @@ async def search_districts(query: str):
 
 
 async def list_schools(district_id: str):
-    cache_key = f"schools:{district_id}"
-
-    async def _load():
-        async with _client() as client:
-            data = await _get_json(client, "GetSchoolsList", {"districtId": district_id})
-        if not isinstance(data, list):
-            return None
-        schools = []
-        seen = set()
-        for row in data:
-            if not isinstance(row, dict):
-                continue
-            sid = row.get("SchoolId")
-            name = (row.get("SchoolName") or "").strip()
-            if not sid or sid in seen or not name:
-                continue
-            seen.add(sid)
-            schools.append({
-                "id": sid,
-                "name": name,
-                "type": row.get("SiteTypeDescription") or "",
-            })
-        schools.sort(key=lambda s: s["name"].lower())
-        return _cache_set(cache_key, schools)
-
-    return await _cached_fetch(cache_key, _load)
+    async with _client() as client:
+        data = await _get_json(client, "GetSchoolsList", {"districtId": district_id})
+    if not isinstance(data, list):
+        return None
+    schools = []
+    seen = set()
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("SchoolId")
+        name = (row.get("SchoolName") or "").strip()
+        if not sid or sid in seen or not name:
+            continue
+        seen.add(sid)
+        schools.append({
+            "id": sid,
+            "name": name,
+            "type": row.get("SiteTypeDescription") or "",
+        })
+    schools.sort(key=lambda s: s["name"].lower())
+    return schools
 
 
 async def serving_lines(school_id: str, meal_type: str, iso_date: str):
     monday = monday_of(iso_date)
     sunday = (datetime.strptime(monday, "%Y-%m-%d").date() + timedelta(days=6)).isoformat()
-    cache_key = f"lines:{school_id}:{meal_type}:{monday}"
-
-    async def _load():
-        params = {
-            "schoolid": school_id,
-            "startdate": _mdy(monday),
-            "enddate": _mdy(sunday),
-            "mealtype": meal_type,
-        }
-        async with _client() as client:
-            data = await _get_json(client, "GetServiceLine", params)
-        lines = []
-        if isinstance(data, list):
-            for row in data:
-                if not isinstance(row, dict):
-                    continue
-                name = (row.get("ServingLineDescription") or "").strip()
-                if name and name not in lines:
-                    lines.append(name)
-        if not lines:
-            return []
-        return _cache_set(cache_key, lines)
-
-    return await _cached_fetch(cache_key, _load)
+    params = {
+        "schoolid": school_id,
+        "startdate": _mdy(monday),
+        "enddate": _mdy(sunday),
+        "mealtype": meal_type,
+    }
+    async with _client() as client:
+        data = await _get_json(client, "GetServiceLine", params)
+    lines = []
+    if isinstance(data, list):
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            name = (row.get("ServingLineDescription") or "").strip()
+            if name and name not in lines:
+                lines.append(name)
+    return lines
 
 
 async def weekly_menu(school_id: str, meal_type: str, serving_line: str, iso_date: str):
     monday = monday_of(iso_date)
-    cache_key = f"week:{school_id}:{meal_type}:{serving_line}:{monday}"
-
-    async def _load():
-        params = {
-            "SchoolId": school_id,
-            "ServingDate": _mdy(monday),
-            "ServingLine": serving_line,
-            "MealType": meal_type,
-            "enabledWeekendMenus": "true",
-        }
-        async with _client() as client:
-            data = await _get_json(client, "CalendarView/GetWeeklyMenuitems", params)
-        if not isinstance(data, dict) or not data:
-            return {}
-        return _cache_set(cache_key, data)
-
-    return await _cached_fetch(cache_key, _load)
+    params = {
+        "SchoolId": school_id,
+        "ServingDate": _mdy(monday),
+        "ServingLine": serving_line,
+        "MealType": meal_type,
+        "enabledWeekendMenus": "true",
+    }
+    async with _client() as client:
+        data = await _get_json(client, "CalendarView/GetWeeklyMenuitems", params)
+    if not isinstance(data, dict) or not data:
+        return {}
+    return data
 
 
 async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_line: str = ""):
@@ -334,3 +301,187 @@ async def menu_week(school_id: str, meal_type: str, iso_date: str, preferred_lin
 async def menu_items(school_id: str, meal_type: str, iso_date: str, preferred_line: str = ""):
     payload, line = await menu_week(school_id, meal_type, iso_date, preferred_line)
     return items_for_date(payload, iso_date), line
+
+
+def _member_schools() -> list[str]:
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT DISTINCT school_id FROM members
+               WHERE school_id IS NOT NULL AND school_id != ''"""
+        ).fetchall()
+        return [r["school_id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def _upsert_menu(school_id: str, meal_type: str, serving_line: str, week_start: str, days: dict):
+    fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO school_menus
+                (school_id, meal_type, serving_line, week_start, menu_json, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(school_id, meal_type, serving_line, week_start) DO UPDATE SET
+                menu_json = excluded.menu_json,
+                fetched_at = excluded.fetched_at
+            """,
+            (school_id, meal_type, serving_line, week_start, json.dumps(days), fetched_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_week_maps(school_ids: list, week_starts: list) -> dict:
+    """Stored item lists keyed by (school_id, meal, serving_line, week_start).
+
+    Each value is (fetched_at, {iso_date: [item, ...]}). SQLite only.
+    """
+    ids = [s for s in school_ids if s]
+    weeks = [w for w in week_starts if w]
+    if not ids or not weeks:
+        return {}
+    conn = get_db()
+    try:
+        query = f"""
+            SELECT school_id, meal_type, serving_line, week_start, menu_json, fetched_at
+            FROM school_menus
+            WHERE school_id IN ({",".join("?" * len(ids))})
+              AND week_start IN ({",".join("?" * len(weeks))})
+        """
+        rows = conn.execute(query, [*ids, *weeks]).fetchall()
+    finally:
+        conn.close()
+    out = {}
+    for row in rows:
+        try:
+            days = json.loads(row["menu_json"])
+        except Exception:
+            continue
+        if not isinstance(days, dict):
+            continue
+        out[(row["school_id"], row["meal_type"], row["serving_line"], row["week_start"])] = (
+            row["fetched_at"] or "",
+            days,
+        )
+    return out
+
+
+def pick_days(maps: dict, school_id: str, meal: str, week: str, preferred: str):
+    """Return (days or None, needs_refresh).
+
+    days is None when this school has nothing stored for the week. A preferred
+    line that is not the stored line still returns the stored copy and asks
+    for a refresh, so the page can paint while SchoolCafe runs in the background.
+    """
+    exact = None
+    if preferred:
+        hit = maps.get((school_id, meal, preferred, week))
+        if hit:
+            exact = hit[1]
+    best = None
+    best_at = ""
+    for (sid, meal_type, _line, wk), (fetched, days) in maps.items():
+        if sid == school_id and meal_type == meal and wk == week and fetched >= best_at:
+            best_at = fetched
+            best = days
+    if preferred:
+        if exact is not None:
+            return exact, False
+        if best is not None:
+            return best, True
+        return None, True
+    if best is not None:
+        return best, False
+    return None, True
+
+
+def _take_plan():
+    """Work list for one refresh pass, or None when school menus are hidden.
+
+    Opens its own connections and returns before any HTTP call.
+    """
+    global _again
+    if _lunch_hidden():
+        return None
+    with _plan_lock:
+        extra = set(_pending_weeks)
+        _pending_weeks.clear()
+        _again = False
+    weeks = set(extra)
+    weeks.update(_default_weeks())
+    schools = _member_schools()
+    overrides = line_overrides()
+    work = []
+    for school_id in schools:
+        prefs = overrides.get(school_id) or {}
+        if not isinstance(prefs, dict):
+            prefs = {}
+        for week in sorted(weeks):
+            for meal in ("Breakfast", "Lunch"):
+                preferred = prefs.get(meal) or ""
+                if not isinstance(preferred, str):
+                    preferred = str(preferred)
+                work.append((school_id, meal, week, preferred.strip()))
+    return work
+
+
+async def _store_week(school_id: str, meal: str, week: str, preferred: str):
+    payload, line = await menu_week(school_id, meal, week, preferred)
+    if not line:
+        line = preferred or ""
+    days = {}
+    for offset in range(7):
+        iso = _shift(week, offset)
+        days[iso] = items_for_date(payload, iso)
+    await asyncio.to_thread(_upsert_menu, school_id, meal, line, week, days)
+    if preferred and preferred != line:
+        # The settings line is not one SchoolCafe published. Keep a row under
+        # the name the read path looks up so the next request is a hit.
+        await asyncio.to_thread(_upsert_menu, school_id, meal, preferred, week, days)
+
+
+async def refresh_school_menus():
+    """Fetch current-week menus (and next week on Friday) into SQLite.
+
+    Does nothing when lunch_hidden is true. A kick that arrives mid-run
+    causes one more pass so a line change is not dropped.
+    """
+    while True:
+        plan = await asyncio.to_thread(_take_plan)
+        if plan is None:
+            return
+        for school_id, meal, week, preferred in plan:
+            try:
+                await _store_week(school_id, meal, week, preferred)
+            except Exception as e:
+                print(f"School menu refresh failed for {school_id} {meal} {week}: {e}")
+        with _plan_lock:
+            if not _again and not _pending_weeks:
+                return
+
+
+async def kick_school_menu_refresh(weeks=None):
+    """Start the shared school-menus job. Returns as soon as it is scheduled.
+
+    A kick that lands as the running job is deciding to exit is started
+    again, so a serving-line change is not dropped on the floor.
+    """
+    global _again
+    with _plan_lock:
+        if weeks:
+            _pending_weeks.update(w for w in weeks if w)
+        _again = True
+    import jobs
+    started = await jobs.run_background("school-menus", lambda: refresh_school_menus())
+    if started.get("started"):
+        return started
+    await asyncio.sleep(0)
+    with _plan_lock:
+        pending = _again or bool(_pending_weeks)
+    if not pending:
+        return started
+    return await jobs.run_background("school-menus", lambda: refresh_school_menus())

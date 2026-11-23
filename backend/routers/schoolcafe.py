@@ -60,9 +60,15 @@ async def lines(school_id: str):
 
 
 @router.put("/lines")
-def update_lines(body: LineUpdate):
+async def update_lines(body: LineUpdate):
     school_id = (body.school_id or "").strip()
     if not school_id:
         raise HTTPException(status_code=400, detail="school_id is required")
-    saved = schoolcafe.save_line_override(school_id, (body.breakfast or "").strip(), (body.lunch or "").strip())
+    saved = await asyncio.to_thread(
+        schoolcafe.save_line_override,
+        school_id,
+        (body.breakfast or "").strip(),
+        (body.lunch or "").strip(),
+    )
+    await schoolcafe.kick_school_menu_refresh()
     return {"ok": True, "selected": saved}

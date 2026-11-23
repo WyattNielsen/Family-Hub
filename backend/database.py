@@ -314,6 +314,29 @@ def init_db():
             checked INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS school_menus (
+            school_id TEXT NOT NULL,
+            meal_type TEXT NOT NULL,
+            serving_line TEXT NOT NULL,
+            week_start TEXT NOT NULL,
+            menu_json TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (school_id, meal_type, serving_line, week_start)
+        );
+
+        CREATE TABLE IF NOT EXISTS weather_forecast (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            cache_key TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_quotes (
+            cache_key TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        );
     """)
 
     conn.commit()
@@ -342,6 +365,26 @@ def init_db():
         "ALTER TABLE members ADD COLUMN avatar_photo TEXT DEFAULT NULL",
         "ALTER TABLE members ADD COLUMN sort_order INTEGER DEFAULT 0",
         "ALTER TABLE messages ADD COLUMN recipient_id INTEGER DEFAULT NULL",
+        """CREATE TABLE IF NOT EXISTS school_menus (
+            school_id TEXT NOT NULL,
+            meal_type TEXT NOT NULL,
+            serving_line TEXT NOT NULL,
+            week_start TEXT NOT NULL,
+            menu_json TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (school_id, meal_type, serving_line, week_start)
+        )""",
+        """CREATE TABLE IF NOT EXISTS weather_forecast (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            cache_key TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS stock_quotes (
+            cache_key TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        )""",
     ):
         try:
             conn.execute(stmt)

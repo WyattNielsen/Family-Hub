@@ -419,38 +419,22 @@
     if (nextBtn) nextBtn.textContent = weekOffset === 0 ? 'Next week' : '›';
     const network = !(opts && opts.cacheOnly);
 
-    const cachedFast = API.peek(url + '&include_school=false');
-    const cachedFull = API.peek(url);
-    if (cachedFast) {
-      _paintWeekPlan(el, cachedFast, start);
-      const wants = cachedFast.configured && !cachedFast.school_menus_hidden;
-      renderSchools(cachedFull || cachedFast, wants && !cachedFull);
+    const cached = API.peek(url);
+    if (cached) {
+      _paintWeekPlan(el, cached, start);
+      renderSchools(cached, false);
     } else if (lastSchoolData && opts && opts.cacheOnly) {
       renderSchools(lastSchoolData, lastSchoolLoading);
     }
     if (!network) return;
 
     try {
-      const data = await API.get(url + '&include_school=false', { timeout: 45000 });
+      const data = await API.get(url);
       if (gen !== _weekGen || document.getElementById('weekPlan') !== el) return;
       _paintWeekPlan(el, data, start);
-      const wantsSchool = data.configured && !data.school_menus_hidden;
-      const fullHit = API.peek(url);
-      renderSchools(fullHit || data, wantsSchool && !fullHit);
-      if (!wantsSchool) return;
-      try {
-        const menus = await API.get(url, { timeout: 45000 });
-        if (gen !== _weekGen || document.getElementById('weekPlan') !== el) return;
-        renderSchools(menus, false);
-      } catch (e) {
-        if (gen !== _weekGen) return;
-        schoolMenus = [];
-        closeMealPlan();
-        const school = document.getElementById('schoolWeek');
-        if (school) school.innerHTML = '<div class="meals-note">Menu unavailable</div>';
-      }
+      renderSchools(data, false);
     } catch (e) {
-      if (!cachedFast && gen === _weekGen && document.getElementById('weekPlan') === el) {
+      if (!cached && gen === _weekGen && document.getElementById('weekPlan') === el) {
         weekDays = [];
         schoolMenus = [];
         closeMealPlan();

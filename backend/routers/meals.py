@@ -56,9 +56,8 @@ def _members(member_id: Optional[int]):
         conn.close()
 
 
-async def _school_block(member: dict, school_date: str):
-    overrides = (await asyncio.to_thread(schoolcafe.line_overrides)).get(member["school_id"]) or {}
-    block = {
+def _member_head(member: dict) -> dict:
+    return {
         "member_id": member["id"],
         "member_name": member["name"],
         "member_color": member["color"],
@@ -66,21 +65,40 @@ async def _school_block(member: dict, school_date: str):
         "avatar_photo": member["avatar_photo"],
         "school_id": member["school_id"],
         "school_name": member["school_name"] or "",
-        "breakfast": [],
-        "lunch": [],
-        "error": None,
     }
-    try:
-        (breakfast, _b_line), (lunch, _l_line) = await asyncio.gather(
-            schoolcafe.menu_items(member["school_id"], "Breakfast", school_date, overrides.get("Breakfast") or ""),
-            schoolcafe.menu_items(member["school_id"], "Lunch", school_date, overrides.get("Lunch") or ""),
-        )
-        block["breakfast"] = breakfast
-        block["lunch"] = lunch
-    except Exception as e:
-        print(f"SchoolCafe menu error for {member['name']}: {e}")
-        block["error"] = "Menu unavailable"
-    return block
+
+
+def _day_items(days, iso: str) -> list:
+    if not isinstance(days, dict):
+        return []
+    items = days.get(iso)
+    return items if isinstance(items, list) else []
+
+
+def _school_day_blocks(members: list, menu_date: str):
+    """School blocks from SQLite. Also the week starts that still need a fetch."""
+    if not members:
+        return [], []
+    overrides = schoolcafe.line_overrides()
+    week = schoolcafe.monday_of(menu_date)
+    maps = schoolcafe.load_week_maps([m["school_id"] for m in members], [week])
+    blocks = []
+    missing = []
+    for member in members:
+        sid = member["school_id"]
+        pref = overrides.get(sid) or {}
+        if not isinstance(pref, dict):
+            pref = {}
+        breakfast, b_refresh = schoolcafe.pick_days(maps, sid, "Breakfast", week, pref.get("Breakfast") or "")
+        lunch, l_refresh = schoolcafe.pick_days(maps, sid, "Lunch", week, pref.get("Lunch") or "")
+        if b_refresh or l_refresh:
+            missing.append(week)
+        block = _member_head(member)
+        block["breakfast"] = _day_items(breakfast, menu_date)
+        block["lunch"] = _day_items(lunch, menu_date)
+        block["error"] = None
+        blocks.append(block)
+    return blocks, list(dict.fromkeys(missing))
 
 
 def _get_dinner(dinner_date: str) -> dict:
@@ -94,17 +112,20 @@ def _get_dinner(dinner_date: str) -> dict:
         conn.close()
 
 
+def _resolve_menu_dates(dinner_date: Optional[str]):
+    today, hour = schoolcafe.app_today()
+    dinner = dinner_date or today
+    return today, schoolcafe.school_menu_date(dinner, hour), dinner
+
+
 @router.get("/day")
 async def day_menu(
     date: Optional[str] = None,
-    school_date: Optional[str] = None,
     member_id: Optional[int] = Query(None),
     include_school: bool = Query(True),
 ):
-    today, _hour = await asyncio.to_thread(schoolcafe.app_today)
-    dinner_date = _valid_date(date) if date else today
-    menu_date = _valid_date(school_date) if school_date else dinner_date
-    menu_date = schoolcafe.next_school_day(menu_date)
+    dinner_date = _valid_date(date) if date else None
+    today, menu_date, dinner_date = await asyncio.to_thread(_resolve_menu_dates, dinner_date)
     hidden = (await asyncio.to_thread(schoolcafe.setting, "lunch_hidden", "false")) == "true"
     district_id = ((await asyncio.to_thread(schoolcafe.setting, "schoolcafe_district_id")) or "").strip()
 
@@ -113,8 +134,9 @@ async def day_menu(
     schools = []
     if include_school and district_id and not hidden:
         members = await asyncio.to_thread(_members, member_id)
-        if members:
-            schools = await asyncio.gather(*[_school_block(m, menu_date) for m in members])
+        schools, missing = await asyncio.to_thread(_school_day_blocks, members, menu_date)
+        if missing:
+            await schoolcafe.kick_school_menu_refresh(missing)
 
     return {
         "date": dinner_date,
@@ -126,37 +148,37 @@ async def day_menu(
     }
 
 
-async def _school_week(member: dict, dates: list):
-    overrides = (await asyncio.to_thread(schoolcafe.line_overrides)).get(member["school_id"]) or {}
-    block = {
-        "member_id": member["id"],
-        "member_name": member["name"],
-        "member_color": member["color"],
-        "color": member["color"],
-        "avatar": member["avatar"],
-        "avatar_photo": member["avatar_photo"],
-        "school_id": member["school_id"],
-        "school_name": member["school_name"] or "",
-        "days": [],
-        "error": None,
-    }
-    try:
-        (breakfast, _b_line), (lunch, _l_line) = await asyncio.gather(
-            schoolcafe.menu_week(member["school_id"], "Breakfast", dates[0], overrides.get("Breakfast") or ""),
-            schoolcafe.menu_week(member["school_id"], "Lunch", dates[0], overrides.get("Lunch") or ""),
-        )
+def _school_week_blocks(members: list, dates: list):
+    """One stored week, sliced into the day lists the meals page already renders."""
+    if not members or not dates:
+        return [], []
+    overrides = schoolcafe.line_overrides()
+    week = schoolcafe.monday_of(dates[0])
+    maps = schoolcafe.load_week_maps([m["school_id"] for m in members], [week])
+    blocks = []
+    missing = []
+    for member in members:
+        sid = member["school_id"]
+        pref = overrides.get(sid) or {}
+        if not isinstance(pref, dict):
+            pref = {}
+        breakfast, b_refresh = schoolcafe.pick_days(maps, sid, "Breakfast", week, pref.get("Breakfast") or "")
+        lunch, l_refresh = schoolcafe.pick_days(maps, sid, "Lunch", week, pref.get("Lunch") or "")
+        if b_refresh or l_refresh:
+            missing.append(week)
+        block = _member_head(member)
+        block["color"] = member["color"]
         block["days"] = [
             {
                 "date": iso,
-                "breakfast": schoolcafe.items_for_date(breakfast, iso),
-                "lunch": schoolcafe.items_for_date(lunch, iso),
+                "breakfast": _day_items(breakfast, iso),
+                "lunch": _day_items(lunch, iso),
             }
             for iso in dates
         ]
-    except Exception as e:
-        print(f"SchoolCafe week error for {member['name']}: {e}")
-        block["error"] = "Menu unavailable"
-    return block
+        block["error"] = None
+        blocks.append(block)
+    return blocks, list(dict.fromkeys(missing))
 
 
 def _get_week_dinners(dates: list[str]) -> dict[str, dict]:
@@ -196,8 +218,9 @@ async def week_menu(
     schools = []
     if include_school and district_id and not hidden:
         members = await asyncio.to_thread(_members, member_id)
-        if members:
-            schools = list(await asyncio.gather(*[_school_week(m, dates) for m in members]))
+        schools, missing = await asyncio.to_thread(_school_week_blocks, members, dates)
+        if missing:
+            await schoolcafe.kick_school_menu_refresh(missing)
 
     return {
         "start": start_date,

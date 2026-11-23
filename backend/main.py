@@ -12,6 +12,7 @@ from routers import calendar, chores, members, auth, settings, photos, lunch, we
 import json
 import jobs
 import outbound
+import schoolcafe as schoolcafe_menus
 
 async def _reminder_loop():
     _fired_today = set()  # track (time_str) already fired today so we don't double-fire
@@ -65,6 +66,37 @@ async def _chore_advance_loop():
         except Exception as e:
             print(f"Chore advance error: {e}")
 
+def _seconds_until_morning(tz_name: str) -> float:
+    """Seconds until 06:00 in the app timezone. Never zero, so the loop cannot spin."""
+    import pytz
+    from datetime import datetime, timedelta
+    try:
+        tz = pytz.timezone(tz_name or "America/New_York")
+    except Exception:
+        tz = pytz.timezone("America/New_York")
+    now = datetime.now(tz)
+    target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return max((target - now).total_seconds(), 1.0)
+
+
+async def _school_menu_loop():
+    """Write school menus once each morning. Sleeps until then; no tight poll."""
+    while True:
+        try:
+            tz_name = await get_setting_value_async("timezone", "America/New_York")
+            delay = _seconds_until_morning(tz_name or "America/New_York")
+            await asyncio.sleep(delay)
+            # Same job name as a settings change or a page that found a missing row.
+            await jobs.run_background("school-menus", lambda: schoolcafe_menus.refresh_school_menus())
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"School menu loop error: {e}")
+            await asyncio.sleep(300)
+
+
 async def _auto_sync_loop():
     await asyncio.sleep(30)  # let the app fully start first
     while True:
@@ -92,11 +124,13 @@ async def lifespan(app: FastAPI):
     sync_task = asyncio.create_task(_auto_sync_loop())
     reminder_task = asyncio.create_task(_reminder_loop())
     advance_task = asyncio.create_task(_chore_advance_loop())
+    menu_task = asyncio.create_task(_school_menu_loop())
     yield
     sync_task.cancel()
     reminder_task.cancel()
     advance_task.cancel()
-    for t in (sync_task, reminder_task, advance_task):
+    menu_task.cancel()
+    for t in (sync_task, reminder_task, advance_task, menu_task):
         try:
             await t
         except asyncio.CancelledError:

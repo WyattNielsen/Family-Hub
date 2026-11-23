@@ -1,11 +1,13 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db, get_setting_value
 from datetime import datetime, timedelta
 from calendar import monthrange
 import pytz
+import jobs
 
 router = APIRouter()
 
@@ -69,8 +71,11 @@ def get_chores(
     finally:
         conn.close()
 
-@router.post("/")
-def create_chore(chore: ChoreCreate):
+def _needs_catch_up(recurrence, due_date, today: str) -> bool:
+    return bool(recurrence and due_date and str(due_date)[:10] < today)
+
+
+def _insert_chore(chore: ChoreCreate):
     conn = get_db()
     try:
         results = []
@@ -92,15 +97,25 @@ def create_chore(chore: ChoreCreate):
             """, (new_id,)).fetchone()
             results.append(dict(row))
         conn.commit()
-        # The background catch-up only runs once a day.
-        if chore.recurrence and due_date and due_date[:10] < today:
-            _catch_up_after_save(conn)
-        return results[0] if len(results) == 1 else results
+        payload = results[0] if len(results) == 1 else results
+        return payload, _needs_catch_up(chore.recurrence, due_date, today)
     finally:
         conn.close()
 
-@router.put("/{chore_id}")
-def update_chore(chore_id: int, chore: ChoreUpdate):
+
+async def _run_chore_catch_up():
+    """Missed occurrences. Opens its own connection; the save already closed its."""
+    await asyncio.to_thread(advance_recurring_chores)
+
+
+@router.post("/")
+async def create_chore(chore: ChoreCreate):
+    payload, catch_up = await asyncio.to_thread(_insert_chore, chore)
+    if catch_up:
+        await jobs.run_background("chore-catch-up", lambda: _run_chore_catch_up())
+    return payload
+
+def _update_chore_row(chore_id: int, chore: ChoreUpdate):
     conn = get_db()
     try:
         existing = conn.execute("SELECT * FROM chores WHERE id=?", (chore_id,)).fetchone()
@@ -113,6 +128,7 @@ def update_chore(chore_id: int, chore: ChoreUpdate):
             if v is not None:
                 updates[k] = v
 
+        catch_up = False
         # Handle completion
         if "completed" in updates:
             was_completed = bool(existing["completed"])
@@ -135,16 +151,24 @@ def update_chore(chore_id: int, chore: ChoreUpdate):
             schedule_changed = any(
                 k in updates for k in ("due_date", "recurrence", "recurrence_days", "recurrence_interval")
             )
-            if schedule_changed and recurrence and due_date and due_date[:10] < datetime.now().date().isoformat():
-                _catch_up_after_save(conn)
+            today = datetime.now().date().isoformat()
+            catch_up = schedule_changed and _needs_catch_up(recurrence, due_date, today)
 
         row = conn.execute("""
             SELECT c.*, m.name as member_name, m.color as member_color
             FROM chores c LEFT JOIN members m ON c.assigned_to = m.id WHERE c.id=?
         """, (chore_id,)).fetchone()
-        return dict(row)
+        return dict(row), catch_up
     finally:
         conn.close()
+
+
+@router.put("/{chore_id}")
+async def update_chore(chore_id: int, chore: ChoreUpdate):
+    row, catch_up = await asyncio.to_thread(_update_chore_row, chore_id, chore)
+    if catch_up:
+        await jobs.run_background("chore-catch-up", lambda: _run_chore_catch_up())
+    return row
 
 @router.delete("/{chore_id}")
 def delete_chore(chore_id: int):
@@ -216,23 +240,16 @@ def get_leaderboard():
         conn.close()
 
 def advance_recurring_chores():
-    """Create missed recurring occurrences. Runs from the background loop.
+    """Create missed recurring occurrences.
 
-    Doing this inside GET took the write lock on every chores page load.
+    The daily loop and the chore-catch-up job both call this. Each opens its
+    own connection. A save does not run it inline.
     """
     conn = get_db()
     try:
         _advance_recurring_to_today(conn)
     finally:
         conn.close()
-
-
-def _catch_up_after_save(conn):
-    """The chore is already saved. A failed catch-up must not turn that into an error."""
-    try:
-        _advance_recurring_to_today(conn)
-    except Exception as e:
-        print(f"Chore catch-up after save failed: {e}")
 
 
 def _advance_recurring_to_today(conn):

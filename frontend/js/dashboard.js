@@ -5,9 +5,6 @@
   let _stocksTimer = null;
   let _refreshTimer = null;
   let _cachedStocks = null;
-  let _cachedSchoolMenus = null;
-  let _schoolLoadedAt = 0;
-  let _schoolTimer = null;
   let _deferredTimers = [];
   let _pendingDeferred = [];
 
@@ -487,26 +484,11 @@
     }
   }
 
-  function appHour() {
-    const raw = new Date().toLocaleString('en-US', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
-    const hour = parseInt(raw, 10);
-    return hour === 24 ? 0 : hour;
-  }
-
   function addDays(dateStr, n) {
     const [y, m, d] = dateStr.split('-').map(Number);
     const dt = new Date(y, m - 1, d);
     dt.setDate(dt.getDate() + n);
     return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-  }
-
-  function schoolMenuDate(dinnerDate) {
-    let iso = appHour() >= 17 ? addDays(dinnerDate, 1) : dinnerDate;
-    const [y, m, d] = iso.split('-').map(Number);
-    const dow = new Date(y, m - 1, d).getDay();
-    if (dow === 6) iso = addDays(iso, 2);
-    else if (dow === 0) iso = addDays(iso, 1);
-    return iso;
   }
 
   function schoolWhenLabel(dinnerDate, schoolDate) {
@@ -548,7 +530,7 @@
         ? '<div class="meals-note">Assign a school to each student in Settings.</div>'
         : '<div class="meals-note">No school menu for this person.</div>';
     }
-    const servedDate = data.school_date || schoolMenuDate(dinnerDate);
+    const servedDate = data.school_date || dinnerDate;
     const schoolWhen = schoolWhenLabel(dinnerDate, servedDate);
     const mealType = schoolMealTypes;
     return `<div class="meals-school-label">School menu · ${schoolWhen}</div>` + schools.map(s => {
@@ -633,72 +615,29 @@
         slot.innerHTML = mealsSchoolHtml(p.data, p.person, p.dinnerDate, p.loading);
       }).catch(() => {});
     }
-    const schoolDate = schoolMenuDate(dinnerDate);
     // Always Everyone; person chips filter school rows / requests client-side.
-    const url = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
+    // school_date is chosen on the server (after 17:00, weekends, next school day).
+    const url = `/api/meals/day?date=${dinnerDate}`;
     const reqUrl = '/api/meals/requests';
     const paintReqs = (reqs) => filterRowsByMember(reqs || [], getPersonFilter());
     const paintSchool = (data, loading) => mealsSchoolHtml(data, getPersonFilter(), dinnerDate, loading);
 
-    const cachedFast = API.peek(url + '&include_school=false');
-    const cachedFull = API.peek(url)
-      || (_cachedSchoolMenus && _cachedSchoolMenus.url === url ? _cachedSchoolMenus.data : null);
+    const cached = API.peek(url);
     const cachedReqs = API.peek(reqUrl);
-    if (cachedFull && cachedReqs) {
-      paintDinner(el, cachedFull, paintReqs(cachedReqs), dinnerDate, paintSchool(cachedFull, false));
-    } else if (cachedFast && cachedReqs) {
-      const wants = cachedFast.configured && !cachedFast.school_menus_hidden;
-      paintDinner(el, cachedFast, paintReqs(cachedReqs), dinnerDate, paintSchool(cachedFast, wants));
+    if (cached && cachedReqs) {
+      paintDinner(el, cached, paintReqs(cachedReqs), dinnerDate, paintSchool(cached, false));
     }
     if (!network) return;
 
     try {
       const [data, requests] = await Promise.all([
-        API.get(url + '&include_school=false', { timeout: 45000 }),
+        API.get(url),
         API.get(reqUrl).catch(() => []),
       ]);
       if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-      const wantsSchool = data.configured && !data.school_menus_hidden;
-      const fullCached = API.peek(url)
-        || (_cachedSchoolMenus && _cachedSchoolMenus.url === url ? _cachedSchoolMenus.data : null);
-      if (fullCached && wantsSchool) {
-        paintDinner(el, data, paintReqs(requests), dinnerDate, paintSchool(fullCached, false));
-      } else {
-        paintDinner(el, data, paintReqs(requests), dinnerDate, paintSchool(data, wantsSchool));
-      }
-      if (!wantsSchool) return;
-      if (opts && opts.includeSchool === false) return;
-
-      const loadSchool = async () => {
-        if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-        try {
-          const menus = await API.get(url, { timeout: 45000 });
-          if (gen !== _mealsGen || document.getElementById('mealsBody') !== el) return;
-          _cachedSchoolMenus = { url, data: menus };
-          _schoolLoadedAt = Date.now();
-          const slot = document.getElementById('mealsSchool');
-          if (slot) slot.innerHTML = paintSchool(menus, false);
-        } catch (e) {
-          const slot = document.getElementById('mealsSchool');
-          if (slot && gen === _mealsGen) {
-            _schoolPaint = null;
-            slot.innerHTML = '<div class="meals-note">Menu unavailable</div>';
-          }
-        }
-      };
-
-      const deferSchoolMs = opts && opts.deferSchoolMs;
-      if (deferSchoolMs) {
-        clearTimeout(_schoolTimer);
-        _schoolTimer = setTimeout(() => {
-          _schoolTimer = null;
-          runDashboardTask(loadSchool);
-        }, deferSchoolMs);
-      } else {
-        await loadSchool();
-      }
+      paintDinner(el, data, paintReqs(requests), dinnerDate, paintSchool(data, false));
     } catch (e) {
-      if (!cachedFast && gen === _mealsGen && document.getElementById('mealsBody') === el) {
+      if (!cached && gen === _mealsGen && document.getElementById('mealsBody') === el) {
         el.innerHTML = '<div class="empty-state">Meals unavailable</div>';
       }
     }
@@ -778,7 +717,7 @@
       setDashboardDate();
       loadTodayEvents();
       loadUpcomingChores();
-      loadMeals({ deferSchoolMs: 2500 });
+      loadMeals();
       scheduleDashboard(loadMessagePreview, 500);
       scheduleDashboard(loadShoppingStrip, 1000);
     });
@@ -790,15 +729,7 @@
       setDashboardDate();
       loadTodayEvents();
       scheduleDashboard(loadUpcomingChores, 300);
-      const dinnerDate = toETDateStr(new Date());
-      const schoolDate = schoolMenuDate(dinnerDate);
-      const expectedSchoolUrl = `/api/meals/day?date=${dinnerDate}&school_date=${schoolDate}`;
-      const schoolDateChanged = !_cachedSchoolMenus || _cachedSchoolMenus.url !== expectedSchoolUrl;
-      const refreshSchool = schoolDateChanged || Date.now() - _schoolLoadedAt >= 30 * 60 * 1000;
-      scheduleDashboard(() => loadMeals({
-        includeSchool: refreshSchool,
-        deferSchoolMs: refreshSchool ? 2500 : 0
-      }), 700);
+      scheduleDashboard(loadMeals, 700);
       scheduleDashboard(loadShoppingStrip, 1100);
       scheduleDashboard(loadWeather, 1500);
     }, 5 * 60 * 1000);
@@ -817,11 +748,9 @@
     document.removeEventListener('visibilitychange', flushDashboardTasks);
     clearInterval(_stocksTimer);
     clearInterval(_refreshTimer);
-    clearTimeout(_schoolTimer);
     _deferredTimers.forEach(clearTimeout);
     _stocksTimer = null;
     _refreshTimer = null;
-    _schoolTimer = null;
     _deferredTimers = [];
     _pendingDeferred = [];
     _mealsGen += 1;

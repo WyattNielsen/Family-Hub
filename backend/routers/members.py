@@ -2,9 +2,11 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
 import sys, os, uuid, shutil
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import get_db
+import schoolcafe
 
 router = APIRouter()
 
@@ -105,8 +107,7 @@ def set_member_order(body: MemberOrder):
     finally:
         conn.close()
 
-@router.post("/")
-def create_member(member: MemberCreate):
+def _insert_member(member: MemberCreate):
     conn = get_db()
     try:
         school_id = (member.school_id or "").strip() or None
@@ -121,9 +122,17 @@ def create_member(member: MemberCreate):
         conn.commit()
         new_id = cur.lastrowid
         row = conn.execute(f"{MEMBER_SELECT} WHERE id=?", (new_id,)).fetchone()
-        return dict(row)
+        return dict(row), bool(school_id)
     finally:
         conn.close()
+
+
+@router.post("/")
+async def create_member(member: MemberCreate):
+    row, refresh = await asyncio.to_thread(_insert_member, member)
+    if refresh:
+        await schoolcafe.kick_school_menu_refresh()
+    return row
 
 def _apply_member_update(member_id: int, member: MemberUpdate):
     conn = get_db()
@@ -160,17 +169,23 @@ def _apply_member_update(member_id: int, member: MemberUpdate):
             conn.execute(f"UPDATE members SET {set_clause} WHERE id=?", (*updates.values(), member_id))
             conn.commit()
         row = conn.execute(f"{MEMBER_SELECT} WHERE id=?", (member_id,)).fetchone()
-        return dict(row)
+        return dict(row), "school_id" in data
     finally:
         conn.close()
 
 @router.put("/{member_id}")
-def update_member(member_id: int, member: MemberUpdate):
-    return _apply_member_update(member_id, member)
+async def update_member(member_id: int, member: MemberUpdate):
+    row, refresh = await asyncio.to_thread(_apply_member_update, member_id, member)
+    if refresh:
+        await schoolcafe.kick_school_menu_refresh()
+    return row
 
 @router.patch("/{member_id}")
-def patch_member(member_id: int, member: MemberUpdate):
-    return _apply_member_update(member_id, member)
+async def patch_member(member_id: int, member: MemberUpdate):
+    row, refresh = await asyncio.to_thread(_apply_member_update, member_id, member)
+    if refresh:
+        await schoolcafe.kick_school_menu_refresh()
+    return row
 
 @router.delete("/{member_id}")
 def delete_member(member_id: int):

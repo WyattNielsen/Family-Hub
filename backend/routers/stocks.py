@@ -1,18 +1,16 @@
 from fastapi import APIRouter
 import asyncio
+import json
 import time
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import outbound
-from database import get_setting_value_async
+import jobs
+from database import get_db, get_setting_value_async
 
 router = APIRouter()
 
-# Quotes move, but not every few seconds. Share one fetch across screens.
+# Quotes move, but not every few seconds. A stored copy is served while a refresh runs.
 _QUOTE_TTL = 120
-_QUOTE_STALE_TTL = 3600
-_quote_cache: dict[str, tuple[float, list]] = {}
-_quote_inflight: dict[str, asyncio.Task] = {}
-_quote_lock = asyncio.Lock()
 
 # CoinGecko IDs for crypto symbols
 CRYPTO_IDS = {
@@ -35,13 +33,48 @@ async def configured_symbols() -> str:
     return val if val else "BTC,TSLA,SPY"
 
 
-async def _refresh_quotes_bg(cache_key: str, symbol_list: list[str]):
+def _load_quotes(cache_key: str):
+    conn = get_db()
     try:
-        payload = await _fetch_quotes(symbol_list)
-        if payload:
-            _quote_cache[cache_key] = (time.monotonic(), payload)
+        row = conn.execute(
+            "SELECT payload, fetched_at FROM stock_quotes WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
     finally:
-        _quote_inflight.pop(cache_key, None)
+        conn.close()
+    if not row:
+        return None
+    try:
+        payload = json.loads(row["payload"])
+    except Exception:
+        return None
+    if not isinstance(payload, list):
+        return None
+    return {"payload": payload, "fetched_at": row["fetched_at"]}
+
+
+def _save_quotes(cache_key: str, payload: list):
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO stock_quotes (cache_key, payload, fetched_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                payload = excluded.payload,
+                fetched_at = excluded.fetched_at
+            """,
+            (cache_key, json.dumps(payload), time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _refresh_quotes(cache_key: str, symbol_list: list[str]):
+    payload = await _fetch_quotes(symbol_list)
+    if payload:
+        await asyncio.to_thread(_save_quotes, cache_key, payload)
 
 
 @router.get("/")
@@ -53,25 +86,21 @@ async def get_stocks(symbols: str | None = None):
     if not symbol_list:
         return []
     cache_key = ",".join(symbol_list)
-    now = time.monotonic()
-    hit = _quote_cache.get(cache_key)
-    if hit:
-        age = now - hit[0]
-        if age < _QUOTE_TTL:
-            return hit[1]
-        if age < _QUOTE_STALE_TTL:
-            if cache_key not in _quote_inflight or _quote_inflight[cache_key].done():
-                _quote_inflight[cache_key] = asyncio.create_task(_refresh_quotes_bg(cache_key, symbol_list))
-            return hit[1]
-
-    async with _quote_lock:
-        hit = _quote_cache.get(cache_key)
-        if hit and time.monotonic() - hit[0] < _QUOTE_TTL:
-            return hit[1]
-        payload = await _fetch_quotes(symbol_list)
-        if payload:
-            _quote_cache[cache_key] = (time.monotonic(), payload)
-        return payload
+    stored = await asyncio.to_thread(_load_quotes, cache_key)
+    if stored and stored["payload"]:
+        age = time.time() - float(stored["fetched_at"] or 0)
+        if age >= _QUOTE_TTL:
+            fresh = list(symbol_list)
+            await jobs.run_background(
+                "stock-quotes",
+                lambda cache_key=cache_key, fresh=fresh: _refresh_quotes(cache_key, fresh),
+            )
+        return stored["payload"]
+    # The ticker hides an empty list and will not ask again for several minutes.
+    payload = await _fetch_quotes(symbol_list)
+    if payload:
+        await asyncio.to_thread(_save_quotes, cache_key, payload)
+    return payload
 
 
 async def _fetch_quotes(symbol_list: list[str]) -> list:
