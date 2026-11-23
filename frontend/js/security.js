@@ -1,9 +1,7 @@
 (function () {
   let _secEntities = [];
   let _secTimer = null;
-  let _modalCameras = [];
-  let _modalIndex = 0;
-  let _swipeStartX = null;
+  let _feedTimers = [];
 
   function _paintSecurityDevices(data) {
     const notCfg = document.getElementById('haNotConfigured');
@@ -155,97 +153,53 @@
       }
       notConfigured.style.display = 'none';
       section.style.display = 'block';
+      _clearFeedTimers();
       grid.innerHTML = cameras.map(cam => {
-        const streamUrl = `/api/security/camera/${encodeURIComponent(cam.ha_entity_id)}/stream`;
-        const safeUrl = streamUrl.replace(/'/g, "\\'");
-        const safeName = cam.name.replace(/'/g, "\\'");
+        const entity = escapeHtml(cam.ha_entity_id);
         return `
-          <div class="camera-feed-card" onclick="openCameraModal('${safeName}','${safeUrl}')">
-            <div class="camera-feed-label">${cam.name}</div>
-            <div class="camera-placeholder" id="ph-${cam.ha_entity_id}">
-              <div class="camera-placeholder-icon">📷</div>
-              <div>Connecting to ${cam.name}…</div>
+          <div class="camera-feed-card" data-entity="${entity}">
+            <div class="camera-feed-label">${escapeHtml(cam.name)}</div>
+            <div class="camera-frame">
+              <img class="camera-feed-img" alt="${escapeHtml(cam.name)}" data-entity="${entity}">
             </div>
-            <img src="${streamUrl}" class="camera-feed-img" alt="${cam.name}"
-                 onload="this.classList.add('loaded');var ph=document.getElementById('ph-${cam.ha_entity_id}');if(ph)ph.remove();"
-                 onerror="const p=document.getElementById('ph-${cam.ha_entity_id}');if(p)p.innerHTML='<div class=camera-placeholder-icon>⚠️</div><div>Feed unavailable</div>'">
           </div>`;
       }).join('');
+      grid.querySelectorAll('.camera-feed-card').forEach(card => {
+        card.onclick = () => openCameraViewer(card.dataset.entity);
+      });
+      grid.querySelectorAll('.camera-feed-img').forEach(bindFeedImg);
     } catch (e) {
       section.style.display = 'none';
       notConfigured.style.display = 'block';
     }
   }
 
-  function openCameraModal(name, _streamUrl) {
-    const cards = document.querySelectorAll('.camera-feed-card');
-    _modalCameras = Array.from(cards).map(card => {
-      const feedImg = card.querySelector('.camera-feed-img');
-      return {
-        name: card.querySelector('.camera-feed-label').textContent,
-        url:  (feedImg && feedImg.src) || ''
+  function _clearFeedTimers() {
+    _feedTimers.forEach(t => clearInterval(t));
+    _feedTimers = [];
+  }
+
+  function bindFeedImg(img) {
+    const entity = img.dataset.entity;
+    img.dataset.mode = 'stream';
+    img.onerror = () => {
+      if (img.dataset.mode === 'snap') return;
+      img.dataset.mode = 'snap';
+      const tick = () => {
+        if (!img.isConnected) return;
+        img.src = cameraSnapUrl(entity);
       };
-    });
-    _modalIndex = _modalCameras.findIndex(c => c.name === name);
-    if (_modalIndex < 0) _modalIndex = 0;
-    _showModalCamera(_modalIndex);
-    document.getElementById('cameraModal').style.display = 'flex';
-    document.addEventListener('keydown', _modalKeyHandler);
-    const img = document.getElementById('cameraModalImg');
-    img.addEventListener('touchstart', _swipeStart, { passive: true });
-    img.addEventListener('touchend',   _swipeEnd,   { passive: true });
-  }
-
-  function _showModalCamera(idx) {
-    const cam = _modalCameras[idx];
-    document.getElementById('cameraModalTitle').textContent = cam.name;
-    document.getElementById('cameraModalImg').src = cam.url;
-    const dots = document.getElementById('cameraModalDots');
-    dots.innerHTML = _modalCameras.map((_, i) =>
-      `<span class="cam-dot ${i === idx ? 'active' : ''}"></span>`
-    ).join('');
-    document.getElementById('camPrev').style.visibility = _modalCameras.length > 1 ? 'visible' : 'hidden';
-    document.getElementById('camNext').style.visibility = _modalCameras.length > 1 ? 'visible' : 'hidden';
-  }
-
-  function cycleCameraModal(dir) {
-    _modalIndex = (_modalIndex + dir + _modalCameras.length) % _modalCameras.length;
-    _showModalCamera(_modalIndex);
-  }
-
-  function closeCameraModal() {
-    const modal = document.getElementById('cameraModal');
-    if (modal) modal.style.display = 'none';
-    const img = document.getElementById('cameraModalImg');
-    if (img) {
-      img.removeAttribute('src');
-      img.src = '';
-      img.removeEventListener('touchstart', _swipeStart);
-      img.removeEventListener('touchend',   _swipeEnd);
-    }
-    document.removeEventListener('keydown', _modalKeyHandler);
-  }
-
-  function _modalKeyHandler(e) {
-    if (e.key === 'Escape')      closeCameraModal();
-    if (e.key === 'ArrowRight')  cycleCameraModal(1);
-    if (e.key === 'ArrowLeft')   cycleCameraModal(-1);
-  }
-
-  function _swipeStart(e) { _swipeStartX = e.touches[0].clientX; }
-  function _swipeEnd(e) {
-    if (_swipeStartX === null) return;
-    const dx = e.changedTouches[0].clientX - _swipeStartX;
-    if (Math.abs(dx) > 50) cycleCameraModal(dx < 0 ? 1 : -1);
-    _swipeStartX = null;
+      const timer = setInterval(tick, 1500);
+      img._snapTimer = timer;
+      _feedTimers.push(timer);
+      tick();
+    };
+    img.src = cameraStreamUrl(entity);
   }
 
   window.loadSecurityDevices = loadSecurityDevices;
   window.secCoverAction = secCoverAction;
   window.alarmAction = alarmAction;
-  window.openCameraModal = openCameraModal;
-  window.cycleCameraModal = cycleCameraModal;
-  window.closeCameraModal = closeCameraModal;
 
   function mount() {
     initAppTimezone();
@@ -262,6 +216,7 @@
   function unmount() {
     clearInterval(_secTimer);
     _secTimer = null;
+    _clearFeedTimers();
     closeCameraModal();
     killActiveStreams();
   }

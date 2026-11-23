@@ -506,6 +506,7 @@ function ensureShell() {
     });
     document.body.appendChild(modalHost);
   }
+  ensureCameraViewer();
   if (!document.querySelector('.slideshow-trigger')) {
     const btn = document.createElement('button');
     btn.className = 'slideshow-trigger';
@@ -688,11 +689,153 @@ async function popoverAlarmAction(action, entityId) {
 }
 
 let _camRefreshTimer = null;
+let _viewerCameras = [];
+let _viewerIndex = 0;
+let _viewerSnapTimer = null;
+let _viewerSwipeX = null;
+let _viewerToken = 0;
+
+function cameraStreamUrl(entity) {
+  return `/api/security/camera/${encodeURIComponent(entity)}/stream`;
+}
+
+function cameraSnapUrl(entity) {
+  return `/api/security/camera/${encodeURIComponent(entity)}/snapshot?t=${Date.now()}`;
+}
+
+function ensureCameraViewer() {
+  if (document.getElementById('cameraModal')) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'camera-modal-overlay';
+  wrap.id = 'cameraModal';
+  wrap.style.display = 'none';
+  wrap.innerHTML = `
+    <div class="camera-modal">
+      <div class="camera-modal-header">
+        <button type="button" class="camera-modal-nav" id="camPrev" aria-label="Previous camera">&#8249;</button>
+        <span class="camera-modal-title" id="cameraModalTitle"></span>
+        <button type="button" class="camera-modal-nav" id="camNext" aria-label="Next camera">&#8250;</button>
+        <button type="button" class="camera-modal-close" id="camClose" aria-label="Close">✕</button>
+      </div>
+      <img class="camera-modal-img" id="cameraModalImg" alt="">
+      <div class="camera-modal-dots" id="cameraModalDots"></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener('click', (e) => {
+    if (e.target === wrap) closeCameraModal();
+  });
+  wrap.querySelector('.camera-modal').addEventListener('click', (e) => e.stopPropagation());
+  wrap.querySelector('#camPrev').addEventListener('click', () => cycleCameraModal(-1));
+  wrap.querySelector('#camNext').addEventListener('click', () => cycleCameraModal(1));
+  wrap.querySelector('#camClose').addEventListener('click', closeCameraModal);
+  const img = wrap.querySelector('#cameraModalImg');
+  img.addEventListener('touchstart', (e) => { _viewerSwipeX = e.touches[0].clientX; }, { passive: true });
+  img.addEventListener('touchend', (e) => {
+    if (_viewerSwipeX === null) return;
+    const dx = e.changedTouches[0].clientX - _viewerSwipeX;
+    if (Math.abs(dx) > 50) cycleCameraModal(dx < 0 ? 1 : -1);
+    _viewerSwipeX = null;
+  }, { passive: true });
+}
+
+function _clearViewerSnap() {
+  if (_viewerSnapTimer) {
+    clearInterval(_viewerSnapTimer);
+    _viewerSnapTimer = null;
+  }
+}
+
+function _showViewerCamera(idx) {
+  const cam = _viewerCameras[idx];
+  const img = document.getElementById('cameraModalImg');
+  if (!cam || !img) return;
+  const token = ++_viewerToken;
+  _clearViewerSnap();
+  document.getElementById('cameraModalTitle').textContent = cam.name;
+  img.dataset.mode = 'stream';
+  img.alt = cam.name;
+  img.onload = null;
+  img.onerror = () => {
+    if (token !== _viewerToken || img.dataset.mode === 'snap') return;
+    img.dataset.mode = 'snap';
+    const tick = () => {
+      const modal = document.getElementById('cameraModal');
+      if (token !== _viewerToken || !img.isConnected || !modal || modal.style.display === 'none') {
+        if (token === _viewerToken) _clearViewerSnap();
+        return;
+      }
+      img.src = cameraSnapUrl(cam.entity);
+    };
+    tick();
+    _viewerSnapTimer = setInterval(tick, 1500);
+  };
+  img.src = cameraStreamUrl(cam.entity);
+  const dots = document.getElementById('cameraModalDots');
+  if (dots) {
+    dots.innerHTML = _viewerCameras.map((_, i) =>
+      `<span class="cam-dot ${i === idx ? 'active' : ''}"></span>`
+    ).join('');
+  }
+  const multi = _viewerCameras.length > 1;
+  const prev = document.getElementById('camPrev');
+  const next = document.getElementById('camNext');
+  if (prev) prev.style.visibility = multi ? 'visible' : 'hidden';
+  if (next) next.style.visibility = multi ? 'visible' : 'hidden';
+}
+
+function _viewerKey(e) {
+  const modal = document.getElementById('cameraModal');
+  if (!modal || modal.style.display === 'none') return;
+  if (e.key === 'Escape') closeCameraModal();
+  if (e.key === 'ArrowRight') cycleCameraModal(1);
+  if (e.key === 'ArrowLeft') cycleCameraModal(-1);
+}
+
+async function openCameraViewer(entityId) {
+  ensureCameraViewer();
+  let cameras = [];
+  try {
+    const data = await API.get('/api/security/cameras');
+    cameras = (data && data.cameras) || [];
+  } catch (_) {}
+  if (!cameras.length && entityId) cameras = [{ name: entityId, ha_entity_id: entityId }];
+  _viewerCameras = cameras
+    .filter(c => c && c.ha_entity_id)
+    .map(c => ({ name: c.name || c.ha_entity_id, entity: c.ha_entity_id }));
+  if (!_viewerCameras.length) return;
+  _viewerIndex = _viewerCameras.findIndex(c => c.entity === entityId);
+  if (_viewerIndex < 0) _viewerIndex = 0;
+  _showViewerCamera(_viewerIndex);
+  document.getElementById('cameraModal').style.display = 'flex';
+  document.addEventListener('keydown', _viewerKey);
+}
+
+function cycleCameraModal(dir) {
+  if (!_viewerCameras.length) return;
+  _viewerIndex = (_viewerIndex + dir + _viewerCameras.length) % _viewerCameras.length;
+  _showViewerCamera(_viewerIndex);
+}
+
+function closeCameraModal() {
+  _clearViewerSnap();
+  const modal = document.getElementById('cameraModal');
+  if (modal) modal.style.display = 'none';
+  const img = document.getElementById('cameraModalImg');
+  if (img) {
+    img.onload = null;
+    img.onerror = null;
+    img.removeAttribute('src');
+    img.src = '';
+  }
+  document.removeEventListener('keydown', _viewerKey);
+}
 
 function killActiveStreams() {
   // Explicitly sever MJPEG streams so HTTP/1.1 connection slots free up immediately
+  closeCameraModal();
   document.querySelectorAll('img.camera-feed-img, #cameraModalImg').forEach(img => {
     try {
+      if (img._snapTimer) clearInterval(img._snapTimer);
       img.onload = null;
       img.onerror = null;
       img.removeAttribute('src');
@@ -702,6 +845,9 @@ function killActiveStreams() {
 }
 window.addEventListener('pagehide', killActiveStreams);
 window.addEventListener('beforeunload', killActiveStreams);
+window.openCameraViewer = openCameraViewer;
+window.cycleCameraModal = cycleCameraModal;
+window.closeCameraModal = closeCameraModal;
 
 function _snapBucket() {
   return Math.floor(Date.now() / 60000);
@@ -726,12 +872,15 @@ async function loadDashCameras(force) {
       const id = encodeURIComponent(cam.ha_entity_id);
       const name = cam.name || cam.ha_entity_id;
       return `
-      <a href="/security.html" class="dash-cam-card" title="${escapeHtml(name)}">
-        <img class="dash-cam-img" id="dashCam_${cam.ha_entity_id}"
+      <button type="button" class="dash-cam-card" data-entity="${escapeHtml(cam.ha_entity_id)}" title="${escapeHtml(name)}">
+        <img class="dash-cam-img" id="dashCam_${escapeHtml(cam.ha_entity_id)}"
              src="/api/security/camera/${id}/snapshot?t=${bucket}"
-             alt="${escapeHtml(name)}" decoding="async" onerror="this.style.display='none'">
-      </a>`;
+             alt="${escapeHtml(name)}" decoding="async" onerror="this.style.visibility='hidden'">
+      </button>`;
     }).join('');
+    strip.querySelectorAll('.dash-cam-card').forEach(btn => {
+      btn.onclick = () => openCameraViewer(btn.dataset.entity);
+    });
     strip.style.display = 'flex';
 
     clearInterval(_camRefreshTimer);

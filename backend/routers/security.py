@@ -17,7 +17,10 @@ _SNAP_STALE_TTL = 60.0
 _snap_cache: dict[str, tuple[float, str, bytes]] = {}
 _snap_inflight: dict[str, asyncio.Task] = {}
 _snap_lock = asyncio.Lock()
-_STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+# No read timeout: MJPEG frames can sit quiet for a while, and a short
+# read timeout drops the feed. A dedicated client keeps this off the
+# shared pool so a live view cannot stall the rest of the app.
+_STREAM_TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
 
 
 async def get_ha_config():
@@ -25,34 +28,71 @@ async def get_ha_config():
     return s.get("ha_url", "").rstrip("/"), s.get("ha_token", "")
 
 
+def _stream_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=_STREAM_TIMEOUT,
+        follow_redirects=True,
+        trust_env=False,
+        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+    )
+
+
 @router.get("/camera/{entity_id}/stream")
 async def proxy_camera_stream(entity_id: str, request: Request):
-    """Proxy HA MJPEG camera stream so the browser never needs the HA token."""
+    """Proxy HA MJPEG camera stream so the browser never needs the HA token.
+
+    Home Assistant picks the multipart boundary (usually ``frame``). The
+    browser only paints frames when that boundary matches the body, so the
+    upstream Content-Type is forwarded as-is.
+    """
     ha_url, ha_token = await get_ha_config()
     if not ha_url or not ha_token:
         raise HTTPException(status_code=503, detail="Home Assistant not configured")
 
     stream_url = f"{ha_url}/api/camera_proxy_stream/{entity_id}"
+    client = _stream_client()
+    resp = None
+    try:
+        upstream = client.build_request(
+            "GET",
+            stream_url,
+            headers={"Authorization": f"Bearer {ha_token}"},
+        )
+        resp = await client.send(upstream, stream=True)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Camera stream failed")
+        content_type = resp.headers.get("content-type") or "multipart/x-mixed-replace; boundary=frame"
+    except HTTPException:
+        if resp is not None:
+            await resp.aclose()
+        await client.aclose()
+        raise
+    except Exception as e:
+        print(f"Camera stream error for {entity_id}: {e}")
+        if resp is not None:
+            await resp.aclose()
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="Camera stream failed")
 
     async def generate():
         try:
-            async with outbound.client(timeout=_STREAM_TIMEOUT) as client:
-                async with client.stream(
-                    "GET",
-                    stream_url,
-                    headers={"Authorization": f"Bearer {ha_token}"},
-                ) as resp:
-                    async for chunk in resp.aiter_bytes(8192):
-                        if await request.is_disconnected():
-                            break
-                        yield chunk
+            async for chunk in resp.aiter_bytes(8192):
+                if await request.is_disconnected():
+                    break
+                yield chunk
         except (asyncio.CancelledError, httpx.HTTPError):
             return
+        finally:
+            await resp.aclose()
+            await client.aclose()
 
     return StreamingResponse(
         generate(),
-        media_type="multipart/x-mixed-replace; boundary=--frameboundary",
-        headers={"Cache-Control": "no-store"},
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Type": content_type,
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

@@ -646,7 +646,7 @@
     el.style.display = 'flex';
     el.innerHTML = `
       <a href="/shopping.html" class="shopping-strip-link">🛒 Shopping</a>
-      ${shown.map(i => `<button type="button" class="shopping-chip" onclick="checkShoppingItem(${i.id})">${escapeHtml(i.name)}${i.quantity ? ' · ' + escapeHtml(i.quantity) : ''}</button>`).join('')}
+      ${shown.map(i => `<a href="/shopping.html" class="shopping-chip">${escapeHtml(i.name)}${i.quantity ? ' · ' + escapeHtml(i.quantity) : ''}</a>`).join('')}
       ${open.length > 6 ? `<a href="/shopping.html" class="shopping-strip-more">+${open.length - 6}</a>` : ''}
       ${!open.length ? '<span class="shopping-strip-empty">Nothing to buy</span>' : ''}`;
   }
@@ -664,21 +664,11 @@
     }
   }
 
-  async function checkShoppingItem(id) {
-    try {
-      await API.patch('/api/shopping/' + id, { checked: true });
-      loadShoppingStrip();
-    } catch (e) {
-      showToast('Could not update the list', 'error');
-    }
-  }
-
   window.ackPreviewMessage = ackPreviewMessage;
   window.openComposeModal = openComposeModal;
   window.closeComposeModal = closeComposeModal;
   window.postQuickMessage = postQuickMessage;
   window.toggleDashboardChore = toggleDashboardChore;
-  window.checkShoppingItem = checkShoppingItem;
 
   function mount() {
     onPersonFilterChange(() => {

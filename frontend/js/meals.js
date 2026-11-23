@@ -304,6 +304,14 @@
     });
   }
 
+  function openSchoolSource() {
+    if (!openPlan) return;
+    const school = schoolMenus[openPlan.index];
+    if (school && school.source_url) {
+      window.open(school.source_url, '_blank', 'noopener');
+    }
+  }
+
   function bindMealPlanModal() {
     const overlay = document.getElementById('mealPlanModal');
     if (!overlay || overlay.dataset.bound === '1') return;
@@ -312,7 +320,13 @@
       if (e.target === overlay) closeMealPlan();
     });
     const panel = overlay.querySelector('.meal-plan-modal');
-    if (panel) panel.addEventListener('click', (e) => e.stopPropagation());
+    if (panel) {
+      panel.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.target.closest('#mealPlanClose')) return;
+        openSchoolSource();
+      });
+    }
     const closeBtn = overlay.querySelector('#mealPlanClose');
     if (closeBtn) closeBtn.addEventListener('click', closeMealPlan);
   }

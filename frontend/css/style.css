@@ -67,7 +67,11 @@ input, select, textarea { font-family: var(--font); }
   padding: 0 0 16px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 12px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
 }
+a.sidebar-logo:hover { color: var(--text); }
 .logo-icon { font-size: 28px; }
 .logo-text { display: none; }
 
@@ -1233,8 +1237,8 @@ textarea.form-input { resize: vertical; min-height: 72px; }
 
 /* ── Camera Loading Placeholder ────────────────────────────── */
 .camera-feed-card { position: relative; }
-.camera-feed-card .camera-feed-img { display: none; }
-.camera-feed-card .camera-feed-img.loaded { display: block; }
+.camera-frame { position: relative; background: #111; }
+.camera-feed-card .camera-feed-img { display: block; }
 .camera-placeholder {
   width: 100%;
   aspect-ratio: 16/9;
@@ -2354,6 +2358,9 @@ html.dimmed {
   aspect-ratio: 16/9;
   display: block;
   flex-shrink: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
 }
 .dash-cam-card:hover { opacity: 0.88; }
 .dash-cam-img {
@@ -2960,6 +2967,7 @@ button.section-link { background: none; border: none; cursor: pointer; font-fami
   max-width: 480px;
   padding: 0;
   overflow: hidden;
+  cursor: pointer;
 }
 .meal-plan-bar { height: 6px; width: 100%; }
 .meal-plan-modal .modal-header { align-items: flex-start; gap: 12px; }

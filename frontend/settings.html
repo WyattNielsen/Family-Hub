@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Family Hub">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/css/style.css?v=104">
+<link rel="stylesheet" href="/css/style.css?v=108">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
 <script>(function(){try{var ds=localStorage.getItem('fh_dark_start'),de=localStorage.getItem('fh_dark_end');var s=+(ds!==null?ds:21),e=+(de!==null?de:7),h=new Date().getHours();document.documentElement.setAttribute('data-theme',(s>e?(h>=s||h<e):(h>=s&&h<e))?'dark':'light');}catch(_){}})();</script>
@@ -19,12 +19,12 @@
 <body>
 <div class="app">
   <nav class="sidebar">
-    <div class="sidebar-logo">
+    <a href="/" class="sidebar-logo" aria-label="Dashboard">
       <span class="logo-icon">
         <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       </span>
       <span class="logo-text">Family Hub</span>
-    </div>
+    </a>
     <ul class="nav-links">
       <li><a href="/" class="nav-link">
         <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
@@ -598,10 +598,10 @@ TOKEN_IMPORT_SECRET=a-long-random-string</code>
   </div>
 </div>
 
-<script src="/js/compat.js?v=104"></script>
-<script src="/js/api.js?v=104"></script>
-<script src="/js/settings.js?v=104"></script>
-<script src="/js/slideshow.js?v=104"></script>
+<script src="/js/compat.js?v=108"></script>
+<script src="/js/api.js?v=108"></script>
+<script src="/js/settings.js?v=108"></script>
+<script src="/js/slideshow.js?v=108"></script>
 <button class="slideshow-trigger" onclick="Slideshow.start()" title="Start slideshow">📷</button>
 <script>if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script>
 </body>

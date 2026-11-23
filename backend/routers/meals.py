@@ -221,6 +221,9 @@ async def week_menu(
         schools, missing = await asyncio.to_thread(_school_week_blocks, members, dates)
         if missing:
             await schoolcafe.kick_school_menu_refresh(missing)
+        source_url = schoolcafe.menu_page_url(await schoolcafe.district_short_name())
+        for block in schools:
+            block["source_url"] = source_url
 
     return {
         "start": start_date,

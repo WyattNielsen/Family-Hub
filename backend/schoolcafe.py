@@ -226,6 +226,63 @@ async def search_districts(query: str):
     return districts
 
 
+def menu_page_url(short_name: str) -> str:
+    """Public SchoolCafe menus page for a district. ShortName is the path segment."""
+    short = (short_name or "").strip().strip("/")
+    if not short:
+        return ""
+    return f"https://www.schoolcafe.com/{quote(short, safe='')}/menus"
+
+
+def _remember_short_name(district_id: str, short_name: str):
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('schoolcafe_district_short', ?)",
+            (short_name,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('schoolcafe_district_short_for', ?)",
+            (district_id,),
+        )
+        conn.commit()
+        invalidate_settings_cache()
+    finally:
+        conn.close()
+
+
+def _district_search_query(name: str) -> str:
+    name = (name or "").strip()
+    # Stored names look like "VA - CHESTERFIELD COUNTY PUBLIC SCHOOLS".
+    # The search API does not match that full string.
+    if len(name) > 5 and name[2:5] == " - " and name[:2].isalpha():
+        name = name[5:].strip()
+    return name
+
+
+async def district_short_name() -> str:
+    """Path segment for the district's public menus page."""
+    district_id = (setting("schoolcafe_district_id") or "").strip()
+    if not district_id:
+        return ""
+    cached = (setting("schoolcafe_district_short") or "").strip()
+    cached_for = (setting("schoolcafe_district_short_for") or "").strip()
+    if cached and cached_for == district_id:
+        return cached
+    query = _district_search_query(setting("schoolcafe_district_name") or "")
+    if len(query) < 2:
+        return ""
+    try:
+        rows = await search_districts(query)
+    except Exception:
+        return ""
+    match = next((row for row in rows if str(row.get("id")) == district_id), None)
+    short = ((match or {}).get("short_name") or "").strip()
+    if short:
+        await asyncio.to_thread(_remember_short_name, district_id, short)
+    return short
+
+
 async def list_schools(district_id: str):
     async with _client() as client:
         data = await _get_json(client, "GetSchoolsList", {"districtId": district_id})

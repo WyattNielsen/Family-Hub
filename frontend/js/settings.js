@@ -1093,10 +1093,10 @@
         return;
       }
       el.innerHTML = rows.slice(0, 12).map(d =>
-        `<button type="button" class="district-result" data-id="${d.id}" data-name="${_escapeHtml(d.name)}">${_escapeHtml(d.name)}${d.published ? '' : ' <span style="color:var(--text2)">(menu not published)</span>'}</button>`
+        `<button type="button" class="district-result" data-id="${d.id}" data-name="${_escapeHtml(d.name)}" data-short="${_escapeHtml(d.short_name || '')}">${_escapeHtml(d.name)}${d.published ? '' : ' <span style="color:var(--text2)">(menu not published)</span>'}</button>`
       ).join('');
       el.querySelectorAll('.district-result').forEach(btn => {
-        btn.onclick = () => selectSchoolDistrict(btn.dataset.id, btn.dataset.name);
+        btn.onclick = () => selectSchoolDistrict(btn.dataset.id, btn.dataset.name, btn.dataset.short || '');
       });
     } catch (e) {
       el.innerHTML = '';
@@ -1104,11 +1104,13 @@
     }
   }
 
-  async function selectSchoolDistrict(id, name) {
+  async function selectSchoolDistrict(id, name, shortName) {
     try {
       await API.post('/api/settings/', {
         schoolcafe_district_id: String(id),
         schoolcafe_district_name: name,
+        schoolcafe_district_short: shortName || '',
+        schoolcafe_district_short_for: String(id),
       });
       const current = document.getElementById('districtCurrent');
       if (current) current.textContent = 'Connected: ' + name;
